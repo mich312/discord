@@ -16,7 +16,15 @@ use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
 async fn spawn_relay() -> SocketAddr {
-    let app = App::new(Box::new(MemoryStore::default()));
+    let blobs = relay::blobs::BlobStore::new(
+        tempfile::tempdir().map(|d| d.keep()).unwrap(),
+    )
+    .unwrap();
+    let app = App::with_parts(
+        Box::new(MemoryStore::default()),
+        blobs,
+        relay::push::PushService::from_env(),
+    );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move {

@@ -163,4 +163,9 @@ impl Client {
     pub fn members(&self, id: &str) -> Result<Vec<String>, JsError> {
         Ok(self.inner.members(id)?)
     }
+
+    #[wasm_bindgen(js_name = safetyNumber)]
+    pub fn safety_number(&self, id: &str, peer: &str) -> Result<String, JsError> {
+        Ok(self.inner.safety_number(id, peer)?)
+    }
 }

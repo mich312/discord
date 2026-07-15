@@ -154,6 +154,14 @@ export default function App() {
                 modal: { type: 'identity', key: controllerRef.current.identityKeyString() },
               })
             }
+            onAlerts={async () => {
+              try {
+                await controllerRef.current.enableNotifications();
+                dispatch({ type: 'toast', text: 'push notifications enabled for this device' });
+              } catch (e) {
+                dispatch({ type: 'toast', text: `notifications: ${e.message}` });
+              }
+            }}
           />
           <Messages
             key={`${server}/${channel}`}
@@ -166,6 +174,12 @@ export default function App() {
                 .sendChat(server, channel, text)
                 .catch((e) => dispatch({ type: 'toast', text: e.message }))
             }
+            onSendFile={(file) =>
+              controllerRef.current
+                .sendFile(server, channel, file)
+                .catch((e) => dispatch({ type: 'toast', text: e.message }))
+            }
+            fetchFile={(file) => controllerRef.current.fetchFile(file)}
           />
           <Members
             server={activeServer}
@@ -175,6 +189,23 @@ export default function App() {
                 .addMember(server, user)
                 .catch((e) => dispatch({ type: 'toast', text: e.message }))
             }
+            onMember={async (peer) => {
+              try {
+                const number = await controllerRef.current.safetyNumber(server, peer);
+                dispatch({
+                  type: 'modal',
+                  modal: {
+                    type: 'safety',
+                    server,
+                    peer,
+                    number,
+                    verified: (activeServer.verified ?? []).includes(peer),
+                  },
+                });
+              } catch (e) {
+                dispatch({ type: 'toast', text: e.message });
+              }
+            }}
           />
         </>
       ) : (
@@ -202,7 +233,15 @@ export default function App() {
       )}
       {state.toast && <div className="toast">{state.toast}</div>}
       {state.modal && (
-        <Modal modal={state.modal} onClose={() => dispatch({ type: 'modal', modal: null })} />
+        <Modal
+          modal={state.modal}
+          onClose={() => dispatch({ type: 'modal', modal: null })}
+          onVerify={async (srv, peer) => {
+            await controllerRef.current.markVerified(srv, peer);
+            dispatch({ type: 'modal', modal: null });
+            dispatch({ type: 'toast', text: `${peer} marked as verified` });
+          }}
+        />
       )}
     </div>
   );

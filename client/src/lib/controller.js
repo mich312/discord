@@ -9,6 +9,9 @@
 //                                   member add because joiners have no
 //                                   scrollback to learn it from
 //   {k:'chan', ch}                — a channel was created
+//   {k:'file', ch, file}          — an attachment: {name,size,mime,blob,key};
+//                                   blob id points at relay disk, the AES key
+//                                   travels only inside this encrypted envelope
 import { b64, Relay } from './relay.js';
 import {
   b64url,
@@ -52,6 +55,7 @@ export class Controller {
       }
       this.dispatch({ type: 'booted', me: this.me, servers: this.snapshotServers() });
       this.connectRelay();
+      this.setupServiceWorker();
       return;
     }
     // IndexedDB is gone (or never was) — the localStorage identity keeps
@@ -103,6 +107,7 @@ export class Controller {
     }
     this.dispatch({ type: 'booted', me: this.me, servers: this.snapshotServers() });
     this.connectRelay();
+    this.setupServiceWorker();
   }
 
   // === relay ==============================================================
@@ -136,6 +141,11 @@ export class Controller {
           payloads.push(b64.enc(keyPackage));
         }
         await this.relay.request({ t: 'publish_kp', payloads });
+        // Refresh the push subscription silently if permission was already
+        // granted (endpoints rotate; VAPID keys may too).
+        if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
+          this.enableNotifications().catch((e) => console.warn(`push resubscribe: ${e.message}`));
+        }
         if (this.pendingInvite) await this.redeemPendingInvite();
         break;
       }
@@ -248,6 +258,17 @@ export class Controller {
         }
         break;
       }
+      case 'file': {
+        if (!record.channels.includes(content.ch)) record.channels.push(content.ch);
+        await this.storeMessage({
+          server: record.id,
+          channel: content.ch,
+          sender,
+          file: content.file,
+          ts: Date.now(),
+        });
+        break;
+      }
       case 'chan': {
         if (!record.channels.includes(content.ch)) {
           record.channels.push(content.ch);
@@ -329,6 +350,88 @@ export class Controller {
     await this.sendContent(serverId, { k: 'meta', name: record.name, channels: record.channels });
     await this.db.serverPut(record);
     this.dispatch({ type: 'servers', servers: this.snapshotServers() });
+  }
+
+  // === attachments ========================================================
+
+  httpBase() {
+    return this.relayUrl.replace(/^ws/, 'http').replace(/\/ws$/, '');
+  }
+
+  async sendFile(serverId, channel, fileHandle) {
+    if (fileHandle.size > 20 * 1024 * 1024) throw new Error('attachment too large (20 MB max)');
+    const data = new Uint8Array(await fileHandle.arrayBuffer());
+    // Random AES-GCM key per file; the relay sees only ciphertext under a
+    // random capability id. The key rides inside the MLS message.
+    const key = generateFragmentKey();
+    const encrypted = await encryptBlob(key, data);
+    const blobId = b64url.enc(crypto.getRandomValues(new Uint8Array(18)));
+    const res = await fetch(`${this.httpBase()}/blobs/${blobId}`, {
+      method: 'PUT',
+      body: encrypted,
+    });
+    if (!res.ok) throw new Error(`upload failed: ${await res.text()}`);
+    const file = {
+      name: fileHandle.name,
+      size: fileHandle.size,
+      mime: fileHandle.type || 'application/octet-stream',
+      blob: blobId,
+      key: b64.enc(key),
+    };
+    await this.sendContent(serverId, { k: 'file', ch: channel, file });
+    await this.storeMessage({ server: serverId, channel, sender: this.me, file, ts: Date.now() });
+  }
+
+  async fetchFile(file) {
+    const res = await fetch(`${this.httpBase()}/blobs/${file.blob}`);
+    if (!res.ok) throw new Error('attachment no longer available on the relay');
+    const encrypted = new Uint8Array(await res.arrayBuffer());
+    return decryptBlob(b64.dec(file.key), encrypted);
+  }
+
+  // === safety numbers =====================================================
+
+  safetyNumber(serverId, peer) {
+    return this.crypto('safetyNumber', { group: serverId, peer });
+  }
+
+  async markVerified(serverId, peer) {
+    const record = this.servers.get(serverId);
+    record.verified = [...new Set([...(record.verified ?? []), peer])];
+    await this.db.serverPut(record);
+    this.dispatch({ type: 'servers', servers: this.snapshotServers() });
+  }
+
+  // === web push ===========================================================
+
+  async setupServiceWorker() {
+    if (!('serviceWorker' in navigator)) return null;
+    try {
+      this.swReg = await navigator.serviceWorker.register('/sw.js');
+      return this.swReg;
+    } catch (e) {
+      console.warn(`service worker registration failed: ${e.message}`);
+      return null;
+    }
+  }
+
+  /** Explicit user action: ask permission, subscribe, hand the
+      subscription to the relay so it can nudge this device when offline. */
+  async enableNotifications() {
+    if (!this.swReg) await this.setupServiceWorker();
+    if (!this.swReg) throw new Error('service workers unavailable in this browser');
+    const permission = await Notification.requestPermission();
+    if (permission !== 'granted') throw new Error('notification permission denied');
+    const info = await this.relay.request({ t: 'push_info' });
+    const subscription = await this.swReg.pushManager.subscribe({
+      userVisibleOnly: true,
+      applicationServerKey: b64url.dec(info.pubkey),
+    });
+    await this.relay.request({
+      t: 'push_subscribe',
+      subscription: JSON.stringify(subscription.toJSON()),
+    });
+    return true;
   }
 
   // === invite links =======================================================

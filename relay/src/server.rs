@@ -3,7 +3,9 @@
 //! send so subscribers observe the log in seq order, and tracks online
 //! users for direct Welcome delivery.
 
+use crate::blobs::BlobStore;
 use crate::proto::{ClientMsg, ServerMsg, AUTH_CONTEXT};
+use crate::push::PushService;
 use crate::store::{InviteRecord, RegisterOutcome, Store, StoreError, StoredWelcome};
 use axum::extract::ws::{Message, WebSocket};
 use base64::engine::general_purpose::STANDARD as B64;
@@ -18,6 +20,8 @@ use tokio::sync::{mpsc, Mutex};
 pub struct App {
     pub store: Box<dyn Store>,
     pub hub: Mutex<Hub>,
+    pub blobs: BlobStore,
+    pub push: PushService,
 }
 
 #[derive(Default)]
@@ -29,8 +33,35 @@ pub struct Hub {
 }
 
 impl App {
+    /// Env-configured construction: BLOB_DIR (default ./blobs) and
+    /// VAPID_PRIVATE_KEY (ephemeral if unset).
     pub fn new(store: Box<dyn Store>) -> Arc<Self> {
-        Arc::new(Self { store, hub: Mutex::new(Hub::default()) })
+        let dir = std::env::var("BLOB_DIR").unwrap_or_else(|_| "./blobs".into());
+        let blobs = BlobStore::new(dir).expect("blob dir must be creatable");
+        Self::with_parts(store, blobs, PushService::from_env())
+    }
+
+    pub fn with_parts(store: Box<dyn Store>, blobs: BlobStore, push: PushService) -> Arc<Self> {
+        Arc::new(Self { store, hub: Mutex::new(Hub::default()), blobs, push })
+    }
+
+    /// Fire-and-forget web push to every subscription of `user`; dead
+    /// subscriptions are dropped.
+    async fn push_notify(&self, user: &str, payload: serde_json::Value) {
+        let subs = match self.store.push_subscriptions_for(user).await {
+            Ok(s) => s,
+            Err(_) => return,
+        };
+        let body = payload.to_string().into_bytes();
+        for (endpoint, subscription) in subs {
+            match self.push.send(&subscription, &body).await {
+                Ok(true) => {}
+                Ok(false) => {
+                    let _ = self.store.delete_push_subscription(user, &endpoint).await;
+                }
+                Err(e) => tracing::debug!("push to {user} failed: {e}"),
+            }
+        }
     }
 }
 
@@ -192,7 +223,7 @@ fn err(rid: u64, e: impl std::fmt::Display) -> Option<ServerMsg> {
 }
 
 async fn handle_request(
-    app: &App,
+    app: &Arc<App>,
     user: &str,
     tx: &mpsc::UnboundedSender<ServerMsg>,
     msg: ClientMsg,
@@ -299,6 +330,25 @@ async fn handle_request(
                     ch.send(out.clone()).is_ok()
                 });
             }
+            // Nudge members with no live connection. Payload carries only
+            // what the relay knows anyway (the group id).
+            let offline: Vec<String> = match app.store.group_members(&group).await {
+                Ok(members) => members
+                    .into_iter()
+                    .filter(|m| m != user && !hub.online.contains_key(m))
+                    .collect(),
+                Err(_) => Vec::new(),
+            };
+            drop(hub);
+            if !offline.is_empty() {
+                let app = app.clone();
+                let group = group.clone();
+                tokio::spawn(async move {
+                    for member in offline {
+                        app.push_notify(&member, serde_json::json!({"group": group})).await;
+                    }
+                });
+            }
             Some(ServerMsg::Ok { rid, seq: Some(seq) })
         }
 
@@ -320,10 +370,15 @@ async fn handle_request(
             let delivered = hub.online.get(&to).is_some_and(|ch| ch.send(out.clone()).is_ok());
             drop(hub);
             if !delivered {
-                let stored = StoredWelcome { from: user.to_string(), group, after, payload };
+                let stored =
+                    StoredWelcome { from: user.to_string(), group: group.clone(), after, payload };
                 if let Err(e) = app.store.store_welcome(&to, stored).await {
                     return err(rid, e);
                 }
+                let app = app.clone();
+                tokio::spawn(async move {
+                    app.push_notify(&to, serde_json::json!({"welcome": group})).await;
+                });
             }
             Some(ServerMsg::Ok { rid, seq: None })
         }
@@ -388,6 +443,26 @@ async fn handle_request(
                     }
                     Some(ServerMsg::Invite { rid, group, payload: B64.encode(&payload) })
                 }
+                Err(e) => err(rid, e),
+            }
+        }
+
+        ClientMsg::PushInfo { rid } => {
+            Some(ServerMsg::PushInfo { rid, pubkey: app.push.public_b64.clone() })
+        }
+
+        ClientMsg::PushSubscribe { rid, subscription } => {
+            let endpoint = serde_json::from_str::<serde_json::Value>(&subscription)
+                .ok()
+                .and_then(|v| v["endpoint"].as_str().map(String::from));
+            let Some(endpoint) = endpoint else {
+                return Some(ServerMsg::Error {
+                    rid: Some(rid),
+                    message: "subscription must be JSON with an endpoint".into(),
+                });
+            };
+            match app.store.put_push_subscription(user, &endpoint, &subscription).await {
+                Ok(()) => Some(ServerMsg::Ok { rid, seq: None }),
                 Err(e) => err(rid, e),
             }
         }

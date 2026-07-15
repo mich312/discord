@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 
-export default function Channels({ server, activeChannel, me, connection, onSelect, onCreate, onInvite, onIdentity }) {
+export default function Channels({ server, activeChannel, me, connection, onSelect, onCreate, onInvite, onIdentity, onAlerts }) {
   const [adding, setAdding] = useState(false);
   const [name, setName] = useState('');
 
@@ -58,6 +58,9 @@ export default function Channels({ server, activeChannel, me, connection, onSele
         <span className="mono" data-testid="self-name">{me}</span>
         <button className="ghost" title="identity key" data-testid="identity-open" onClick={onIdentity}>
           key
+        </button>
+        <button className="ghost" title="enable push notifications" data-testid="enable-notifications" onClick={onAlerts}>
+          alerts
         </button>
         <span className={`muted conn-${connection}`}>{connection}</span>
       </footer>

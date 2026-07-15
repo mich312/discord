@@ -358,6 +358,45 @@ impl ChatClient {
         self.groups.remove(id);
     }
 
+    // === safety numbers ====================================================
+
+    /// A short authentication string for me + `peer` in group `id`,
+    /// computed from both MLS identity keys (which sign every message the
+    /// member sends). Symmetric — both sides derive the same 60 digits —
+    /// and meant to be compared out of band. Verifying it rules out the
+    /// relay having substituted a different key for either party.
+    pub fn safety_number(&self, id: &str, peer: &str) -> Result<String, CoreError> {
+        use sha2::{Digest, Sha256};
+        let group = self.group_ref(id)?;
+        let peer_key = group
+            .members()
+            .find(|m| identity_of(&m.credential).as_deref() == Some(peer))
+            .map(|m| m.signature_key)
+            .ok_or_else(|| CoreError::Mls(format!("no member named {peer}")))?;
+        let mut parties = [
+            (self.name.as_bytes().to_vec(), self.signer.public().to_vec()),
+            (peer.as_bytes().to_vec(), peer_key),
+        ];
+        parties.sort();
+        let mut hasher = Sha256::new();
+        hasher.update(b"e2ee-safety-number-v1");
+        for (name, key) in &parties {
+            hasher.update((name.len() as u64).to_be_bytes());
+            hasher.update(name);
+            hasher.update((key.len() as u64).to_be_bytes());
+            hasher.update(key);
+        }
+        let hash = hasher.finalize();
+        // 12 groups of 5 digits from 24 bytes (2 bytes + 1 shared per pair).
+        let groups: Vec<String> = (0..12)
+            .map(|i| {
+                let n = u32::from_be_bytes([0, hash[i * 2], hash[i * 2 + 1], hash[24 + i / 2]]);
+                format!("{:05}", n % 100_000)
+            })
+            .collect();
+        Ok(groups.join(" "))
+    }
+
     // === invite links (external commits) ==================================
 
     /// Export a signed GroupInfo (ratchet tree included) for the current

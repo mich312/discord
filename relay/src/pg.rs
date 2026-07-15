@@ -68,6 +68,13 @@ impl PgStore {
                 after_seq bigint NOT NULL,
                 payload bytea NOT NULL
             );
+            CREATE TABLE IF NOT EXISTS push_subscriptions (
+                user_id text NOT NULL,
+                endpoint text NOT NULL,
+                subscription text NOT NULL,
+                created_at timestamptz NOT NULL DEFAULT now(),
+                PRIMARY KEY (user_id, endpoint)
+            );
             CREATE TABLE IF NOT EXISTS invites (
                 invite_id text PRIMARY KEY,
                 group_id text NOT NULL REFERENCES groups(group_id),
@@ -199,6 +206,62 @@ impl Store for PgStore {
             .await
             .map_err(backend)?;
         Ok(row.is_some())
+    }
+
+    async fn group_members(&self, group: &str) -> Result<Vec<String>, StoreError> {
+        let exists = sqlx::query("SELECT 1 FROM groups WHERE group_id = $1")
+            .bind(group)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(backend)?;
+        if exists.is_none() {
+            return Err(StoreError::NoSuchGroup);
+        }
+        let rows = sqlx::query("SELECT user_id FROM group_members WHERE group_id = $1 ORDER BY user_id")
+            .bind(group)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(backend)?;
+        Ok(rows.into_iter().map(|r| r.get("user_id")).collect())
+    }
+
+    async fn put_push_subscription(
+        &self,
+        user: &str,
+        endpoint: &str,
+        subscription_json: &str,
+    ) -> Result<(), StoreError> {
+        sqlx::query(
+            "INSERT INTO push_subscriptions (user_id, endpoint, subscription)
+             VALUES ($1, $2, $3)
+             ON CONFLICT (user_id, endpoint) DO UPDATE SET subscription = $3",
+        )
+        .bind(user)
+        .bind(endpoint)
+        .bind(subscription_json)
+        .execute(&self.pool)
+        .await
+        .map_err(backend)?;
+        Ok(())
+    }
+
+    async fn push_subscriptions_for(&self, user: &str) -> Result<Vec<(String, String)>, StoreError> {
+        let rows = sqlx::query("SELECT endpoint, subscription FROM push_subscriptions WHERE user_id = $1")
+            .bind(user)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(backend)?;
+        Ok(rows.into_iter().map(|r| (r.get("endpoint"), r.get("subscription"))).collect())
+    }
+
+    async fn delete_push_subscription(&self, user: &str, endpoint: &str) -> Result<(), StoreError> {
+        sqlx::query("DELETE FROM push_subscriptions WHERE user_id = $1 AND endpoint = $2")
+            .bind(user)
+            .bind(endpoint)
+            .execute(&self.pool)
+            .await
+            .map_err(backend)?;
+        Ok(())
     }
 
     async fn append_message(

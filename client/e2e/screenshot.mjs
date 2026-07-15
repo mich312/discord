@@ -67,6 +67,22 @@ await alice.fill('[data-testid=new-channel-name]', 'logistics');
 await alice.press('[data-testid=new-channel-name]', 'Enter');
 await new Promise((r) => setTimeout(r, 600));
 
+// An encrypted attachment (2x2 PNG) and a verified member for the shot.
+const png = Buffer.from(
+  'iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEklEQVR42mNk+M9QzwAEjDAGACCDAv8cI7IoAAAAAElFTkSuQmCC',
+  'base64'
+);
+await alice.setInputFiles('[data-testid=attach-input]', {
+  name: 'tyre-temps.png',
+  mimeType: 'image/png',
+  buffer: png,
+});
+await bob.waitForSelector('[data-testid=attachment-img]', { timeout: 15000 });
+await bob.click('[data-testid=member-alice]');
+await bob.waitForSelector('[data-testid=mark-verified]');
+await bob.click('[data-testid=mark-verified]');
+await new Promise((r) => setTimeout(r, 400));
+
 await bob.screenshot({ path: out });
 console.log(`saved ${out}`);
 await browser.close();

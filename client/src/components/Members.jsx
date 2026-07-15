@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 
 // The member list is the security boundary: it is, exactly, who can read
 // this server. Adding someone is done from here, not a settings page.
-export default function Members({ server, me, onAdd }) {
+export default function Members({ server, me, onAdd, onMember }) {
   const [name, setName] = useState('');
 
   return (
@@ -14,9 +14,19 @@ export default function Members({ server, me, onAdd }) {
       <ul className="member-list" data-testid="member-list">
         {server.members.map((m) => (
           <li key={m} className="member">
-            <span className="mono">{m}</span>
+            <button
+              className="member-name mono"
+              data-testid={`member-${m}`}
+              disabled={m === me}
+              title={m === me ? undefined : 'safety number & verification'}
+              onClick={() => onMember(m)}
+            >
+              {m}
+            </button>
             {m === me ? (
               <span className="muted">you</span>
+            ) : (server.verified ?? []).includes(m) ? (
+              <span className="badge-verified" title="safety number checked">✓ verified</span>
             ) : (server.linkJoined ?? []).includes(m) ? (
               <span className="badge-unverified" title="joined via invite link; safety number not checked">
                 via link · unverified

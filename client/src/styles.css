@@ -336,3 +336,71 @@ h2 { font-size: 14px; font-weight: 600; }
   padding: 1px 5px;
 }
 .empty-state .button { margin-top: 14px; }
+
+/* ===== attachments, safety numbers, member buttons (phases 5-6) ===== */
+.attach {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  width: 34px;
+  border: 1px solid var(--hairline);
+  border-radius: 8px;
+  color: var(--muted);
+  cursor: pointer;
+  flex-shrink: 0;
+}
+.attach:hover { color: var(--ink); border-color: var(--accent); }
+.composer { display: flex; gap: 8px; }
+.composer input[type="text"], .composer > input { flex: 1; }
+
+.attachment-img {
+  max-width: 320px;
+  max-height: 240px;
+  border-radius: 6px;
+  border: 1px solid var(--hairline);
+  display: block;
+}
+.attachment-file {
+  background: var(--bg2);
+  border: 1px solid var(--hairline);
+  border-radius: 6px;
+  padding: 6px 10px;
+  cursor: pointer;
+  color: var(--ink);
+  font-size: 13px;
+}
+.attachment-file:hover { border-color: var(--accent); }
+
+.member-name {
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  color: var(--ink);
+}
+.member-name:hover:not(:disabled) { color: var(--accent); text-decoration: underline; }
+.member-name:disabled { cursor: default; }
+
+.badge-verified {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--ok);
+  border: 1px solid rgba(125, 154, 111, 0.4);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+
+.safety-number {
+  display: grid;
+  grid-template-columns: repeat(4, 1fr);
+  gap: 8px 14px;
+  background: var(--bg0);
+  border: 1px dashed rgba(181, 165, 131, 0.5);
+  border-radius: 8px;
+  padding: 16px;
+  margin: 14px 0;
+  text-align: center;
+  font-size: 14px;
+  letter-spacing: 0.08em;
+}

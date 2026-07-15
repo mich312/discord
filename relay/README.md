@@ -59,6 +59,24 @@ boundary.
 Server events: `msg {group, seq, epoch, sender, payload}`,
 `welcome {from, group, after, payload}`.
 
+## Attachments
+
+`PUT /blobs/{id}` / `GET /blobs/{id}` — opaque AES-GCM ciphertext stored
+as plain files on the relay's disk (`BLOB_DIR`, default `./blobs`).
+Ids are client-generated random capabilities (strict token alphabet, no
+listing, no overwrite); the file key travels inside the MLS message and
+never reaches this process. 25 MB cap.
+
+## Web Push
+
+`push_info` returns the VAPID public key; `push_subscribe` stores a
+browser PushSubscription. When traffic lands for a member with no live
+connection (a group message, or a Welcome stored offline), the relay
+sends an aes128gcm-encrypted push carrying only what it already knows —
+the group id, never content. Dead endpoints are dropped on 404/410.
+Set `VAPID_PRIVATE_KEY` (base64url raw P-256 scalar) in production; an
+ephemeral key is generated (and subscriptions die on restart) otherwise.
+
 ## Storage
 
 `Store` trait with two impls: `MemoryStore` (tests, zero-config runs) and

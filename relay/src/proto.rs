@@ -47,6 +47,10 @@ pub enum ClientMsg {
     /// Redeem: returns the blob and grants the caller ACL membership so
     /// they can publish their external commit and subscribe.
     RedeemInvite { rid: u64, invite: String },
+    /// The server's VAPID public key (browser `applicationServerKey`).
+    PushInfo { rid: u64 },
+    /// Store a PushSubscription (its JSON serialization) for this user.
+    PushSubscribe { rid: u64, subscription: String },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -60,6 +64,7 @@ pub enum ServerMsg {
     Msg { group: String, seq: u64, epoch: u64, sender: String, payload: String },
     Welcome { from: String, group: String, after: u64, payload: String },
     Invite { rid: u64, group: String, payload: String },
+    PushInfo { rid: u64, pubkey: String },
 }
 
 pub const AUTH_CONTEXT: &[u8] = b"relay-auth-v1";

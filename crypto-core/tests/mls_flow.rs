@@ -290,3 +290,33 @@ fn stale_group_info_external_commit_is_rejected_by_members() {
     let blob = charlie.send_message(G, "second try").unwrap();
     expect_message(alice.process_incoming(&blob).unwrap(), "charlie", "second try");
 }
+
+#[test]
+fn safety_numbers_are_symmetric_and_pairwise_distinct() {
+    let mut alice = ChatClient::new("alice").unwrap();
+    let mut bob = ChatClient::new("bob").unwrap();
+    let mut charlie = ChatClient::new("charlie").unwrap();
+
+    alice.create_group(G).unwrap();
+    let add = alice.add_member(G, &bob.key_package().unwrap()).unwrap();
+    bob.join_from_welcome(&add.welcome).unwrap();
+    let add = alice.add_member(G, &charlie.key_package().unwrap()).unwrap();
+    charlie.join_from_welcome(&add.welcome).unwrap();
+    bob.process_incoming(&add.commit).unwrap();
+
+    // Both sides of a pair derive the same 60 digits…
+    let ab = alice.safety_number(G, "bob").unwrap();
+    let ba = bob.safety_number(G, "alice").unwrap();
+    assert_eq!(ab, ba);
+    assert_eq!(ab.replace(' ', "").len(), 60);
+    assert!(ab.replace(' ', "").chars().all(|c| c.is_ascii_digit()));
+
+    // …and different pairs get different numbers.
+    let ac = alice.safety_number(G, "charlie").unwrap();
+    let bc = bob.safety_number(G, "charlie").unwrap();
+    assert_ne!(ab, ac);
+    assert_ne!(ab, bc);
+    assert_eq!(ac, charlie.safety_number(G, "alice").unwrap());
+
+    assert!(alice.safety_number(G, "nobody").is_err());
+}

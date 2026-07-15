@@ -69,6 +69,7 @@ pub trait Store: Send + Sync {
     async fn create_group(&self, group: &str, creator: &str) -> Result<(), StoreError>;
     async fn allow_member(&self, group: &str, user: &str) -> Result<(), StoreError>;
     async fn is_member(&self, group: &str, user: &str) -> Result<bool, StoreError>;
+    async fn group_members(&self, group: &str) -> Result<Vec<String>, StoreError>;
     /// Append to the group's ordered log; returns the assigned seq (1-based).
     async fn append_message(
         &self,
@@ -81,6 +82,16 @@ pub trait Store: Send + Sync {
     async fn store_welcome(&self, to: &str, welcome: StoredWelcome) -> Result<(), StoreError>;
     /// Remove and return all Welcomes queued for `to`.
     async fn take_welcomes(&self, to: &str) -> Result<Vec<StoredWelcome>, StoreError>;
+
+    // --- push subscriptions ---
+    async fn put_push_subscription(
+        &self,
+        user: &str,
+        endpoint: &str,
+        subscription_json: &str,
+    ) -> Result<(), StoreError>;
+    async fn push_subscriptions_for(&self, user: &str) -> Result<Vec<(String, String)>, StoreError>;
+    async fn delete_push_subscription(&self, user: &str, endpoint: &str) -> Result<(), StoreError>;
 
     // --- invites ---
     async fn create_invite(&self, invite: &str, record: InviteRecord) -> Result<(), StoreError>;
@@ -100,6 +111,8 @@ struct MemoryInner {
     groups: HashMap<String, GroupData>,
     welcomes: HashMap<String, Vec<StoredWelcome>>,
     invites: HashMap<String, InviteRecord>,
+    /// user -> endpoint -> subscription json
+    push_subs: HashMap<String, HashMap<String, String>>,
 }
 
 #[derive(Default)]
@@ -171,6 +184,44 @@ impl Store for MemoryStore {
             .groups
             .get(group)
             .is_some_and(|d| d.members.iter().any(|m| m == user)))
+    }
+
+    async fn group_members(&self, group: &str) -> Result<Vec<String>, StoreError> {
+        let inner = self.inner.lock().unwrap();
+        let data = inner.groups.get(group).ok_or(StoreError::NoSuchGroup)?;
+        Ok(data.members.clone())
+    }
+
+    async fn put_push_subscription(
+        &self,
+        user: &str,
+        endpoint: &str,
+        subscription_json: &str,
+    ) -> Result<(), StoreError> {
+        let mut inner = self.inner.lock().unwrap();
+        inner
+            .push_subs
+            .entry(user.to_string())
+            .or_default()
+            .insert(endpoint.to_string(), subscription_json.to_string());
+        Ok(())
+    }
+
+    async fn push_subscriptions_for(&self, user: &str) -> Result<Vec<(String, String)>, StoreError> {
+        let inner = self.inner.lock().unwrap();
+        Ok(inner
+            .push_subs
+            .get(user)
+            .map(|m| m.iter().map(|(k, v)| (k.clone(), v.clone())).collect())
+            .unwrap_or_default())
+    }
+
+    async fn delete_push_subscription(&self, user: &str, endpoint: &str) -> Result<(), StoreError> {
+        let mut inner = self.inner.lock().unwrap();
+        if let Some(m) = inner.push_subs.get_mut(user) {
+            m.remove(endpoint);
+        }
+        Ok(())
     }
 
     async fn append_message(

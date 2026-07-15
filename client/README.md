@@ -61,6 +61,29 @@ says exactly that. The identity key is also exportable from the UI as a
 plain string (copy or download — labeled loudly, since whoever holds it
 IS you) and importable by pasting on the onboarding restore screen.
 
+### Attachments
+
+Files are AES-GCM-encrypted in the browser under a random per-file key,
+uploaded to the relay's disk under a random capability id, and the key
+rides inside the MLS message envelope (`{k:'file', ch, file}`). Receivers
+fetch the ciphertext and decrypt locally — images render inline, other
+files decrypt on click. The relay stores bytes it cannot read.
+
+### Safety numbers
+
+Click a member: both sides derive the same 60 digits from the pair's MLS
+identity keys (the keys that sign every message). Compare out of band,
+mark verified — stored on this device only. Verification replaces the
+"via link · unverified" badge with "✓ verified".
+
+### Notifications (Web Push)
+
+`sw.js` handles `push`/`notificationclick`; the "alerts" button asks for
+permission, subscribes via the relay's VAPID key, and hands the
+subscription over `push_subscribe`. The relay nudges this device only
+while it's offline, with a generic encrypted payload (no content — the
+server never has any). iOS Safari: installed-PWA only, per the plan.
+
 ### Recovery scope (honest version)
 
 The recovery key protects the **identity key** — the thing the relay has

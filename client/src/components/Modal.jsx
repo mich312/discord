@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 
-export default function Modal({ modal, onClose }) {
+export default function Modal({ modal, onClose, onVerify }) {
   const [copied, setCopied] = useState(false);
 
   async function copy(text) {
@@ -33,6 +33,36 @@ export default function Modal({ modal, onClose }) {
               7 days, dies if the blob goes stale while you're offline, and anyone who joins
               with it is marked <em>unverified</em> in the member list. Revoking it later
               only stops new joins — removing a member is what actually rotates the keys.
+            </p>
+          </>
+        )}
+        {modal.type === 'safety' && (
+          <>
+            <h1>safety number — {modal.peer}</h1>
+            <p className="muted">
+              Compare these digits with {modal.peer} over a channel you already trust (in
+              person, a call). If they match, nobody — including the relay — has swapped
+              keys on either of you.
+            </p>
+            <div className="safety-number" data-testid="safety-number">
+              {modal.number.split(' ').map((group, i) => (
+                <span key={i} className="mono">{group}</span>
+              ))}
+            </div>
+            {modal.verified ? (
+              <p className="fineprint muted">already marked verified on this device.</p>
+            ) : (
+              <button
+                className="button primary"
+                data-testid="mark-verified"
+                onClick={() => onVerify(modal.server, modal.peer)}
+              >
+                the numbers match — mark verified
+              </button>
+            )}
+            <p className="fineprint muted">
+              Verification is stored on this device only; it is your judgement, not the
+              server's.
             </p>
           </>
         )}

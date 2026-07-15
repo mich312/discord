@@ -88,6 +88,9 @@ const commands = {
     if (event.epoch !== undefined) event.epoch = Number(event.epoch);
     return { event, state: snapshot() };
   },
+  safetyNumber({ group, peer }) {
+    return client.safetyNumber(group, peer);
+  },
   status({ group }) {
     return { epoch: Number(client.epoch(group)), members: client.members(group) };
   },

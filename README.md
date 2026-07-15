@@ -40,8 +40,8 @@ often — and the docs say so plainly rather than overclaiming.
 | 2 | Relay: auth, KeyPackage store, ordered delivery, epoch handling | **done** |
 | 3 | Web client: rail, channels, messages, IndexedDB, recovery-key flow | **done** |
 | 4 | Invite links: encrypted GroupInfo blobs, external commits, unverified-member UI | **done** |
-| 5 | Attachments + safety-numbers UI | not started |
-| 6 | Web Push + service worker | not started |
+| 5 | Attachments + safety-numbers UI | **done** |
+| 6 | Web Push + service worker | **done** |
 | 7 | 1:1 WebRTC calls, signaling over the existing relay | not started |
 | 8 | Group calls: LiveKit + SFrame keyed from the MLS exporter secret | not started |
 

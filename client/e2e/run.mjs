@@ -215,10 +215,68 @@ try {
   const importedText = await imported.textContent('.empty-state');
   if (!importedText.includes('alice')) throw new Error('pasted identity key did not restore alice');
 
+  console.log('13. encrypted attachment: image round-trips and renders');
+  // 1x1 red PNG.
+  const png = Buffer.from(
+    'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
+    'base64'
+  );
+  await alice.click('[data-testid=channel-general]');
+  await alice.setInputFiles('[data-testid=attach-input]', {
+    name: 'pit-map.png',
+    mimeType: 'image/png',
+    buffer: png,
+  });
+  // Sender sees it decrypted…
+  await alice.waitForSelector('[data-testid=attachment-img]', { timeout: 15000 });
+  // …and so does a receiver, via blob fetch + AES-GCM decrypt.
+  await charlie.click('[data-testid=channel-general]');
+  await charlie.waitForSelector('[data-testid=attachment-img]', { timeout: 15000 });
+  const naturalWidth = await charlie
+    .locator('[data-testid=attachment-img]')
+    .first()
+    .evaluate((img) => img.naturalWidth);
+  if (naturalWidth !== 1) throw new Error(`decrypted image is broken (naturalWidth=${naturalWidth})`);
+
+  console.log('14. safety numbers match on both sides; unverified -> verified');
+  await alice.click('[data-testid=member-charlie]');
+  await alice.waitForSelector('[data-testid=safety-number]');
+  const aliceSees = (await alice.textContent('[data-testid=safety-number]')).replace(/\s+/g, '');
+  await charlie.click('[data-testid=member-alice]');
+  await charlie.waitForSelector('[data-testid=safety-number]');
+  const charlieSees = (await charlie.textContent('[data-testid=safety-number]')).replace(/\s+/g, '');
+  if (aliceSees !== charlieSees) {
+    throw new Error(`safety numbers differ: ${aliceSees} vs ${charlieSees}`);
+  }
+  if (!/^\d{60}$/.test(aliceSees)) throw new Error(`unexpected safety number format: ${aliceSees}`);
+  // charlie carried the via-link badge; verification replaces it.
+  if (!(await alice.locator('.badge-unverified').count())) {
+    throw new Error('expected charlie to be marked unverified before verification');
+  }
+  await alice.click('[data-testid=mark-verified]');
+  await alice.waitForSelector('.badge-verified', { timeout: 5000 });
+  if (await alice.locator('.badge-unverified').count()) {
+    throw new Error('unverified badge should be gone after verification');
+  }
+  await charlie.click('[data-testid=close-modal]');
+
+  console.log('15. service worker registered; notifications button behaves');
+  const swRegistered = await alice.evaluate(async () => {
+    const reg = await navigator.serviceWorker.getRegistration();
+    return !!reg;
+  });
+  if (!swRegistered) throw new Error('service worker did not register');
+  // Headless chromium has no push service; the button must fail gracefully
+  // (toast), never crash.
+  await aliceCtx.grantPermissions(['notifications'], { origin: `http://127.0.0.1:${HTTP}` });
+  await alice.click('[data-testid=enable-notifications]');
+  await alice.waitForSelector('.toast', { timeout: 10000 });
+
   console.log('\nPASS: full client journey — onboarding, E2EE chat, channels,');
   console.log('      IndexedDB persistence, recovery, invite-link external-commit');
   console.log('      join with unverified badge, localStorage identity survival,');
-  console.log('      and plain key export/import');
+  console.log('      plain key export/import, encrypted attachments, safety');
+  console.log('      numbers, and service-worker registration');
   await browser.close();
 } catch (e) {
   failed = true;
