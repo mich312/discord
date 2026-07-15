@@ -295,3 +295,44 @@ h2 { font-size: 14px; font-weight: 600; }
   font-size: 13px;
   max-width: 60ch;
 }
+
+/* ===== modals & badges (phase 4) ===== */
+.modal-backdrop {
+  position: fixed;
+  inset: 0;
+  background: rgba(0, 0, 0, 0.55);
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  z-index: 10;
+}
+.modal { position: relative; }
+.modal .close { position: absolute; top: 14px; right: 14px; }
+.keybox {
+  width: 100%;
+  min-height: 88px;
+  background: var(--bg0);
+  border: 1px solid var(--hairline);
+  border-radius: 6px;
+  color: var(--ink);
+  font-family: var(--mono);
+  font-size: 11px;
+  padding: 10px;
+  margin: 10px 0;
+  resize: vertical;
+  overflow-wrap: anywhere;
+}
+.keybox.small { min-height: 56px; margin: 0; }
+.row { display: flex; gap: 8px; }
+.push-right { margin-left: auto; }
+.divider { font-size: 11px; text-transform: uppercase; letter-spacing: 0.08em; margin: 12px 0; }
+.badge-unverified {
+  font-size: 10px;
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
+  color: var(--accent);
+  border: 1px solid rgba(181, 165, 131, 0.4);
+  border-radius: 4px;
+  padding: 1px 5px;
+}
+.empty-state .button { margin-top: 14px; }

@@ -226,3 +226,67 @@ fn identity_bundle_restores_account_but_not_groups() {
     let blob = alice.send_message("g2", "back from the dead").unwrap();
     expect_message(bob.process_incoming(&blob).unwrap(), "alice", "back from the dead");
 }
+
+#[test]
+fn external_commit_join_via_group_info() {
+    let mut alice = ChatClient::new("alice").unwrap();
+    let mut bob = ChatClient::new("bob").unwrap();
+    let mut charlie = ChatClient::new("charlie").unwrap();
+
+    alice.create_group(G).unwrap();
+    let add = alice.add_member(G, &bob.key_package().unwrap()).unwrap();
+    bob.join_from_welcome(&add.welcome).unwrap();
+
+    // charlie joins with nobody's help: GroupInfo -> external commit.
+    let group_info = alice.export_group_info(G).unwrap();
+    let (joined, commit) = charlie.join_by_external_commit(&group_info).unwrap();
+    assert_eq!(joined, G);
+    assert_eq!(charlie.members(G).unwrap(), vec!["alice", "bob", "charlie"]);
+
+    // Existing members merge the commit; the sender IS the new member —
+    // that's how the UI knows this was a link join.
+    for member in [&mut alice, &mut bob] {
+        match member.process_incoming(&commit).unwrap() {
+            Event::MembershipChange { epoch, sender, members, .. } => {
+                assert_eq!(epoch, 2);
+                assert_eq!(sender, "charlie");
+                assert_eq!(members, vec!["alice", "bob", "charlie"]);
+            }
+            other => panic!("expected membership change, got {other:?}"),
+        }
+    }
+
+    // Traffic flows in every direction afterwards.
+    let blob = charlie.send_message(G, "let me introduce myself").unwrap();
+    expect_message(alice.process_incoming(&blob).unwrap(), "charlie", "let me introduce myself");
+    let blob = bob.send_message(G, "welcome").unwrap();
+    expect_message(charlie.process_incoming(&blob).unwrap(), "bob", "welcome");
+}
+
+#[test]
+fn stale_group_info_external_commit_is_rejected_by_members() {
+    let mut alice = ChatClient::new("alice").unwrap();
+    let mut bob = ChatClient::new("bob").unwrap();
+    let mut charlie = ChatClient::new("charlie").unwrap();
+
+    alice.create_group(G).unwrap();
+    let stale_info = alice.export_group_info(G).unwrap(); // epoch 0
+
+    // Group moves on before charlie uses the link.
+    let add = alice.add_member(G, &bob.key_package().unwrap()).unwrap();
+    bob.join_from_welcome(&add.welcome).unwrap();
+
+    // charlie can still BUILD a commit against the stale info…
+    let (_, commit) = charlie.join_by_external_commit(&stale_info).unwrap();
+    // …but current members reject it: the epoch has moved on. This is why
+    // invite blobs must be refreshed after every epoch change.
+    assert!(alice.process_incoming(&commit).is_err());
+    charlie.forget_group(G);
+
+    // A fresh GroupInfo works.
+    let fresh_info = alice.export_group_info(G).unwrap();
+    let (_, commit) = charlie.join_by_external_commit(&fresh_info).unwrap();
+    alice.process_incoming(&commit).unwrap();
+    let blob = charlie.send_message(G, "second try").unwrap();
+    expect_message(alice.process_incoming(&blob).unwrap(), "charlie", "second try");
+}

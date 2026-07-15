@@ -376,3 +376,111 @@ async fn non_members_cannot_subscribe_or_send() {
     let reply = charlie.request(json!({"t": "allow", "group": "g1", "user": "charlie"})).await;
     assert_eq!(reply["t"], "error");
 }
+
+#[tokio::test]
+async fn invite_link_flow_external_commit_join() {
+    let addr = spawn_relay().await;
+
+    // alice sets up a group and parks an (opaque) invite blob on the relay.
+    let mut alice =
+        TestClient::connect(addr, ChatClient::new("alice").unwrap(), "alice").await.unwrap();
+    alice.mls.create_group("g1").unwrap();
+    alice.request(json!({"t": "create_group", "group": "g1"})).await;
+    let group_info = alice.mls.export_group_info("g1").unwrap();
+    let reply = alice
+        .request(json!({
+            "t": "create_invite", "invite": "inv-1", "group": "g1",
+            "payload": B64.encode(&group_info), "expires_at": null, "max_uses": null,
+        }))
+        .await;
+    assert_eq!(reply["t"], "ok");
+
+    // charlie redeems: gets the blob, relay-level membership, and joins by
+    // external commit with no existing member online.
+    let mut charlie =
+        TestClient::connect(addr, ChatClient::new("charlie").unwrap(), "charlie").await.unwrap();
+    let reply = charlie.request(json!({"t": "redeem_invite", "invite": "inv-1"})).await;
+    assert_eq!(reply["t"], "invite");
+    assert_eq!(reply["group"], "g1");
+    let blob = B64.decode(reply["payload"].as_str().unwrap()).unwrap();
+    let (group, commit) = charlie.mls.join_by_external_commit(&blob).unwrap();
+    assert_eq!(group, "g1");
+    let epoch = charlie.mls.epoch("g1").unwrap();
+    let reply = charlie
+        .request(json!({"t": "send", "group": "g1", "epoch": epoch, "payload": B64.encode(&commit)}))
+        .await;
+    let commit_seq = reply["seq"].as_u64().unwrap();
+    charlie.request(json!({"t": "subscribe", "group": "g1", "after": commit_seq})).await;
+
+    // alice (subscribed via create_group) sees the external commit as a
+    // membership change signed by the joiner.
+    match alice.recv_group_event().await {
+        Event::MembershipChange { sender, members, .. } => {
+            assert_eq!(sender, "charlie");
+            assert_eq!(members, vec!["alice", "charlie"]);
+        }
+        other => panic!("expected membership change, got {other:?}"),
+    }
+
+    // Chat flows both ways.
+    alice.send_group("g1", "hello stranger").await;
+    TestClient::assert_message(charlie.recv_group_event().await, "alice", "hello stranger");
+    charlie.send_group("g1", "hi, followed the link").await;
+    TestClient::assert_message(alice.recv_group_event().await, "charlie", "hi, followed the link");
+}
+
+#[tokio::test]
+async fn invite_weak_controls_enforced_server_side() {
+    let addr = spawn_relay().await;
+    let mut alice =
+        TestClient::connect(addr, ChatClient::new("alice").unwrap(), "alice").await.unwrap();
+    alice.mls.create_group("g1").unwrap();
+    alice.request(json!({"t": "create_group", "group": "g1"})).await;
+    let blob = B64.encode(alice.mls.export_group_info("g1").unwrap());
+
+    // Expired invite refuses to redeem.
+    alice
+        .request(json!({
+            "t": "create_invite", "invite": "expired", "group": "g1",
+            "payload": blob, "expires_at": 1, "max_uses": null,
+        }))
+        .await;
+    // max_uses=1 invite works once, then refuses.
+    alice
+        .request(json!({
+            "t": "create_invite", "invite": "once", "group": "g1",
+            "payload": blob, "expires_at": null, "max_uses": 1,
+        }))
+        .await;
+    // Revoked invite disappears.
+    alice
+        .request(json!({
+            "t": "create_invite", "invite": "revoked", "group": "g1",
+            "payload": blob, "expires_at": null, "max_uses": null,
+        }))
+        .await;
+    let reply = alice.request(json!({"t": "revoke_invite", "invite": "revoked"})).await;
+    assert_eq!(reply["t"], "ok");
+
+    let mut dave = TestClient::connect(addr, ChatClient::new("dave").unwrap(), "dave").await.unwrap();
+    let reply = dave.request(json!({"t": "redeem_invite", "invite": "expired"})).await;
+    assert_eq!(reply["t"], "error");
+    let reply = dave.request(json!({"t": "redeem_invite", "invite": "revoked"})).await;
+    assert_eq!(reply["t"], "error");
+    let reply = dave.request(json!({"t": "redeem_invite", "invite": "once"})).await;
+    assert_eq!(reply["t"], "invite");
+    let mut erin = TestClient::connect(addr, ChatClient::new("erin").unwrap(), "erin").await.unwrap();
+    let reply = erin.request(json!({"t": "redeem_invite", "invite": "once"})).await;
+    assert_eq!(reply["t"], "error", "second use of max_uses=1 must fail");
+
+    // Non-members cannot create or update invites.
+    let reply = erin
+        .request(json!({
+            "t": "create_invite", "invite": "evil", "group": "g1",
+            "payload": "AA==", "expires_at": null, "max_uses": null,
+        }))
+        .await;
+    assert_eq!(reply["t"], "error");
+    let reply = erin.request(json!({"t": "update_invite", "invite": "once", "payload": "AA=="})).await;
+    assert_eq!(reply["t"], "error");
+}

@@ -2,6 +2,8 @@ import React, { useEffect, useMemo, useReducer, useRef } from 'react';
 import { openDb } from './lib/db.js';
 import { createCrypto } from './lib/rpc.js';
 import { Controller } from './lib/controller.js';
+import { parseInviteUrl } from './lib/invite.js';
+import Modal from './components/Modal.jsx';
 import Onboarding from './components/Onboarding.jsx';
 import Rail from './components/Rail.jsx';
 import Channels from './components/Channels.jsx';
@@ -16,6 +18,7 @@ const initial = {
   messages: [], // active channel only
   connection: 'connecting',
   toast: null,
+  modal: null, // {type:'invite', url} | {type:'identity', key}
 };
 
 function reducer(state, action) {
@@ -56,6 +59,8 @@ function reducer(state, action) {
       return { ...state, connection: action.status };
     case 'toast':
       return { ...state, toast: action.text };
+    case 'modal':
+      return { ...state, modal: action.modal };
     default:
       return state;
   }
@@ -74,6 +79,8 @@ export default function App() {
       dispatch,
       relayUrl,
     });
+    const invite = parseInviteUrl(location);
+    if (invite) controller.setPendingInvite(invite);
     controllerRef.current = controller;
     openDb().then((db) => {
       controller.db = db;
@@ -133,6 +140,20 @@ export default function App() {
             connection={state.connection}
             onSelect={(ch) => dispatch({ type: 'select', server, channel: ch })}
             onCreate={(ch) => controllerRef.current.createChannel(server, ch)}
+            onInvite={async () => {
+              try {
+                const url = await controllerRef.current.createInvite(server);
+                dispatch({ type: 'modal', modal: { type: 'invite', url } });
+              } catch (e) {
+                dispatch({ type: 'toast', text: e.message });
+              }
+            }}
+            onIdentity={() =>
+              dispatch({
+                type: 'modal',
+                modal: { type: 'identity', key: controllerRef.current.identityKeyString() },
+              })
+            }
           />
           <Messages
             key={`${server}/${channel}`}
@@ -161,13 +182,28 @@ export default function App() {
           <div>
             <h2>no servers yet</h2>
             <p className="muted">
-              create one from the rail, or ask someone to add you — they need your
-              handle: <strong>{state.me}</strong>
+              create one from the rail, follow an invite link, or ask someone to add you —
+              they need your handle: <strong>{state.me}</strong>
             </p>
+            <button
+              className="button"
+              data-testid="identity-open-empty"
+              onClick={() =>
+                dispatch({
+                  type: 'modal',
+                  modal: { type: 'identity', key: controllerRef.current.identityKeyString() },
+                })
+              }
+            >
+              identity key
+            </button>
           </div>
         </div>
       )}
       {state.toast && <div className="toast">{state.toast}</div>}
+      {state.modal && (
+        <Modal modal={state.modal} onClose={() => dispatch({ type: 'modal', modal: null })} />
+      )}
     </div>
   );
 }

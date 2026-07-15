@@ -45,6 +45,16 @@ acks. Auth: `hello {user, pubkey}` → `challenge {nonce}` →
 | `subscribe {group, after}` | `ok` + backlog `msg`s | members only |
 | `send {group, epoch, payload}` | `ok {seq}` | members only; fans out `msg` |
 | `welcome {to, group, after, payload}` | `ok` | direct or stored offline |
+| `create_invite {invite, group, payload, expires_at?, max_uses?}` | `ok` | members only; parks an encrypted GroupInfo blob |
+| `update_invite {invite, payload}` | `ok` | members only; fresh epoch's blob, same invite id |
+| `revoke_invite {invite}` | `ok` | members only |
+| `redeem_invite {invite}` | `invite {group, payload}` | enforces expiry/max-uses, grants ACL membership |
+
+Invite expiry and use-counting are **server-enforced and therefore weak**
+(a malicious relay can hand the blob to anyone). What it cannot do is read
+the blob — the decryption key travels in the invite URL's fragment and
+never reaches the server. Cryptographic membership remains the only strong
+boundary.
 
 Server events: `msg {group, seq, epoch, sender, payload}`,
 `welcome {from, group, after, payload}`.

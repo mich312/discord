@@ -4,7 +4,7 @@
 //! users for direct Welcome delivery.
 
 use crate::proto::{ClientMsg, ServerMsg, AUTH_CONTEXT};
-use crate::store::{RegisterOutcome, Store, StoreError, StoredWelcome};
+use crate::store::{InviteRecord, RegisterOutcome, Store, StoreError, StoredWelcome};
 use axum::extract::ws::{Message, WebSocket};
 use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine;
@@ -327,7 +327,78 @@ async fn handle_request(
             }
             Some(ServerMsg::Ok { rid, seq: None })
         }
+
+        ClientMsg::CreateInvite { rid, invite, group, payload, expires_at, max_uses } => {
+            if let Err(e) = require_member(app, &group, user).await {
+                return err(rid, e);
+            }
+            let payload = match decode_b64(&payload) {
+                Ok(b) => b,
+                Err(e) => return err(rid, e),
+            };
+            let record = InviteRecord { group, payload, expires_at, max_uses, uses: 0 };
+            match app.store.create_invite(&invite, record).await {
+                Ok(()) => Some(ServerMsg::Ok { rid, seq: None }),
+                Err(e) => err(rid, e),
+            }
+        }
+
+        ClientMsg::UpdateInvite { rid, invite, payload } => {
+            let group = match app.store.invite_group(&invite).await {
+                Ok(Some(g)) => g,
+                Ok(None) => return err(rid, StoreError::InviteInvalid),
+                Err(e) => return err(rid, e),
+            };
+            if let Err(e) = require_member(app, &group, user).await {
+                return err(rid, e);
+            }
+            let payload = match decode_b64(&payload) {
+                Ok(b) => b,
+                Err(e) => return err(rid, e),
+            };
+            match app.store.update_invite(&invite, payload).await {
+                Ok(()) => Some(ServerMsg::Ok { rid, seq: None }),
+                Err(e) => err(rid, e),
+            }
+        }
+
+        ClientMsg::RevokeInvite { rid, invite } => {
+            let group = match app.store.invite_group(&invite).await {
+                Ok(Some(g)) => g,
+                Ok(None) => return Some(ServerMsg::Ok { rid, seq: None }), // already gone
+                Err(e) => return err(rid, e),
+            };
+            if let Err(e) = require_member(app, &group, user).await {
+                return err(rid, e);
+            }
+            match app.store.revoke_invite(&invite).await {
+                Ok(()) => Some(ServerMsg::Ok { rid, seq: None }),
+                Err(e) => err(rid, e),
+            }
+        }
+
+        ClientMsg::RedeemInvite { rid, invite } => {
+            match app.store.redeem_invite(&invite, now_unix()).await {
+                Ok((group, payload)) => {
+                    // The link is a bearer token: holding it grants relay-level
+                    // membership. Whether the joiner can READ anything is
+                    // still up to MLS (they need the fragment key).
+                    if let Err(e) = app.store.allow_member(&group, user).await {
+                        return err(rid, e);
+                    }
+                    Some(ServerMsg::Invite { rid, group, payload: B64.encode(&payload) })
+                }
+                Err(e) => err(rid, e),
+            }
+        }
     }
+}
+
+fn now_unix() -> u64 {
+    std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0)
 }
 
 async fn require_member(app: &App, group: &str, user: &str) -> Result<(), StoreError> {

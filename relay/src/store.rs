@@ -13,8 +13,23 @@ pub enum StoreError {
     GroupExists,
     #[error("no such group")]
     NoSuchGroup,
+    #[error("invite not valid (missing, expired, or used up)")]
+    InviteInvalid,
     #[error("storage error: {0}")]
     Backend(String),
+}
+
+/// Server-side invite record: an opaque encrypted GroupInfo blob plus the
+/// weak (server-enforced) controls. The server cannot read the blob — the
+/// decryption key lives in the invite URL's fragment and never arrives here.
+#[derive(Debug, Clone)]
+pub struct InviteRecord {
+    pub group: String,
+    pub payload: Vec<u8>,
+    /// Unix seconds; None = no expiry.
+    pub expires_at: Option<u64>,
+    pub max_uses: Option<u64>,
+    pub uses: u64,
 }
 
 #[derive(Debug, Clone, PartialEq)]
@@ -66,6 +81,16 @@ pub trait Store: Send + Sync {
     async fn store_welcome(&self, to: &str, welcome: StoredWelcome) -> Result<(), StoreError>;
     /// Remove and return all Welcomes queued for `to`.
     async fn take_welcomes(&self, to: &str) -> Result<Vec<StoredWelcome>, StoreError>;
+
+    // --- invites ---
+    async fn create_invite(&self, invite: &str, record: InviteRecord) -> Result<(), StoreError>;
+    /// Which group an invite belongs to (for authorization), if it exists.
+    async fn invite_group(&self, invite: &str) -> Result<Option<String>, StoreError>;
+    /// Replace the blob (fresh epoch's GroupInfo under the same link key).
+    async fn update_invite(&self, invite: &str, payload: Vec<u8>) -> Result<(), StoreError>;
+    async fn revoke_invite(&self, invite: &str) -> Result<(), StoreError>;
+    /// Validate expiry/uses at `now`, count a use, return (group, payload).
+    async fn redeem_invite(&self, invite: &str, now: u64) -> Result<(String, Vec<u8>), StoreError>;
 }
 
 #[derive(Default)]
@@ -74,6 +99,7 @@ struct MemoryInner {
     key_packages: HashMap<String, Vec<Vec<u8>>>,
     groups: HashMap<String, GroupData>,
     welcomes: HashMap<String, Vec<StoredWelcome>>,
+    invites: HashMap<String, InviteRecord>,
 }
 
 #[derive(Default)]
@@ -182,5 +208,44 @@ impl Store for MemoryStore {
     async fn take_welcomes(&self, to: &str) -> Result<Vec<StoredWelcome>, StoreError> {
         let mut inner = self.inner.lock().unwrap();
         Ok(inner.welcomes.remove(to).unwrap_or_default())
+    }
+
+    async fn create_invite(&self, invite: &str, record: InviteRecord) -> Result<(), StoreError> {
+        let mut inner = self.inner.lock().unwrap();
+        if !inner.groups.contains_key(&record.group) {
+            return Err(StoreError::NoSuchGroup);
+        }
+        inner.invites.insert(invite.to_string(), record);
+        Ok(())
+    }
+
+    async fn invite_group(&self, invite: &str) -> Result<Option<String>, StoreError> {
+        let inner = self.inner.lock().unwrap();
+        Ok(inner.invites.get(invite).map(|r| r.group.clone()))
+    }
+
+    async fn update_invite(&self, invite: &str, payload: Vec<u8>) -> Result<(), StoreError> {
+        let mut inner = self.inner.lock().unwrap();
+        let record = inner.invites.get_mut(invite).ok_or(StoreError::InviteInvalid)?;
+        record.payload = payload;
+        Ok(())
+    }
+
+    async fn revoke_invite(&self, invite: &str) -> Result<(), StoreError> {
+        let mut inner = self.inner.lock().unwrap();
+        inner.invites.remove(invite);
+        Ok(())
+    }
+
+    async fn redeem_invite(&self, invite: &str, now: u64) -> Result<(String, Vec<u8>), StoreError> {
+        let mut inner = self.inner.lock().unwrap();
+        let record = inner.invites.get_mut(invite).ok_or(StoreError::InviteInvalid)?;
+        if record.expires_at.is_some_and(|t| now > t)
+            || record.max_uses.is_some_and(|m| record.uses >= m)
+        {
+            return Err(StoreError::InviteInvalid);
+        }
+        record.uses += 1;
+        Ok((record.group.clone(), record.payload.clone()))
     }
 }

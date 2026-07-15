@@ -30,6 +30,23 @@ pub enum ClientMsg {
     /// Deliver a Welcome directly to `to` (stored if offline). `group` and
     /// `after` tell the joiner where their log begins.
     Welcome { rid: u64, to: String, group: String, after: u64, payload: String },
+    /// Park an encrypted GroupInfo blob under an opaque invite id. Members
+    /// only. `expires_at` (unix secs) / `max_uses` are server-enforced —
+    /// weak controls; MLS membership stays the real boundary.
+    CreateInvite {
+        rid: u64,
+        invite: String,
+        group: String,
+        payload: String,
+        expires_at: Option<u64>,
+        max_uses: Option<u64>,
+    },
+    /// Swap in a fresh epoch's blob (same invite id, same fragment key).
+    UpdateInvite { rid: u64, invite: String, payload: String },
+    RevokeInvite { rid: u64, invite: String },
+    /// Redeem: returns the blob and grants the caller ACL membership so
+    /// they can publish their external commit and subscribe.
+    RedeemInvite { rid: u64, invite: String },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -42,6 +59,7 @@ pub enum ServerMsg {
     Kp { rid: u64, user: String, #[serde(skip_serializing_if = "Option::is_none")] payload: Option<String> },
     Msg { group: String, seq: u64, epoch: u64, sender: String, payload: String },
     Welcome { from: String, group: String, after: u64, payload: String },
+    Invite { rid: u64, group: String, payload: String },
 }
 
 pub const AUTH_CONTEXT: &[u8] = b"relay-auth-v1";

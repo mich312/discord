@@ -31,8 +31,8 @@ process.on('exit', cleanup);
 
 const launchOpts = process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {};
 
-async function onboard(page, handle) {
-  await page.goto(base);
+async function onboard(page, handle, url = base) {
+  await page.goto(url);
   await page.fill('[data-testid=handle-input]', handle);
   await page.click('[data-testid=create-identity]');
   await page.waitForSelector('[data-testid=recovery-step]');
@@ -153,8 +153,72 @@ try {
   // …but groups are intentionally gone (their keys died with the "device").
   await fresh.waitForSelector('.empty-state', { timeout: 5000 });
 
+  console.log('9. alice creates an invite link');
+  await alice.click('[data-testid=create-invite]');
+  await alice.waitForSelector('[data-testid=invite-url]');
+  const inviteUrl = await alice.inputValue('[data-testid=invite-url]');
+  await alice.click('[data-testid=close-modal]');
+  if (!inviteUrl.includes('#k=')) throw new Error(`invite url missing fragment key: ${inviteUrl}`);
+
+  console.log('10. charlie joins via the link (external commit, nobody helping)');
+  const charlieCtx = await browser.newContext();
+  const charlie = await charlieCtx.newPage();
+  charlie.on('pageerror', (e) => console.error('[charlie pageerror]', e.message));
+  await onboard(charlie, 'charlie', inviteUrl);
+  await charlie.waitForSelector('[data-testid=channel-general]', { timeout: 20000 });
+  // Server name reaches charlie via the invite-owner's meta rebroadcast.
+  await charlie.waitForFunction(
+    () => document.querySelector('[data-testid=server-name]')?.textContent === 'Race Team',
+    { timeout: 15000 }
+  );
+  // Existing members see the join and the unverified badge.
+  await alice.waitForSelector('text=charlie joined via invite link', { timeout: 15000 });
+  await alice.waitForSelector('.badge-unverified', { timeout: 5000 });
+  // Chat flows to and from the link joiner.
+  await charlie.fill('[data-testid=composer]', 'found my way in via the link');
+  await charlie.press('[data-testid=composer]', 'Enter');
+  await alice.waitForSelector('text=found my way in via the link', { timeout: 10000 });
+  await alice.fill('[data-testid=composer]', 'welcome charlie');
+  await alice.press('[data-testid=composer]', 'Enter');
+  await charlie.waitForSelector('text=welcome charlie', { timeout: 10000 });
+  // And charlie must not see anything pre-join.
+  if (await charlie.locator('text=should be invisible to bob').count()) {
+    throw new Error('charlie can see pre-join history — E2EE scrollback violation!');
+  }
+
+  console.log('11. IndexedDB wiped: identity survives via localStorage');
+  await bob.evaluate(() => {
+    return new Promise((resolve) => {
+      const req = indexedDB.deleteDatabase('e2ee-client');
+      req.onsuccess = req.onerror = req.onblocked = () => resolve();
+    });
+  });
+  await bob.reload();
+  // bob is still bob (no onboarding screen), but groups are gone.
+  await bob.waitForSelector('.empty-state', { timeout: 15000 });
+  const emptyText = await bob.textContent('.empty-state');
+  if (!emptyText.includes('bob')) throw new Error('identity lost after IndexedDB wipe');
+
+  console.log('12. identity key export/import: paste alice into a fresh profile');
+  await alice.click('[data-testid=identity-open]');
+  await alice.waitForSelector('[data-testid=identity-key]');
+  const aliceKey = await alice.inputValue('[data-testid=identity-key]');
+  await alice.click('[data-testid=close-modal]');
+  const importCtx = await browser.newContext();
+  const imported = await importCtx.newPage();
+  imported.on('pageerror', (e) => console.error('[import pageerror]', e.message));
+  await imported.goto(base);
+  await imported.click('text=restore');
+  await imported.fill('[data-testid=paste-key]', aliceKey);
+  await imported.click('[data-testid=restore-identity]');
+  await imported.waitForSelector('.empty-state', { timeout: 15000 });
+  const importedText = await imported.textContent('.empty-state');
+  if (!importedText.includes('alice')) throw new Error('pasted identity key did not restore alice');
+
   console.log('\nPASS: full client journey — onboarding, E2EE chat, channels,');
-  console.log('      IndexedDB persistence through reload, identity recovery');
+  console.log('      IndexedDB persistence, recovery, invite-link external-commit');
+  console.log('      join with unverified badge, localStorage identity survival,');
+  console.log('      and plain key export/import');
   await browser.close();
 } catch (e) {
   failed = true;

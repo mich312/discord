@@ -2,7 +2,7 @@
 //! client-declared epoch stored alongside — exactly the shape in the build
 //! plan. Uses runtime queries (no compile-time DB dependency).
 
-use crate::store::{RegisterOutcome, Store, StoreError, StoredMessage, StoredWelcome};
+use crate::store::{InviteRecord, RegisterOutcome, Store, StoreError, StoredMessage, StoredWelcome};
 use async_trait::async_trait;
 use sqlx::{postgres::PgPoolOptions, PgPool, Row};
 
@@ -67,6 +67,15 @@ impl PgStore {
                 group_id text NOT NULL,
                 after_seq bigint NOT NULL,
                 payload bytea NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS invites (
+                invite_id text PRIMARY KEY,
+                group_id text NOT NULL REFERENCES groups(group_id),
+                payload bytea NOT NULL,
+                expires_at bigint,
+                max_uses bigint,
+                uses bigint NOT NULL DEFAULT 0,
+                created_at timestamptz NOT NULL DEFAULT now()
             );
             "#,
         )
@@ -289,5 +298,78 @@ impl Store for PgStore {
                 payload: r.get("payload"),
             })
             .collect())
+    }
+
+    async fn create_invite(&self, invite: &str, record: InviteRecord) -> Result<(), StoreError> {
+        sqlx::query(
+            "INSERT INTO invites (invite_id, group_id, payload, expires_at, max_uses)
+             VALUES ($1, $2, $3, $4, $5)
+             ON CONFLICT (invite_id) DO NOTHING",
+        )
+        .bind(invite)
+        .bind(&record.group)
+        .bind(&record.payload)
+        .bind(record.expires_at.map(|t| t as i64))
+        .bind(record.max_uses.map(|m| m as i64))
+        .execute(&self.pool)
+        .await
+        .map_err(|e| {
+            if e.to_string().contains("foreign key") {
+                StoreError::NoSuchGroup
+            } else {
+                backend(e)
+            }
+        })?;
+        Ok(())
+    }
+
+    async fn invite_group(&self, invite: &str) -> Result<Option<String>, StoreError> {
+        let row = sqlx::query("SELECT group_id FROM invites WHERE invite_id = $1")
+            .bind(invite)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(backend)?;
+        Ok(row.map(|r| r.get("group_id")))
+    }
+
+    async fn update_invite(&self, invite: &str, payload: Vec<u8>) -> Result<(), StoreError> {
+        let updated = sqlx::query("UPDATE invites SET payload = $2 WHERE invite_id = $1")
+            .bind(invite)
+            .bind(payload)
+            .execute(&self.pool)
+            .await
+            .map_err(backend)?;
+        if updated.rows_affected() == 0 {
+            return Err(StoreError::InviteInvalid);
+        }
+        Ok(())
+    }
+
+    async fn revoke_invite(&self, invite: &str) -> Result<(), StoreError> {
+        sqlx::query("DELETE FROM invites WHERE invite_id = $1")
+            .bind(invite)
+            .execute(&self.pool)
+            .await
+            .map_err(backend)?;
+        Ok(())
+    }
+
+    async fn redeem_invite(&self, invite: &str, now: u64) -> Result<(String, Vec<u8>), StoreError> {
+        // Atomic check-and-count so concurrent redemptions can't exceed
+        // max_uses.
+        let row = sqlx::query(
+            "UPDATE invites SET uses = uses + 1
+             WHERE invite_id = $1
+               AND (expires_at IS NULL OR expires_at >= $2)
+               AND (max_uses IS NULL OR uses < max_uses)
+             RETURNING group_id, payload",
+        )
+        .bind(invite)
+        .bind(now as i64)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(backend)?
+        .ok_or(StoreError::InviteInvalid)?;
+        Ok((row.get("group_id"), row.get("payload")))
     }
 }

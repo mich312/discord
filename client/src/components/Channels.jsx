@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 
-export default function Channels({ server, activeChannel, me, connection, onSelect, onCreate }) {
+export default function Channels({ server, activeChannel, me, connection, onSelect, onCreate, onInvite, onIdentity }) {
   const [adding, setAdding] = useState(false);
   const [name, setName] = useState('');
 
@@ -9,6 +9,9 @@ export default function Channels({ server, activeChannel, me, connection, onSele
       <header className="pane-head">
         <h2 data-testid="server-name">{server.name}</h2>
         <span className="muted mono">epoch {server.epoch}</span>
+        <button className="ghost push-right" title="create invite link" data-testid="create-invite" onClick={onInvite}>
+          invite
+        </button>
       </header>
       <div className="pane-label">
         channels
@@ -53,6 +56,9 @@ export default function Channels({ server, activeChannel, me, connection, onSele
       </ul>
       <footer className="self">
         <span className="mono" data-testid="self-name">{me}</span>
+        <button className="ghost" title="identity key" data-testid="identity-open" onClick={onIdentity}>
+          key
+        </button>
         <span className={`muted conn-${connection}`}>{connection}</span>
       </footer>
     </aside>

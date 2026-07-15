@@ -15,7 +15,13 @@ export default function Members({ server, me, onAdd }) {
         {server.members.map((m) => (
           <li key={m} className="member">
             <span className="mono">{m}</span>
-            {m === me && <span className="muted">you</span>}
+            {m === me ? (
+              <span className="muted">you</span>
+            ) : (server.linkJoined ?? []).includes(m) ? (
+              <span className="badge-unverified" title="joined via invite link; safety number not checked">
+                via link · unverified
+              </span>
+            ) : null}
           </li>
         ))}
       </ul>

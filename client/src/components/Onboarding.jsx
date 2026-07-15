@@ -15,6 +15,7 @@ export default function Onboarding({ controller }) {
   const [confirmed, setConfirmed] = useState(false);
   const [restoreFile, setRestoreFile] = useState(null);
   const [restoreCode, setRestoreCode] = useState('');
+  const [pastedKey, setPastedKey] = useState('');
 
   async function createIdentity(e) {
     e.preventDefault();
@@ -41,19 +42,24 @@ export default function Onboarding({ controller }) {
 
   async function restore(e) {
     e.preventDefault();
-    if (!restoreFile || !restoreCode.trim()) {
-      setError('recovery file and code are both required');
-      return;
-    }
     setBusy(true);
     setError(null);
     try {
-      const bytes = new Uint8Array(await restoreFile.arrayBuffer());
-      const identity = await unwrapIdentity(bytes, restoreCode.trim());
+      let identity;
+      if (pastedKey.trim()) {
+        identity = Uint8Array.from(atob(pastedKey.trim()), (c) => c.charCodeAt(0));
+      } else if (restoreFile && restoreCode.trim()) {
+        const bytes = new Uint8Array(await restoreFile.arrayBuffer());
+        identity = await unwrapIdentity(bytes, restoreCode.trim());
+      } else {
+        setError('paste an identity key, or provide recovery file + code');
+        setBusy(false);
+        return;
+      }
       await controller.restoreIdentity(identity);
       await controller.completeOnboarding();
     } catch {
-      setError('could not decrypt — wrong code or corrupt file');
+      setError('could not restore — wrong code, bad key, or corrupt file');
       setBusy(false);
     }
   }
@@ -142,6 +148,17 @@ export default function Onboarding({ controller }) {
           </form>
         ) : (
           <form onSubmit={restore}>
+            <label className="field">
+              <span>identity key (paste)</span>
+              <textarea
+                className="keybox small"
+                value={pastedKey}
+                onChange={(e) => setPastedKey(e.target.value)}
+                placeholder="paste an exported identity key…"
+                data-testid="paste-key"
+              />
+            </label>
+            <div className="divider muted">or recovery file + code</div>
             <label className="field">
               <span>recovery file</span>
               <input type="file" onChange={(e) => setRestoreFile(e.target.files[0] ?? null)} data-testid="restore-file" />

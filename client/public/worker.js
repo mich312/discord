@@ -56,6 +56,20 @@ const commands = {
       state: snapshot(),
     };
   },
+  exportGroupInfo({ group }) {
+    // Read-only: GroupInfo export doesn't turn any ratchet.
+    return client.exportGroupInfo(group);
+  },
+  joinByExternalCommit({ groupInfo }) {
+    const r = client.joinByExternalCommit(groupInfo);
+    return {
+      group: r.group,
+      commit: r.commit,
+      epoch: Number(client.epoch(r.group)),
+      members: client.members(r.group),
+      state: snapshot(),
+    };
+  },
   joinFromWelcome({ welcome }) {
     const group = client.joinFromWelcome(welcome);
     return {

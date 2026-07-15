@@ -39,7 +39,7 @@ often — and the docs say so plainly rather than overclaiming.
 | 1 | Rust core + OpenMLS → WASM; two browser tabs exchanging MLS messages via stub relay | **done** |
 | 2 | Relay: auth, KeyPackage store, ordered delivery, epoch handling | **done** |
 | 3 | Web client: rail, channels, messages, IndexedDB, recovery-key flow | **done** |
-| 4 | Invite links: encrypted GroupInfo blobs, external commits, unverified-member UI | not started |
+| 4 | Invite links: encrypted GroupInfo blobs, external commits, unverified-member UI | **done** |
 | 5 | Attachments + safety-numbers UI | not started |
 | 6 | Web Push + service worker | not started |
 | 7 | 1:1 WebRTC calls, signaling over the existing relay | not started |

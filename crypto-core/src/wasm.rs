@@ -25,6 +25,25 @@ impl AddResult {
 }
 
 #[wasm_bindgen]
+pub struct ExternalJoin {
+    group: String,
+    commit: Vec<u8>,
+}
+
+#[wasm_bindgen]
+impl ExternalJoin {
+    #[wasm_bindgen(getter)]
+    pub fn group(&self) -> String {
+        self.group.clone()
+    }
+
+    #[wasm_bindgen(getter)]
+    pub fn commit(&self) -> Vec<u8> {
+        self.commit.clone()
+    }
+}
+
+#[wasm_bindgen]
 pub struct Client {
     inner: ChatClient,
 }
@@ -107,6 +126,20 @@ impl Client {
     #[wasm_bindgen(js_name = forgetGroup)]
     pub fn forget_group(&mut self, id: &str) {
         self.inner.forget_group(id);
+    }
+
+    /// Signed GroupInfo for the current epoch (invite links). Re-export
+    /// after every epoch change — stale blobs produce rejected joins.
+    #[wasm_bindgen(js_name = exportGroupInfo)]
+    pub fn export_group_info(&self, id: &str) -> Result<Vec<u8>, JsError> {
+        Ok(self.inner.export_group_info(id)?)
+    }
+
+    /// Join via External Commit from a decrypted GroupInfo blob.
+    #[wasm_bindgen(js_name = joinByExternalCommit)]
+    pub fn join_by_external_commit(&mut self, group_info: &[u8]) -> Result<ExternalJoin, JsError> {
+        let (group, commit) = self.inner.join_by_external_commit(group_info)?;
+        Ok(ExternalJoin { group, commit })
     }
 
     /// Encrypt `text`; returns the serialized MLS message for the relay.

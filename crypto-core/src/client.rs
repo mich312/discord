@@ -47,9 +47,11 @@ pub enum Event {
     /// A decrypted application message.
     #[serde(rename_all = "camelCase")]
     Message { group: String, sender: String, text: String, epoch: u64 },
-    /// A commit was merged; the group moved to a new epoch.
+    /// A commit was merged; the group moved to a new epoch. `sender` is the
+    /// commit's signer: for an external (invite-link) join that is the new
+    /// member itself — the UI uses this to mark link-joins as unverified.
     #[serde(rename_all = "camelCase")]
-    MembershipChange { group: String, epoch: u64, members: Vec<String> },
+    MembershipChange { group: String, epoch: u64, sender: String, members: Vec<String> },
     /// A proposal was queued; nothing user-visible yet.
     #[serde(rename_all = "camelCase")]
     ProposalStored { group: String, epoch: u64 },
@@ -356,6 +358,67 @@ impl ChatClient {
         self.groups.remove(id);
     }
 
+    // === invite links (external commits) ==================================
+
+    /// Export a signed GroupInfo (ratchet tree included) for the current
+    /// epoch. Encrypted under the invite link's fragment key and parked on
+    /// the relay, this is what lets a stranger join with nobody online.
+    /// MUST be re-exported after every epoch change — external commits
+    /// against a stale epoch are rejected by the group.
+    pub fn export_group_info(&self, id: &str) -> Result<Vec<u8>, CoreError> {
+        let group = self.group_ref(id)?;
+        let message = group
+            .export_group_info(self.provider.crypto(), &self.signer, true)
+            .map_err(CoreError::mls)?;
+        message.tls_serialize_detached().map_err(CoreError::mls)
+    }
+
+    /// Join a group via External Commit (RFC 9420 §12.4) from a serialized
+    /// GroupInfo. Returns the group id and the commit that must be published
+    /// to the group's log so existing members learn about the join.
+    pub fn join_by_external_commit(
+        &mut self,
+        group_info_bytes: &[u8],
+    ) -> Result<(String, Vec<u8>), CoreError> {
+        let message = MlsMessageIn::tls_deserialize_exact(group_info_bytes)
+            .map_err(CoreError::mls)?;
+        let verifiable = match message.extract() {
+            MlsMessageBodyIn::GroupInfo(gi) => gi,
+            other => {
+                return Err(CoreError::Mls(format!(
+                    "expected a GroupInfo message, got {other:?}"
+                )))
+            }
+        };
+        let config = MlsGroupJoinConfig::builder()
+            .use_ratchet_tree_extension(true)
+            .max_past_epochs(MAX_PAST_EPOCHS)
+            .build();
+        let (group, bundle) = ExternalCommitBuilder::new()
+            .with_config(config)
+            .build_group(&self.provider, verifiable, self.credential_with_key.clone())
+            .map_err(|e| CoreError::Mls(format!("{e:?}")))?
+            .load_psks(self.provider.storage())
+            .map_err(|e| CoreError::Mls(format!("{e:?}")))?
+            .build(
+                self.provider.rand(),
+                self.provider.crypto(),
+                &self.signer,
+                |_| true,
+            )
+            .map_err(|e| CoreError::Mls(format!("{e:?}")))?
+            .finalize(&self.provider)
+            .map_err(|e| CoreError::Mls(format!("{e:?}")))?;
+        let (commit, _welcome, _group_info) = bundle.into_contents();
+        let id = String::from_utf8_lossy(group.group_id().as_slice()).into_owned();
+        if self.groups.contains_key(&id) {
+            return Err(CoreError::AlreadyInGroup(id));
+        }
+        let commit_bytes = commit.tls_serialize_detached().map_err(CoreError::mls)?;
+        self.groups.insert(id.clone(), group);
+        Ok((id, commit_bytes))
+    }
+
     // === messaging ========================================================
 
     /// Encrypt an application message for the group's current epoch.
@@ -400,7 +463,7 @@ impl ChatClient {
                     .map_err(CoreError::mls)?;
                 let epoch = group.epoch().as_u64();
                 let members = members_of(group);
-                Ok(Event::MembershipChange { group: id, epoch, members })
+                Ok(Event::MembershipChange { group: id, epoch, sender, members })
             }
             ProcessedMessageContent::ProposalMessage(proposal) => {
                 group

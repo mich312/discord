@@ -37,6 +37,30 @@ server metadata is rebroadcast (encrypted) after every member add.
 - Onboarding cannot be completed without downloading the recovery file
   and confirming the code is stored off-device.
 
+### Invite links
+
+`?j=<invite-id>#k=<key>` — the invite id is server-visible; the AES-GCM
+key rides in the fragment, which browsers never transmit. Creating an
+invite exports the group's signed GroupInfo (ratchet tree included),
+encrypts it under a fresh fragment key, and parks it on the relay with a
+7-day expiry. Redeeming decrypts the blob and joins by **External Commit**
+(RFC 9420 §12.4) — no existing member needs to be online. GroupInfo dies
+with its epoch, so the invite creator re-encrypts and re-uploads after
+every membership change; if they're offline too long the link goes stale
+until they return. Link-joined members carry a persistent
+"via link · unverified" badge in the member list until safety numbers
+land (Phase 5).
+
+### Identity storage
+
+The identity bundle lives in **two places**: the full MLS state snapshot
+in IndexedDB (groups + ratchets, same device only) and the identity key
+alone in localStorage. If IndexedDB is wiped, boot falls back to the
+localStorage identity: the account survives, group keys don't, and the UI
+says exactly that. The identity key is also exportable from the UI as a
+plain string (copy or download — labeled loudly, since whoever holds it
+IS you) and importable by pasting on the onboarding restore screen.
+
 ### Recovery scope (honest version)
 
 The recovery key protects the **identity key** — the thing the relay has
