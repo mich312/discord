@@ -1,0 +1,22 @@
+# Rust
+target/
+
+# WASM build output
+*.wasm
+pkg/
+
+# Node
+node_modules/
+dist/
+.svelte-kit/
+build/
+
+# Env / secrets
+.env
+.env.*
+!.env.example
+
+# Editor / OS
+.DS_Store
+.idea/
+.vscode/
