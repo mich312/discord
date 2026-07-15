@@ -13,7 +13,8 @@ moderation) are visible — and the UI says so instead of hiding it.
 
 The full design rationale lives in **[docs/BUILD_PLAN.md](docs/BUILD_PLAN.md)**;
 phases 1–7 of it are implemented. The plan's honest-assessment and
-threat-model sections still apply verbatim.
+threat-model sections still apply verbatim. What comes next is ordered in
+**[docs/ROADMAP.md](docs/ROADMAP.md)**.
 
 ## What works
 
