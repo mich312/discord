@@ -30,12 +30,33 @@ server metadata is rebroadcast (encrypted) after every member add.
 
 ### Load-bearing UI (per the plan)
 
-- Member list is the security boundary — labeled "who can read this",
-  with add-member right there, and epoch visible in the header.
+- The roster is the security boundary — "everyone who holds the keys",
+  with add-member right there, and the key epoch visible in the masthead.
 - Permanent join watermark at the top of every channel.
-- Composer states the encryption scope ("encrypted for N members").
+- Composer states the encryption scope ("sealed for N members").
 - Onboarding cannot be completed without downloading the recovery file
   and confirming the code is stored off-device.
+
+### Design system
+
+The UI is its own product register ("quorum — sealed rooms"), not a
+Discord/Slack skin: a token-based design system in `src/styles.css` with
+two themes — **obsidian** (dark, default) and **vellum** (light), toggled
+from the masthead and persisted per device — serif display type for
+identity, mono for anything cryptographic, and deterministic **seal
+identicons** (`src/lib/identicon.js`) derived from each handle: avatars
+are computed from identity, never uploaded. Chrome layout: a full-width
+masthead (brand · circle + epoch · invite · ⌘K palette · theme · relay
+state), a single sidebar (circles → rooms → voice → self card), the
+conversation (grouped messages, day dividers, hover timestamps), and the
+roster. `Ctrl/⌘-K` opens a command palette (rooms, circles, actions).
+All icons are inline SVG (`src/components/icons.jsx`) — no fonts, no CDN.
+
+**UI gallery**: `npm run preview:ui` serves `/preview.html`, which renders
+the real components against mock state (no relay, no WASM) — views:
+`?view=app|onboarding|invited|empty|banner|palette|modal-*`, plus
+`&theme=vellum`. Useful for design review and screenshots when the crypto
+core isn't built.
 
 ### Invite links
 

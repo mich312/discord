@@ -1,12 +1,58 @@
 import React, { useState } from 'react';
 import { generateCode, wrapIdentity, unwrapIdentity } from '../lib/recovery.js';
+import { QuorumGlyph, Lock, Key, ShieldCheck, Download } from './icons.jsx';
 
-// Three ways in:
+// The gate: brand panel on the left states the contract, the form on the
+// right performs it. Three ways in:
 //  - invite fast path: link-holders pick a handle and are in the group in
 //    seconds; securing the account is deferred (nagging banner inside)
 //  - new identity: keypair + forced recovery-key export
 //  - sign in: username + password or passkey against the relay vault;
 //    advanced: paste an identity key / recovery file + code
+function Gate({ children }) {
+  return (
+    <div className="gate">
+      <div className="gate-brand">
+        <div className="brand-lockup">
+          <QuorumGlyph size={34} />
+          <span className="wordmark">quorum</span>
+        </div>
+        <p className="gate-tagline">
+          Rooms that keep <em>their own counsel.</em>
+        </p>
+        <p className="gate-sub">
+          Small, invite-only circles, end-to-end encrypted with MLS. The server
+          relays ciphertext it can never read — and the interface never pretends otherwise.
+        </p>
+        <ul className="principles">
+          <li>
+            <span className="p-glyph"><Lock /></span>
+            <div>
+              <strong>Sealed by default</strong>
+              <span>Messages, room names, membership — all of it travels inside the encryption.</span>
+            </div>
+          </li>
+          <li>
+            <span className="p-glyph"><Key /></span>
+            <div>
+              <strong>Your identity is a key, not an email</strong>
+              <span>A keypair born in this browser. Recovery is a file you hold, not a reset button we own.</span>
+            </div>
+          </li>
+          <li>
+            <span className="p-glyph"><ShieldCheck /></span>
+            <div>
+              <strong>The roster is the boundary</strong>
+              <span>Joiners see nothing from before they joined. That is the cost of it being true.</span>
+            </div>
+          </li>
+        </ul>
+      </div>
+      <div className="gate-form">{children}</div>
+    </div>
+  );
+}
+
 export default function Onboarding({ controller }) {
   const invited = !!controller.pendingInvite;
   const [mode, setMode] = useState('create'); // create | signin
@@ -100,22 +146,23 @@ export default function Onboarding({ controller }) {
 
   if (step === 'recovery') {
     return (
-      <div className="centered">
+      <Gate>
         <div className="card" data-testid="recovery-step">
-          <h1>save your recovery key</h1>
-          <p className="muted">
+          <h1>Save your recovery key</h1>
+          <p className="muted lede">
             This file plus this code gets your account back if this device is lost. The
             server cannot reset it — it never sees your keys. (You can also add a passkey
             or password later, from inside.)
           </p>
           <div className="recovery-code" data-testid="recovery-code">{recovery.code}</div>
           <a
-            className="button"
+            className="button wide"
             href={recovery.url}
             download={recovery.filename}
             onClick={() => setDownloaded(true)}
             data-testid="download-recovery"
           >
+            <Download />
             download {recovery.filename}
           </a>
           <label className="check">
@@ -128,24 +175,24 @@ export default function Onboarding({ controller }) {
             I stored the file and the code somewhere that isn’t this device
           </label>
           <button
-            className="button primary"
+            className="button primary wide"
             disabled={!downloaded || !confirmed || busy}
             data-testid="enter-app"
             onClick={() => run('entering…', () => controller.completeOnboarding(true))}
           >
-            enter
+            enter the room
           </button>
         </div>
-      </div>
+      </Gate>
     );
   }
 
   if (invited) {
     return (
-      <div className="centered">
+      <Gate>
         <div className="card">
-          <h1>you’ve been invited</h1>
-          <p className="muted">
+          <h1>You’ve been invited</h1>
+          <p className="muted lede">
             Pick a handle and you’re in — encrypted end-to-end from the first message.
             You can secure the account right after.
           </p>
@@ -160,8 +207,8 @@ export default function Onboarding({ controller }) {
                 data-testid="handle-input"
               />
             </label>
-            <button className="button primary" disabled={busy} data-testid="join-fast">
-              {busyText ?? 'join'}
+            <button className="button primary wide" disabled={busy} data-testid="join-fast">
+              {busyText ?? 'join the circle'}
             </button>
           </form>
           <p className="fineprint muted">
@@ -172,15 +219,15 @@ export default function Onboarding({ controller }) {
           </p>
           {error && <p className="error">{error}</p>}
         </div>
-      </div>
+      </Gate>
     );
   }
 
   return (
-    <div className="centered">
+    <Gate>
       <div className="card">
-        <h1>quorum</h1>
-        <p className="muted">end-to-end encrypted groups. the server stores only ciphertext.</p>
+        <h1>Enter quorum</h1>
+        <p className="muted lede">Your identity is a keypair. Everything else follows from that.</p>
         <div className="tabs">
           <button className={mode === 'create' ? 'tab active' : 'tab'} onClick={() => setMode('create')}>
             new identity
@@ -201,8 +248,8 @@ export default function Onboarding({ controller }) {
                 data-testid="handle-input"
               />
             </label>
-            <button className="button primary" disabled={busy} data-testid="create-identity">
-              {busyText ?? 'create'}
+            <button className="button primary wide" disabled={busy} data-testid="create-identity">
+              {busyText ?? 'forge identity'}
             </button>
             <p className="fineprint muted">
               Your identity is a keypair generated in this browser. No email — recovery is
@@ -240,6 +287,7 @@ export default function Onboarding({ controller }) {
                 data-testid="signin-passkey"
                 onClick={signInPasskey}
               >
+                <Key size={14} />
                 use passkey
               </button>
             </div>
@@ -270,12 +318,12 @@ export default function Onboarding({ controller }) {
             </details>
             <p className="fineprint muted">
               Signing in restores your identity, not old messages — their keys lived only
-              on the previous device. Ask to be re-added to groups.
+              on the previous device. Ask to be re-added to circles.
             </p>
           </form>
         )}
         {error && <p className="error">{error}</p>}
       </div>
-    </div>
+    </Gate>
   );
 }

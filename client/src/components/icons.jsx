@@ -1,0 +1,165 @@
+import React from 'react';
+
+// Hand-drawn 16px stroke icon set — no icon-font, no CDN, currentColor
+// throughout so every glyph inherits the text register around it.
+const Svg = ({ size = 16, children, ...rest }) => (
+  <svg
+    width={size}
+    height={size}
+    viewBox="0 0 16 16"
+    fill="none"
+    stroke="currentColor"
+    strokeWidth="1.4"
+    strokeLinecap="round"
+    strokeLinejoin="round"
+    aria-hidden="true"
+    {...rest}
+  >
+    {children}
+  </svg>
+);
+
+// Brand: a circle of three sealed members — the smallest quorum.
+export const QuorumGlyph = ({ size = 22 }) => (
+  <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
+    <circle cx="12" cy="12" r="9.2" />
+    <circle cx="12" cy="7.6" r="1.7" fill="currentColor" stroke="none" />
+    <circle cx="8.2" cy="14.4" r="1.7" fill="currentColor" stroke="none" />
+    <circle cx="15.8" cy="14.4" r="1.7" fill="currentColor" stroke="none" />
+    <path d="M12 9.3v0M10.6 13.2l2.8 0M11.2 8.9l-2.2 4M12.8 8.9l2.2 4" strokeWidth="1.1" />
+  </svg>
+);
+
+export const Lock = (p) => (
+  <Svg {...p}>
+    <rect x="3.5" y="7" width="9" height="6.5" rx="1.5" />
+    <path d="M5.5 7V5a2.5 2.5 0 0 1 5 0v2" />
+    <circle cx="8" cy="10.2" r="0.9" fill="currentColor" stroke="none" />
+  </Svg>
+);
+
+export const Key = (p) => (
+  <Svg {...p}>
+    <circle cx="5" cy="11" r="2.8" />
+    <path d="M7.2 8.8 13 3M10.5 5.5l1.8 1.8M8.7 7.3l1.4 1.4" />
+  </Svg>
+);
+
+export const ShieldCheck = (p) => (
+  <Svg {...p}>
+    <path d="M8 1.8 13 3.6v4c0 3.2-2.1 5.4-5 6.6-2.9-1.2-5-3.4-5-6.6v-4L8 1.8Z" />
+    <path d="m5.8 7.8 1.6 1.6 2.8-3" />
+  </Svg>
+);
+
+export const Hash = (p) => (
+  <Svg {...p}>
+    <path d="M6.2 2.5 4.8 13.5M11.2 2.5 9.8 13.5M3 6h10.5M2.5 10H13" />
+  </Svg>
+);
+
+export const Wave = (p) => (
+  <Svg {...p}>
+    <path d="M2.5 6.5v3M5.3 4.5v7M8 2.8v10.4M10.7 4.5v7M13.5 6.5v3" />
+  </Svg>
+);
+
+export const Plus = (p) => (
+  <Svg {...p}>
+    <path d="M8 3.2v9.6M3.2 8h9.6" />
+  </Svg>
+);
+
+export const LinkGlyph = (p) => (
+  <Svg {...p}>
+    <path d="M6.5 9.5 9.5 6.5" />
+    <path d="M7.5 4.6l1.2-1.2a2.6 2.6 0 0 1 3.9 3.9L11.4 8.5M8.5 11.4l-1.2 1.2a2.6 2.6 0 0 1-3.9-3.9l1.2-1.2" />
+  </Svg>
+);
+
+export const Bell = (p) => (
+  <Svg {...p}>
+    <path d="M8 2.2a4 4 0 0 1 4 4c0 3 .8 4 1.4 4.6H2.6C3.2 10.2 4 9.2 4 6.2a4 4 0 0 1 4-4Z" />
+    <path d="M6.6 13.2a1.5 1.5 0 0 0 2.8 0" />
+  </Svg>
+);
+
+export const CommandGlyph = (p) => (
+  <Svg {...p}>
+    <path d="M6 6h4v4H6z" />
+    <path d="M6 6H4.8A1.8 1.8 0 1 1 6 4.2V6ZM10 6V4.8A1.8 1.8 0 1 1 11.8 6H10ZM10 10h1.8a1.8 1.8 0 1 1-1.8 1.8V10ZM6 10v1.8A1.8 1.8 0 1 1 4.2 10H6Z" />
+  </Svg>
+);
+
+export const Sun = (p) => (
+  <Svg {...p}>
+    <circle cx="8" cy="8" r="3" />
+    <path d="M8 1.5v1.6M8 12.9v1.6M1.5 8h1.6M12.9 8h1.6M3.4 3.4l1.1 1.1M11.5 11.5l1.1 1.1M12.6 3.4l-1.1 1.1M4.5 11.5l-1.1 1.1" />
+  </Svg>
+);
+
+export const Moon = (p) => (
+  <Svg {...p}>
+    <path d="M13 9.6A5.6 5.6 0 0 1 6.4 3a5.6 5.6 0 1 0 6.6 6.6Z" />
+  </Svg>
+);
+
+export const Copy = (p) => (
+  <Svg {...p}>
+    <rect x="5.5" y="5.5" width="8" height="8" rx="1.5" />
+    <path d="M10.5 3.5v-.2A1.3 1.3 0 0 0 9.2 2H3.8a1.3 1.3 0 0 0-1.3 1.3v5.4a1.3 1.3 0 0 0 1.3 1.3h.2" />
+  </Svg>
+);
+
+export const Download = (p) => (
+  <Svg {...p}>
+    <path d="M8 2.5v7M5 6.8 8 9.8l3-3M2.8 12.5h10.4" />
+  </Svg>
+);
+
+export const Paperclip = (p) => (
+  <Svg {...p}>
+    <path d="m12.4 7.3-4.6 4.6a3 3 0 0 1-4.2-4.2l5-5a2 2 0 0 1 2.8 2.8L6.7 10.2a1 1 0 0 1-1.4-1.4l4.3-4.3" />
+  </Svg>
+);
+
+export const Check = (p) => (
+  <Svg {...p}>
+    <path d="m3 8.5 3.2 3.2L13 5" />
+  </Svg>
+);
+
+export const Users = (p) => (
+  <Svg {...p}>
+    <circle cx="5.8" cy="5.5" r="2.3" />
+    <path d="M1.8 13.2c.4-2.4 2-3.7 4-3.7s3.6 1.3 4 3.7" />
+    <path d="M10.2 3.6a2.3 2.3 0 0 1 0 3.9M11.6 9.8c1.4.4 2.3 1.6 2.6 3.4" />
+  </Svg>
+);
+
+export const X = (p) => (
+  <Svg {...p}>
+    <path d="m4 4 8 8M12 4l-8 8" />
+  </Svg>
+);
+
+export const ArrowRight = (p) => (
+  <Svg {...p}>
+    <path d="M2.5 8h11M9.5 4l4 4-4 4" />
+  </Svg>
+);
+
+export const CircleGlyph = (p) => (
+  <Svg {...p}>
+    <circle cx="8" cy="8" r="5.5" />
+    <circle cx="8" cy="8" r="1.6" fill="currentColor" stroke="none" />
+  </Svg>
+);
+
+export const Seal8 = (p) => (
+  <Svg {...p}>
+    <circle cx="8" cy="8" r="5.8" />
+    <circle cx="8" cy="8" r="2.6" />
+    <path d="M8 2.2v2M8 11.8v2M2.2 8h2M11.8 8h2" strokeWidth="1.1" />
+  </Svg>
+);
