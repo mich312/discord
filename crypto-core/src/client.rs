@@ -3,6 +3,7 @@
 
 use openmls::prelude::*;
 use openmls_basic_credential::SignatureKeyPair;
+use openmls_traits::signatures::Signer;
 use openmls_rust_crypto::OpenMlsRustCrypto;
 use serde::{Deserialize, Serialize};
 use tls_codec::{Deserialize as TlsDeserialize, Serialize as TlsSerialize};
@@ -84,6 +85,20 @@ impl ChatClient {
 
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    /// Raw Ed25519 public key of this client's MLS identity. The relay
+    /// pins it on first contact and challenges it on every connection.
+    pub fn signature_public_key(&self) -> Vec<u8> {
+        self.signer.public().to_vec()
+    }
+
+    /// Sign arbitrary bytes with the MLS identity key (used for the
+    /// relay's auth challenge — same key that signs MLS messages).
+    pub fn sign(&self, message: &[u8]) -> Result<Vec<u8>, CoreError> {
+        self.signer
+            .sign(message)
+            .map_err(|e| CoreError::Mls(format!("{e:?}")))
     }
 
     /// Generate a fresh KeyPackage and return it TLS-serialized. The private

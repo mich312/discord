@@ -23,7 +23,7 @@ to build on **MLS (RFC 9420)**.
 | Crypto core | [`crypto-core/`](crypto-core/) | Rust + OpenMLS, compiled to WASM, runs in a Web Worker |
 | Relay | [`relay/`](relay/) | Rust (axum), WebSocket; dumb ordered log + fan-out over opaque blobs; Postgres |
 | Web client | [`client/`](client/) | SvelteKit/React UI that never touches keys directly |
-| Phase-1 harness | [`harness/`](harness/) | Stub relay + bare test page + two-tab Playwright e2e (no product UI) |
+| Test harness | [`harness/`](harness/) | Bare browser page + two-tab Playwright e2e against the real relay (no product UI) |
 
 The relay is a **delivery service and ordered log**, nothing more: it
 authenticates connections, stores ciphertext keyed by
@@ -37,7 +37,7 @@ often — and the docs say so plainly rather than overclaiming.
 | Phase | Work | Status |
 |---|---|---|
 | 1 | Rust core + OpenMLS → WASM; two browser tabs exchanging MLS messages via stub relay | **done** |
-| 2 | Relay: auth, KeyPackage store, ordered delivery, epoch handling | not started |
+| 2 | Relay: auth, KeyPackage store, ordered delivery, epoch handling | **done** |
 | 3 | Web client: rail, channels, messages, IndexedDB, recovery-key flow | not started |
 | 4 | Invite links: encrypted GroupInfo blobs, external commits, unverified-member UI | not started |
 | 5 | Attachments + safety-numbers UI | not started |

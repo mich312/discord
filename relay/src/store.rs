@@ -1,0 +1,186 @@
+//! Storage behind the relay: everything it persists is either public key
+//! material (KeyPackages are meant to be handed out) or ciphertext.
+//! `MemoryStore` backs tests and zero-config runs; `PgStore` (pg.rs) is
+//! the real deployment target.
+
+use async_trait::async_trait;
+use std::collections::HashMap;
+use std::sync::Mutex;
+
+#[derive(Debug, thiserror::Error)]
+pub enum StoreError {
+    #[error("group already exists")]
+    GroupExists,
+    #[error("no such group")]
+    NoSuchGroup,
+    #[error("storage error: {0}")]
+    Backend(String),
+}
+
+#[derive(Debug, Clone, PartialEq)]
+pub enum RegisterOutcome {
+    /// User was unknown; this pubkey is now pinned.
+    Registered,
+    /// User exists; caller must verify against this pinned pubkey.
+    Existing(Vec<u8>),
+}
+
+#[derive(Debug, Clone)]
+pub struct StoredMessage {
+    pub group: String,
+    pub seq: u64,
+    pub epoch: u64,
+    pub sender: String,
+    pub payload: Vec<u8>,
+}
+
+#[derive(Debug, Clone)]
+pub struct StoredWelcome {
+    pub from: String,
+    pub group: String,
+    pub after: u64,
+    pub payload: Vec<u8>,
+}
+
+#[async_trait]
+pub trait Store: Send + Sync {
+    /// Pin `pubkey` for `user` if unknown, else return the pinned key.
+    async fn register_user(&self, user: &str, pubkey: &[u8]) -> Result<RegisterOutcome, StoreError>;
+    /// The pinned pubkey for `user`, if registered.
+    async fn get_user_pubkey(&self, user: &str) -> Result<Option<Vec<u8>>, StoreError>;
+    async fn publish_key_packages(&self, user: &str, payloads: Vec<Vec<u8>>) -> Result<(), StoreError>;
+    /// Consume (remove and return) one KeyPackage for `user`.
+    async fn take_key_package(&self, user: &str) -> Result<Option<Vec<u8>>, StoreError>;
+    async fn create_group(&self, group: &str, creator: &str) -> Result<(), StoreError>;
+    async fn allow_member(&self, group: &str, user: &str) -> Result<(), StoreError>;
+    async fn is_member(&self, group: &str, user: &str) -> Result<bool, StoreError>;
+    /// Append to the group's ordered log; returns the assigned seq (1-based).
+    async fn append_message(
+        &self,
+        group: &str,
+        epoch: u64,
+        sender: &str,
+        payload: Vec<u8>,
+    ) -> Result<u64, StoreError>;
+    async fn messages_after(&self, group: &str, after: u64) -> Result<Vec<StoredMessage>, StoreError>;
+    async fn store_welcome(&self, to: &str, welcome: StoredWelcome) -> Result<(), StoreError>;
+    /// Remove and return all Welcomes queued for `to`.
+    async fn take_welcomes(&self, to: &str) -> Result<Vec<StoredWelcome>, StoreError>;
+}
+
+#[derive(Default)]
+struct MemoryInner {
+    users: HashMap<String, Vec<u8>>,
+    key_packages: HashMap<String, Vec<Vec<u8>>>,
+    groups: HashMap<String, GroupData>,
+    welcomes: HashMap<String, Vec<StoredWelcome>>,
+}
+
+#[derive(Default)]
+struct GroupData {
+    members: Vec<String>,
+    log: Vec<StoredMessage>,
+}
+
+#[derive(Default)]
+pub struct MemoryStore {
+    inner: Mutex<MemoryInner>,
+}
+
+#[async_trait]
+impl Store for MemoryStore {
+    async fn register_user(&self, user: &str, pubkey: &[u8]) -> Result<RegisterOutcome, StoreError> {
+        let mut inner = self.inner.lock().unwrap();
+        match inner.users.get(user) {
+            Some(existing) => Ok(RegisterOutcome::Existing(existing.clone())),
+            None => {
+                inner.users.insert(user.to_string(), pubkey.to_vec());
+                Ok(RegisterOutcome::Registered)
+            }
+        }
+    }
+
+    async fn get_user_pubkey(&self, user: &str) -> Result<Option<Vec<u8>>, StoreError> {
+        let inner = self.inner.lock().unwrap();
+        Ok(inner.users.get(user).cloned())
+    }
+
+    async fn publish_key_packages(&self, user: &str, payloads: Vec<Vec<u8>>) -> Result<(), StoreError> {
+        let mut inner = self.inner.lock().unwrap();
+        inner.key_packages.entry(user.to_string()).or_default().extend(payloads);
+        Ok(())
+    }
+
+    async fn take_key_package(&self, user: &str) -> Result<Option<Vec<u8>>, StoreError> {
+        let mut inner = self.inner.lock().unwrap();
+        Ok(inner.key_packages.get_mut(user).and_then(|v| {
+            if v.is_empty() { None } else { Some(v.remove(0)) }
+        }))
+    }
+
+    async fn create_group(&self, group: &str, creator: &str) -> Result<(), StoreError> {
+        let mut inner = self.inner.lock().unwrap();
+        if inner.groups.contains_key(group) {
+            return Err(StoreError::GroupExists);
+        }
+        inner.groups.insert(
+            group.to_string(),
+            GroupData { members: vec![creator.to_string()], log: Vec::new() },
+        );
+        Ok(())
+    }
+
+    async fn allow_member(&self, group: &str, user: &str) -> Result<(), StoreError> {
+        let mut inner = self.inner.lock().unwrap();
+        let data = inner.groups.get_mut(group).ok_or(StoreError::NoSuchGroup)?;
+        if !data.members.iter().any(|m| m == user) {
+            data.members.push(user.to_string());
+        }
+        Ok(())
+    }
+
+    async fn is_member(&self, group: &str, user: &str) -> Result<bool, StoreError> {
+        let inner = self.inner.lock().unwrap();
+        Ok(inner
+            .groups
+            .get(group)
+            .is_some_and(|d| d.members.iter().any(|m| m == user)))
+    }
+
+    async fn append_message(
+        &self,
+        group: &str,
+        epoch: u64,
+        sender: &str,
+        payload: Vec<u8>,
+    ) -> Result<u64, StoreError> {
+        let mut inner = self.inner.lock().unwrap();
+        let data = inner.groups.get_mut(group).ok_or(StoreError::NoSuchGroup)?;
+        let seq = data.log.len() as u64 + 1;
+        data.log.push(StoredMessage {
+            group: group.to_string(),
+            seq,
+            epoch,
+            sender: sender.to_string(),
+            payload,
+        });
+        Ok(seq)
+    }
+
+    async fn messages_after(&self, group: &str, after: u64) -> Result<Vec<StoredMessage>, StoreError> {
+        let inner = self.inner.lock().unwrap();
+        let data = inner.groups.get(group).ok_or(StoreError::NoSuchGroup)?;
+        Ok(data.log.iter().filter(|m| m.seq > after).cloned().collect())
+    }
+
+    async fn store_welcome(&self, to: &str, welcome: StoredWelcome) -> Result<(), StoreError> {
+        let mut inner = self.inner.lock().unwrap();
+        inner.welcomes.entry(to.to_string()).or_default().push(welcome);
+        Ok(())
+    }
+
+    async fn take_welcomes(&self, to: &str) -> Result<Vec<StoredWelcome>, StoreError> {
+        let mut inner = self.inner.lock().unwrap();
+        Ok(inner.welcomes.remove(to).unwrap_or_default())
+    }
+}

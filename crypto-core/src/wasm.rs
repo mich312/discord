@@ -43,6 +43,15 @@ impl Client {
         Ok(self.inner.key_package()?)
     }
 
+    #[wasm_bindgen(js_name = signaturePublicKey)]
+    pub fn signature_public_key(&self) -> Vec<u8> {
+        self.inner.signature_public_key()
+    }
+
+    pub fn sign(&self, message: &[u8]) -> Result<Vec<u8>, JsError> {
+        Ok(self.inner.sign(message)?)
+    }
+
     #[wasm_bindgen(js_name = createGroup)]
     pub fn create_group(&mut self) -> Result<(), JsError> {
         Ok(self.inner.create_group()?)

@@ -1,16 +1,15 @@
 # harness
 
-Phase-1 test surface: proves the WASM crypto core works in real browsers
-with MLS blobs flowing through a dumb relay. **Not the product** — the real
-relay is Phase 2 (`../relay/`), the real client Phase 3 (`../client/`).
+Browser test surface: proves the WASM crypto core works in real browsers
+against the real relay (`../relay/`). **Not the product** — the real
+client is Phase 3 (`../client/`).
 
-- `relay.mjs` — stub relay: WebSocket fan-out of JSON envelopes
-  (`{type, from, to?, payload}`); the MLS payload stays opaque base64.
-  Addressed delivery for Welcomes, broadcast for everything else.
 - `serve.mjs` — static server for the page and `../crypto-core/pkg/`.
 - `worker.js` — Web Worker owning the MLS client; the main thread never
   sees key material, only ciphertext blobs and decrypted events.
-- `app.js` / `index.html` — bare page: status line, log, composer.
+- `app.js` / `index.html` — bare page speaking the relay protocol:
+  challenge-response auth signed by the MLS identity key, KeyPackage
+  publish/fetch, Welcome handling, subscribe, send.
 - `e2e.mjs` — the milestone test: two Chromium tabs, alice creates,
   bob joins via KeyPackage → Welcome, both exchange encrypted messages,
   epochs asserted to converge.
@@ -19,8 +18,10 @@ relay is Phase 2 (`../relay/`), the real client Phase 3 (`../client/`).
 
 ```sh
 ../crypto-core/build-wasm.sh   # once, or after core changes
+cargo build -p relay           # the e2e spawns target/debug/relay
 npm install
-node e2e.mjs                   # automated two-tab test
+node e2e.mjs                   # automated two-tab test (in-memory store)
+DATABASE_URL=postgres://… node e2e.mjs   # same, against postgres
 ```
 
 If Playwright's downloaded browsers don't match the environment, point at
@@ -29,7 +30,7 @@ a system Chromium: `CHROMIUM_PATH=/path/to/chrome node e2e.mjs`.
 ## Poke at it manually
 
 ```sh
-node relay.mjs &
+cargo run -p relay &
 node serve.mjs &
 ```
 

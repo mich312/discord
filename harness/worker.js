@@ -19,6 +19,12 @@ const commands = {
   keyPackage() {
     return client.keyPackage();
   },
+  pubkey() {
+    return client.signaturePublicKey();
+  },
+  sign({ bytes }) {
+    return client.sign(bytes);
+  },
   addMember({ keyPackage }) {
     const r = client.addMember(keyPackage);
     return { commit: r.commit, welcome: r.welcome, epoch: Number(client.epoch()), members: client.members() };

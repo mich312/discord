@@ -1,15 +1,23 @@
-// Phase-1 milestone test: two real browser tabs exchange MLS-encrypted
-// messages through the stub relay. Run with `node e2e.mjs` after
-// `npm install` and a WASM build (../crypto-core/build-wasm.sh).
+// Milestone test: two real browser tabs exchange MLS-encrypted messages
+// through the real relay (Phase 2). Run with `node e2e.mjs` after
+// `npm install`, a WASM build (../crypto-core/build-wasm.sh), and
+// `cargo build -p relay`. Set DATABASE_URL to exercise the postgres store;
+// without it the relay uses its in-memory store.
 import { spawn } from 'node:child_process';
+import { existsSync } from 'node:fs';
 import { chromium } from 'playwright';
 
 const HTTP = 9600;
 const RELAY = 9601;
 const dir = new URL('.', import.meta.url).pathname;
 
+const relayBin = new URL('../target/debug/relay', import.meta.url).pathname;
+if (!existsSync(relayBin)) {
+  console.error(`relay binary not found at ${relayBin} — run: cargo build -p relay`);
+  process.exit(1);
+}
 const procs = [
-  spawn('node', ['relay.mjs'], { cwd: dir, stdio: 'inherit', env: { ...process.env, RELAY_PORT: RELAY } }),
+  spawn(relayBin, [], { stdio: 'inherit', env: { ...process.env, RELAY_PORT: RELAY } }),
   spawn('node', ['serve.mjs'], { cwd: dir, stdio: 'inherit', env: { ...process.env, HTTP_PORT: HTTP } }),
 ];
 const cleanup = () => procs.forEach((p) => p.kill());
@@ -71,7 +79,7 @@ try {
     'alice decrypts bob’s reply'
   );
 
-  console.log('\nPASS: two tabs exchanged MLS-encrypted messages via the stub relay');
+  console.log('\nPASS: two tabs exchanged MLS-encrypted messages via the relay');
   await browser.close();
 } catch (e) {
   console.error('\nFAIL:', e.message);

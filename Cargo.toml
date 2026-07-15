@@ -1,0 +1,8 @@
+[workspace]
+resolver = "2"
+members = ["crypto-core", "relay"]
+
+# Sized for the WASM artifact; harmless for the relay binary.
+[profile.release]
+opt-level = "s"
+lto = true

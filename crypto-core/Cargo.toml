@@ -22,10 +22,6 @@ openmls = { version = "0.7", features = ["js"] }
 wasm-bindgen = "0.2"
 serde-wasm-bindgen = "0.6"
 
-[profile.release]
-opt-level = "s"
-lto = true
-
 # wasm-pack can't download binaryen in restricted environments; the build
 # script runs the system wasm-opt on pkg/ afterwards instead.
 [package.metadata.wasm-pack.profile.release]
