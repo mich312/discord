@@ -492,3 +492,65 @@ async fn invite_weak_controls_enforced_server_side() {
     let reply = erin.request(json!({"t": "update_invite", "invite": "once", "payload": "AA=="})).await;
     assert_eq!(reply["t"], "error");
 }
+
+#[tokio::test]
+async fn ephemeral_messages_fan_out_but_never_touch_the_log() {
+    let addr = spawn_relay().await;
+
+    let mut bob = TestClient::connect(addr, ChatClient::new("bob").unwrap(), "bob").await.unwrap();
+    bob.publish_kps(1).await;
+    let mut alice =
+        TestClient::connect(addr, ChatClient::new("alice").unwrap(), "alice").await.unwrap();
+    alice.mls.create_group("g1").unwrap();
+    alice.request(json!({"t": "create_group", "group": "g1"})).await;
+    let kp = alice.request(json!({"t": "fetch_kp", "user": "bob"})).await;
+    let kp_bytes = B64.decode(kp["payload"].as_str().unwrap()).unwrap();
+    let add = alice.mls.add_member("g1", &kp_bytes).unwrap();
+    let epoch = alice.mls.epoch("g1").unwrap();
+    let reply = alice
+        .request(json!({"t": "send", "group": "g1", "epoch": epoch, "payload": B64.encode(&add.commit)}))
+        .await;
+    let commit_seq = reply["seq"].as_u64().unwrap();
+    alice.request(json!({"t": "allow", "group": "g1", "user": "bob"})).await;
+    alice
+        .request(json!({
+            "t": "welcome", "to": "bob", "group": "g1",
+            "after": commit_seq, "payload": B64.encode(&add.welcome),
+        }))
+        .await;
+    let welcome = bob.recv_until(|m| m["t"] == "welcome").await;
+    let payload = B64.decode(welcome["payload"].as_str().unwrap()).unwrap();
+    bob.mls.join_from_welcome(&payload).unwrap();
+    bob.request(json!({"t": "subscribe", "group": "g1", "after": commit_seq})).await;
+
+    // MLS-encrypted signaling flows via ephemeral fan-out…
+    let blob = alice.mls.send_message("g1", r#"{"k":"voice","ch":"lounge","action":"join"}"#).unwrap();
+    let reply = alice
+        .request(json!({"t": "ephemeral", "group": "g1", "payload": B64.encode(&blob)}))
+        .await;
+    assert_eq!(reply["t"], "ok");
+    let eph = bob.recv_until(|m| m["t"] == "eph").await;
+    assert_eq!(eph["sender"], "alice");
+    let bytes = B64.decode(eph["payload"].as_str().unwrap()).unwrap();
+    match bob.mls.process_incoming(&bytes).unwrap() {
+        Event::Message { text, .. } => assert!(text.contains("\"voice\"")),
+        other => panic!("expected message, got {other:?}"),
+    }
+
+    // …and the ordered log is untouched: reconnecting from the commit seq
+    // yields nothing (signaling must never replay).
+    let bob_mls = bob.mls;
+    drop(bob.ws);
+    let mut bob = TestClient::connect(addr, bob_mls, "bob").await.unwrap();
+    bob.request(json!({"t": "subscribe", "group": "g1", "after": commit_seq})).await;
+    // A real logged message still arrives — proving the subscription works
+    // and only the ephemeral was skipped.
+    alice.send_group("g1", "logged").await;
+    let msg = bob.recv_until(|m| m["t"] == "msg").await;
+    assert_eq!(msg["seq"].as_u64().unwrap(), commit_seq + 1, "no seqs were consumed by ephemerals");
+
+    // Non-members can't inject signaling.
+    let mut eve = TestClient::connect(addr, ChatClient::new("eve").unwrap(), "eve").await.unwrap();
+    let reply = eve.request(json!({"t": "ephemeral", "group": "g1", "payload": "AA=="})).await;
+    assert_eq!(reply["t"], "error");
+}

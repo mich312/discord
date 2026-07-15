@@ -49,6 +49,7 @@ acks. Auth: `hello {user, pubkey}` → `challenge {nonce}` →
 | `update_invite {invite, payload}` | `ok` | members only; fresh epoch's blob, same invite id |
 | `revoke_invite {invite}` | `ok` | members only |
 | `redeem_invite {invite}` | `invite {group, payload}` | enforces expiry/max-uses, grants ACL membership |
+| `ephemeral {group, payload}` | `ok` + fan-out `eph` | members only; NOT logged — voice presence/WebRTC signaling |
 
 Invite expiry and use-counting are **server-enforced and therefore weak**
 (a malicious relay can hand the blob to anyone). What it cannot do is read
@@ -57,7 +58,8 @@ never reaches the server. Cryptographic membership remains the only strong
 boundary.
 
 Server events: `msg {group, seq, epoch, sender, payload}`,
-`welcome {from, group, after, payload}`.
+`welcome {from, group, after, payload}`,
+`eph {group, sender, payload}` (transient, never replayed).
 
 ## Attachments
 

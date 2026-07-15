@@ -447,6 +447,30 @@ async fn handle_request(
             }
         }
 
+        ClientMsg::Ephemeral { rid, group, payload } => {
+            if let Err(e) = require_member(app, &group, user).await {
+                return err(rid, e);
+            }
+            if decode_b64(&payload).is_err() {
+                return err(rid, "invalid base64");
+            }
+            let mut hub = app.hub.lock().await;
+            if let Some(subs) = hub.subscribers.get_mut(&group) {
+                let out = ServerMsg::Eph {
+                    group: group.clone(),
+                    sender: user.to_string(),
+                    payload,
+                };
+                subs.retain(|peer, ch| {
+                    if peer == user {
+                        return true;
+                    }
+                    ch.send(out.clone()).is_ok()
+                });
+            }
+            Some(ServerMsg::Ok { rid, seq: None })
+        }
+
         ClientMsg::PushInfo { rid } => {
             Some(ServerMsg::PushInfo { rid, pubkey: app.push.public_b64.clone() })
         }

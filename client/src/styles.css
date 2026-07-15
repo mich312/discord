@@ -404,3 +404,19 @@ h2 { font-size: 14px; font-weight: 600; }
   font-size: 14px;
   letter-spacing: 0.08em;
 }
+
+/* ===== voice channels (phase 7) ===== */
+.voice-list { flex: 0 0 auto; padding-bottom: 8px; }
+.voice-channel { padding: 2px 0; }
+.voice-row { display: flex; align-items: center; }
+.voice-row .channel { flex: 1; cursor: default; }
+.voice-row .channel:hover { background: none; color: var(--muted); }
+.ghost.danger { color: var(--danger); }
+.voice-participants {
+  list-style: none;
+  padding: 2px 0 4px 26px;
+  font-size: 12px;
+  color: var(--muted);
+}
+.voice-participants .accent { color: var(--accent); }
+.channel-list:not(.voice-list) { flex: 1; }

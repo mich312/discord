@@ -42,8 +42,8 @@ often — and the docs say so plainly rather than overclaiming.
 | 4 | Invite links: encrypted GroupInfo blobs, external commits, unverified-member UI | **done** |
 | 5 | Attachments + safety-numbers UI | **done** |
 | 6 | Web Push + service worker | **done** |
-| 7 | 1:1 WebRTC calls, signaling over the existing relay | not started |
-| 8 | Group calls: LiveKit + SFrame keyed from the MLS exporter secret | not started |
+| 7 | Voice: 1:1 + audio mesh voice channels (≤~8), E2EE signaling over the relay | **done** |
+| 8 | Large group calls: LiveKit + SFrame keyed from the MLS exporter secret | not started — mesh covers small groups; SFU only if channels outgrow it |
 
 Phases 1–7 are a coherent, shippable product. Phase 8 is where the
 infrastructure bill starts.

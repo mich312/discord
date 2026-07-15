@@ -47,6 +47,11 @@ pub enum ClientMsg {
     /// Redeem: returns the blob and grants the caller ACL membership so
     /// they can publish their external commit and subscribe.
     RedeemInvite { rid: u64, invite: String },
+    /// Fan an opaque blob to the group's current subscribers WITHOUT
+    /// appending it to the log. Carries WebRTC signaling and voice
+    /// presence (MLS-encrypted like everything else) — transient by
+    /// nature, so replaying it on catch-up would only confuse clients.
+    Ephemeral { rid: u64, group: String, payload: String },
     /// The server's VAPID public key (browser `applicationServerKey`).
     PushInfo { rid: u64 },
     /// Store a PushSubscription (its JSON serialization) for this user.
@@ -65,6 +70,7 @@ pub enum ServerMsg {
     Welcome { from: String, group: String, after: u64, payload: String },
     Invite { rid: u64, group: String, payload: String },
     PushInfo { rid: u64, pubkey: String },
+    Eph { group: String, sender: String, payload: String },
 }
 
 pub const AUTH_CONTEXT: &[u8] = b"relay-auth-v1";

@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 
-export default function Channels({ server, activeChannel, me, connection, onSelect, onCreate, onInvite, onIdentity, onAlerts }) {
+export default function Channels({ server, activeChannel, me, connection, onSelect, onCreate, onInvite, onIdentity, onAlerts, voice, onVoiceJoin, onVoiceLeave }) {
   const [adding, setAdding] = useState(false);
   const [name, setName] = useState('');
 
@@ -53,6 +53,47 @@ export default function Channels({ server, activeChannel, me, connection, onSele
             </form>
           </li>
         )}
+      </ul>
+      <div className="pane-label">voice</div>
+      <ul className="channel-list voice-list">
+        {(server.voiceChannels ?? ['lounge']).map((ch) => {
+          const key = `${server.id}/${ch}`;
+          const participants = voice.presence[key] ?? [];
+          const joined = voice.active?.server === server.id && voice.active?.channel === ch;
+          return (
+            <li key={ch} className="voice-channel">
+              <div className="voice-row">
+                <span className="channel">
+                  <span className="hash">))</span> {ch}
+                </span>
+                {joined ? (
+                  <>
+                    {voice.listenOnly && <span className="muted" title="no microphone found">listen-only</span>}
+                    <button className="ghost danger" data-testid={`voice-leave-${ch}`} onClick={onVoiceLeave}>
+                      leave
+                    </button>
+                  </>
+                ) : (
+                  <button className="ghost" data-testid={`voice-join-${ch}`} onClick={() => onVoiceJoin(ch)}>
+                    join
+                  </button>
+                )}
+              </div>
+              {participants.length > 0 && (
+                <ul className="voice-participants" data-testid={`voice-participants-${ch}`}>
+                  {participants.map((p) => (
+                    <li key={p} className={p === me ? 'mono accent' : 'mono'}>
+                      {p}
+                      {joined && p !== me && voice.connections[p] && voice.connections[p] !== 'connected'
+                        ? ` · ${voice.connections[p]}`
+                        : ''}
+                    </li>
+                  ))}
+                </ul>
+              )}
+            </li>
+          );
+        })}
       </ul>
       <footer className="self">
         <span className="mono" data-testid="self-name">{me}</span>

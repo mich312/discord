@@ -18,7 +18,8 @@ const initial = {
   messages: [], // active channel only
   connection: 'connecting',
   toast: null,
-  modal: null, // {type:'invite', url} | {type:'identity', key}
+  modal: null, // {type:'invite', url} | {type:'identity', key} | {type:'safety', ...}
+  voice: { active: null, connections: {}, presence: {} },
 };
 
 function reducer(state, action) {
@@ -61,6 +62,8 @@ function reducer(state, action) {
       return { ...state, toast: action.text };
     case 'modal':
       return { ...state, modal: action.modal };
+    case 'voice':
+      return { ...state, voice: action.state };
     default:
       return state;
   }
@@ -154,6 +157,13 @@ export default function App() {
                 modal: { type: 'identity', key: controllerRef.current.identityKeyString() },
               })
             }
+            voice={state.voice}
+            onVoiceJoin={(ch) =>
+              controllerRef.current.voice
+                .join(server, ch)
+                .catch((e) => dispatch({ type: 'toast', text: `voice: ${e.message}` }))
+            }
+            onVoiceLeave={() => controllerRef.current.voice.leave()}
             onAlerts={async () => {
               try {
                 await controllerRef.current.enableNotifications();

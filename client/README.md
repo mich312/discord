@@ -84,6 +84,23 @@ subscription over `push_subscribe`. The relay nudges this device only
 while it's offline, with a generic encrypted payload (no content — the
 server never has any). iOS Safari: installed-PWA only, per the plan.
 
+### Voice channels (audio mesh)
+
+Each server has voice channels (default `lounge`). Audio-only mesh: every
+participant holds a pairwise `RTCPeerConnection` to every other (the
+lexicographically smaller name offers — no glare), viable to ~6–8 people;
+a 1:1 call is just a two-person channel. All signaling — presence
+(`join`/`here`/`leave`/`probe`) and SDP/ICE — travels as MLS-encrypted
+**ephemeral** messages: the relay fans them out but never logs them and
+cannot read them, so the DTLS fingerprints inside the SDP arrive over an
+authenticated channel. That is the fingerprint verification: a relay that
+tampered with signaling would fail MLS authentication. Media itself is
+DTLS-SRTP peer-to-peer; the relay never touches it. On a membership
+change, remaining participants drop connections to anyone kicked. Without
+a microphone the client joins listen-only (silent WebAudio track).
+Default STUN is Google's; real deployments behind symmetric NATs need
+their own STUN/TURN (TURN sees ciphertext only, per the plan).
+
 ### Recovery scope (honest version)
 
 The recovery key protects the **identity key** — the thing the relay has

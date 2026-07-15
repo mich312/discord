@@ -29,7 +29,11 @@ const procs = [
 const cleanup = () => procs.forEach((p) => p.kill());
 process.on('exit', cleanup);
 
-const launchOpts = process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {};
+const launchOpts = {
+  ...(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {}),
+  // Fake mic so getUserMedia works headless — real WebRTC, synthetic audio.
+  args: ['--use-fake-ui-for-media-capture', '--use-fake-device-for-media-capture'],
+};
 
 async function onboard(page, handle, url = base) {
   await page.goto(url);
@@ -272,11 +276,66 @@ try {
   await alice.click('[data-testid=enable-notifications]');
   await alice.waitForSelector('.toast', { timeout: 10000 });
 
+  console.log('16. voice: alice joins lounge, charlie sees presence and joins — DTLS connects');
+  await aliceCtx.grantPermissions(['microphone'], { origin: `http://127.0.0.1:${HTTP}` });
+  await charlieCtx.grantPermissions(['microphone'], { origin: `http://127.0.0.1:${HTTP}` });
+  await alice.click('[data-testid=voice-join-lounge]');
+  // Presence reaches non-participants passively (MLS-encrypted ephemeral).
+  await charlie.waitForFunction(
+    () => document.querySelector('[data-testid=voice-participants-lounge]')?.textContent.includes('alice'),
+    { timeout: 15000 }
+  );
+  await charlie.click('[data-testid=voice-join-lounge]');
+  for (const [name, page, peer] of [['alice', alice, 'charlie'], ['charlie', charlie, 'alice']]) {
+    await page.waitForFunction(
+      (p) => window.__voice?.connections?.[p] === 'connected',
+      peer,
+      { timeout: 20000 }
+    ).catch(() => {
+      throw new Error(`${name}: peer connection to ${peer} never reached 'connected'`);
+    });
+  }
+
+  console.log('17. dave joins via invite link and completes a 3-way mesh');
+  await alice.click('[data-testid=create-invite]');
+  await alice.waitForSelector('[data-testid=invite-url]');
+  const inviteUrl2 = await alice.inputValue('[data-testid=invite-url]');
+  await alice.click('[data-testid=close-modal]');
+  const daveCtx = await browser.newContext();
+  await daveCtx.grantPermissions(['microphone'], { origin: `http://127.0.0.1:${HTTP}` });
+  const dave = await daveCtx.newPage();
+  dave.on('pageerror', (e) => console.error('[dave pageerror]', e.message));
+  await onboard(dave, 'dave', inviteUrl2);
+  await dave.waitForSelector('[data-testid=voice-join-lounge]', { timeout: 20000 });
+  await dave.click('[data-testid=voice-join-lounge]');
+  await dave.waitForFunction(
+    () =>
+      window.__voice?.connections?.alice === 'connected' &&
+      window.__voice?.connections?.charlie === 'connected',
+    { timeout: 25000 }
+  );
+  await alice.waitForFunction(
+    () => window.__voice?.connections?.dave === 'connected',
+    { timeout: 15000 }
+  );
+
+  console.log('18. leaving updates everyone');
+  await charlie.click('[data-testid=voice-leave-lounge]');
+  await alice.waitForFunction(
+    () => !document.querySelector('[data-testid=voice-participants-lounge]')?.textContent.includes('charlie'),
+    { timeout: 15000 }
+  );
+  await alice.waitForFunction(
+    () => window.__voice?.connections?.charlie === undefined,
+    { timeout: 15000 }
+  );
+
   console.log('\nPASS: full client journey — onboarding, E2EE chat, channels,');
   console.log('      IndexedDB persistence, recovery, invite-link external-commit');
   console.log('      join with unverified badge, localStorage identity survival,');
   console.log('      plain key export/import, encrypted attachments, safety');
-  console.log('      numbers, and service-worker registration');
+  console.log('      numbers, service-worker registration, and E2EE-signaled');
+  console.log('      mesh voice (2-way and 3-way, MLS-authenticated DTLS)');
   await browser.close();
 } catch (e) {
   failed = true;

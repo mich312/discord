@@ -13,6 +13,7 @@
 //                                   blob id points at relay disk, the AES key
 //                                   travels only inside this encrypted envelope
 import { b64, Relay } from './relay.js';
+import { VoiceManager } from './voice.js';
 import {
   b64url,
   buildInviteUrl,
@@ -113,6 +114,11 @@ export class Controller {
   // === relay ==============================================================
 
   connectRelay() {
+    this.voice = new VoiceManager({
+      me: this.me,
+      send: (server, content) => this.sendEphemeral(server, content),
+      onState: (state) => this.dispatch({ type: 'voice', state }),
+    });
     this.relay = new Relay({
       url: this.relayUrl,
       name: this.me,
@@ -141,6 +147,9 @@ export class Controller {
           payloads.push(b64.enc(keyPackage));
         }
         await this.relay.request({ t: 'publish_kp', payloads });
+        for (const record of this.servers.values()) {
+          this.voice.probe(record.id);
+        }
         // Refresh the push subscription silently if permission was already
         // granted (endpoints rotate; VAPID keys may too).
         if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
@@ -155,7 +164,37 @@ export class Controller {
       case 'msg':
         await this.onGroupMessage(msg);
         break;
+      case 'eph':
+        await this.onEphemeral(msg);
+        break;
     }
+  }
+
+  /** Ephemeral fan-out: MLS-encrypted voice presence / WebRTC signaling.
+      Never logged server-side, never stored client-side. */
+  async onEphemeral(msg) {
+    if (!this.servers.has(msg.group)) return;
+    try {
+      const { event, state } = await this.crypto('receive', { bytes: b64.dec(msg.payload) });
+      await this.persistState(state);
+      if (event.kind !== 'message') return;
+      const content = JSON.parse(event.text);
+      if (content.k === 'voice' || content.k === 'rtc') {
+        await this.voice.handleEnvelope(msg.group, event.sender, content);
+      }
+    } catch (e) {
+      console.warn(`ephemeral from ${msg.sender} undecryptable: ${e.message}`);
+    }
+  }
+
+  /** Encrypt with MLS, deliver via the relay's no-log fan-out. */
+  async sendEphemeral(serverId, content) {
+    const { blob, state } = await this.crypto('send', {
+      group: serverId,
+      text: JSON.stringify(content),
+    });
+    await this.persistState(state);
+    await this.relay.request({ t: 'ephemeral', group: serverId, payload: b64.enc(blob) });
   }
 
   async onWelcome(msg) {
@@ -223,6 +262,8 @@ export class Controller {
         }
         // Every epoch change kills parked GroupInfo blobs; refresh ours.
         await this.refreshInvites(record);
+        // And nobody outside the group keeps a live voice leg.
+        this.voice.membershipChanged(record.id, event.members);
       }
     } catch (e) {
       // Expected for own commits replayed by catch-up; log and move on.
