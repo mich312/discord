@@ -18,7 +18,7 @@ export default function Masthead({ server, connection, theme, onInvite, onPalett
         <div className="masthead-context">
           <h1 className="circle-title" data-testid="server-name">{server.name}</h1>
           <span className="epoch-chip" title="key epoch — increments whenever membership changes">
-            epoch {server.epoch}
+            EPOCH {String(server.epoch).padStart(2, '0')}
           </span>
         </div>
       )}
@@ -36,14 +36,14 @@ export default function Masthead({ server, connection, theme, onInvite, onPalett
         </button>
         <button
           className="icon-btn"
-          title={theme === 'vellum' ? 'switch to obsidian (dark)' : 'switch to vellum (light)'}
+          title={theme === 'paper' ? 'switch to carbon (dark)' : 'switch to paper (light)'}
           onClick={onTheme}
         >
-          {theme === 'vellum' ? <Moon /> : <Sun />}
+          {theme === 'paper' ? <Moon /> : <Sun />}
         </button>
         <span className="conn-chip" title={`relay: ${connection}`}>
           <span className={`conn-dot ${connection}`} data-testid="conn-dot" />
-          {connection}
+          relay·{connection}
         </span>
       </div>
     </header>

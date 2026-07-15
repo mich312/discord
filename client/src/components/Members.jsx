@@ -11,7 +11,7 @@ export default function Members({ server, me, onAdd, onMember }) {
   return (
     <aside className="members">
       <div className="section-label">
-        <span className="overline">roster</span>
+        <span className="overline"><span className="idx">04</span>roster</span>
         <span className="member-count">{server.members.length}</span>
       </div>
       <p className="roster-sub">Everyone who holds the keys to this circle — no one else can read it.</p>

@@ -1,6 +1,6 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import Seal from './Seal.jsx';
-import { Lock, Paperclip, Seal8 } from './icons.jsx';
+import { Lock, Paperclip } from './icons.jsx';
 
 function timeOf(ts) {
   return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -127,9 +127,7 @@ export default function Messages({ server, channel, me, messages, onSend, onSend
       </header>
       <div className="scroll" ref={scroller} data-testid="message-scroll">
         <div className="watermark" data-testid="watermark">
-          <span className="stamp">
-            <Seal8 size={17} />
-          </span>
+          <span className="wm-tag">start of record — #{channel}</span>
           Beginning of <strong>#{channel}</strong> as this device knows it. Earlier messages,
           if any, were encrypted with keys this device never had.
         </div>

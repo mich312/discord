@@ -19,14 +19,13 @@ const Svg = ({ size = 16, children, ...rest }) => (
   </svg>
 );
 
-// Brand: a circle of three sealed members — the smallest quorum.
-export const QuorumGlyph = ({ size = 22 }) => (
+// Brand: a registration mark holding three modules — the smallest quorum.
+export const QuorumGlyph = ({ size = 18 }) => (
   <svg width={size} height={size} viewBox="0 0 24 24" fill="none" stroke="currentColor" strokeWidth="1.5" aria-hidden="true">
-    <circle cx="12" cy="12" r="9.2" />
-    <circle cx="12" cy="7.6" r="1.7" fill="currentColor" stroke="none" />
-    <circle cx="8.2" cy="14.4" r="1.7" fill="currentColor" stroke="none" />
-    <circle cx="15.8" cy="14.4" r="1.7" fill="currentColor" stroke="none" />
-    <path d="M12 9.3v0M10.6 13.2l2.8 0M11.2 8.9l-2.2 4M12.8 8.9l2.2 4" strokeWidth="1.1" />
+    <rect x="3" y="3" width="18" height="18" />
+    <rect x="6.5" y="6.5" width="4.4" height="4.4" fill="currentColor" stroke="none" />
+    <rect x="13.1" y="6.5" width="4.4" height="4.4" fill="currentColor" stroke="none" />
+    <rect x="9.8" y="13.1" width="4.4" height="4.4" fill="currentColor" stroke="none" />
   </svg>
 );
 

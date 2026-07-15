@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { generateCode, wrapIdentity, unwrapIdentity } from '../lib/recovery.js';
-import { QuorumGlyph, Lock, Key, ShieldCheck, Download } from './icons.jsx';
+import { QuorumGlyph, Key, Download } from './icons.jsx';
 
 // The gate: brand panel on the left states the contract, the form on the
 // right performs it. Three ways in:
@@ -26,21 +26,21 @@ function Gate({ children }) {
         </p>
         <ul className="principles">
           <li>
-            <span className="p-glyph"><Lock /></span>
+            <span className="p-glyph">01</span>
             <div>
               <strong>Sealed by default</strong>
               <span>Messages, room names, membership — all of it travels inside the encryption.</span>
             </div>
           </li>
           <li>
-            <span className="p-glyph"><Key /></span>
+            <span className="p-glyph">02</span>
             <div>
               <strong>Your identity is a key, not an email</strong>
               <span>A keypair born in this browser. Recovery is a file you hold, not a reset button we own.</span>
             </div>
           </li>
           <li>
-            <span className="p-glyph"><ShieldCheck /></span>
+            <span className="p-glyph">03</span>
             <div>
               <strong>The roster is the boundary</strong>
               <span>Joiners see nothing from before they joined. That is the cost of it being true.</span>
@@ -180,7 +180,7 @@ export default function Onboarding({ controller }) {
             data-testid="enter-app"
             onClick={() => run('entering…', () => controller.completeOnboarding(true))}
           >
-            enter the room
+            enter
           </button>
         </div>
       </Gate>
@@ -208,7 +208,7 @@ export default function Onboarding({ controller }) {
               />
             </label>
             <button className="button primary wide" disabled={busy} data-testid="join-fast">
-              {busyText ?? 'join the circle'}
+              {busyText ?? 'join'}
             </button>
           </form>
           <p className="fineprint muted">
@@ -249,7 +249,7 @@ export default function Onboarding({ controller }) {
               />
             </label>
             <button className="button primary wide" disabled={busy} data-testid="create-identity">
-              {busyText ?? 'forge identity'}
+              {busyText ?? 'create identity'}
             </button>
             <p className="fineprint muted">
               Your identity is a keypair generated in this browser. No email — recovery is

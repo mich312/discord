@@ -1,8 +1,8 @@
 // Dev-only UI gallery (`npm run preview:ui`): the real components, mock
 // state, no relay and no crypto core. Mirrors App.jsx's ready-phase layout —
 // if App's shell changes, keep this in step. Views:
-//   /preview.html?view=app            main surface, obsidian
-//   /preview.html?view=app&theme=vellum
+//   /preview.html?view=app            main surface, carbon
+//   /preview.html?view=app&theme=paper
 //   /preview.html?view=onboarding | invited | empty | banner
 //   /preview.html?view=modal-safety | modal-invite | modal-secure | modal-identity
 //   /preview.html?view=palette
@@ -22,7 +22,7 @@ import { Key, Bell, ShieldCheck, QuorumGlyph } from './components/icons.jsx';
 
 const params = new URLSearchParams(location.search);
 const view = params.get('view') ?? 'app';
-const theme = params.get('theme') ?? 'obsidian';
+const theme = params.get('theme') ?? 'carbon';
 document.documentElement.dataset.theme = theme;
 
 const now = Date.now();
@@ -122,7 +122,7 @@ function PreviewShell({ empty = false, banner = false, modal = null, palette = f
         onPalette={() => setPaletteOpen(true)}
         onTheme={() => {
           document.documentElement.dataset.theme =
-            document.documentElement.dataset.theme === 'vellum' ? 'obsidian' : 'vellum';
+            document.documentElement.dataset.theme === 'paper' ? 'carbon' : 'paper';
         }}
       />
       {banner && (

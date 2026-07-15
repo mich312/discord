@@ -11,7 +11,7 @@ export default function Channels({ server, activeChannel, me, onSelect, onCreate
   return (
     <aside className="channels">
       <div className="section-label">
-        <span className="overline">rooms</span>
+        <span className="overline"><span className="idx">02</span>rooms</span>
         <button className="ghost" title="new room" data-testid="new-channel" onClick={() => setAdding(true)}>
           <Plus size={13} />
         </button>
@@ -55,7 +55,7 @@ export default function Channels({ server, activeChannel, me, onSelect, onCreate
         )}
       </ul>
       <div className="section-label">
-        <span className="overline">voice</span>
+        <span className="overline"><span className="idx">03</span>voice</span>
       </div>
       <ul className="channel-list voice-list">
         {(server.voiceChannels ?? ['lounge']).map((ch) => {

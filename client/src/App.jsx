@@ -77,11 +77,13 @@ function reducer(state, action) {
 }
 
 // Theme is a device preference, not account state — plain localStorage.
+// ('vellum' is accepted for continuity with the previous theme naming.)
 function loadTheme() {
   try {
-    return localStorage.getItem('quorum-theme') === 'vellum' ? 'vellum' : 'obsidian';
+    const v = localStorage.getItem('quorum-theme');
+    return v === 'paper' || v === 'vellum' ? 'paper' : 'carbon';
   } catch {
-    return 'obsidian';
+    return 'carbon';
   }
 }
 
@@ -194,10 +196,10 @@ export default function App() {
     { id: 'act:secure', label: 'secure this account', hint: 'action', glyph: <ShieldCheck />, run: openSecure },
     {
       id: 'act:theme',
-      label: theme === 'vellum' ? 'switch to obsidian (dark)' : 'switch to vellum (light)',
+      label: theme === 'paper' ? 'switch to carbon (dark)' : 'switch to paper (light)',
       hint: 'action',
       glyph: <Sun />,
-      run: () => setTheme((t) => (t === 'vellum' ? 'obsidian' : 'vellum')),
+      run: () => setTheme((t) => (t === 'paper' ? 'carbon' : 'paper')),
     },
   ];
 
@@ -209,7 +211,7 @@ export default function App() {
         theme={theme}
         onInvite={openInvite}
         onPalette={() => setPaletteOpen(true)}
-        onTheme={() => setTheme((t) => (t === 'vellum' ? 'obsidian' : 'vellum'))}
+        onTheme={() => setTheme((t) => (t === 'paper' ? 'carbon' : 'paper'))}
       />
       {unsecured && (
         <div className="secure-banner" data-testid="secure-banner">

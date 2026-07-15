@@ -1,50 +1,35 @@
 import React from 'react';
-import { sealParams, arcPath } from '../lib/identicon.js';
+import { sealParams } from '../lib/identicon.js';
 
-// A member's seal: hue pair + arc pattern derived from the handle, initial
-// set in the display serif. Purely computed — identity you can glance at.
+// A member's mark: a 5×5 mirrored module glyph computed from the handle —
+// flat, sharp, machine-made. Identity here is a key, so the avatar is a
+// fingerprint you can glance at, never a picture someone uploaded.
 export default function Seal({ name, size = 32, title }) {
-  const { hue, hue2, rotate, bits } = sealParams(name);
-  const c1 = `hsl(${hue} 42% 52%)`;
-  const c2 = `hsl(${hue2} 46% 40%)`;
-  const seg = 360 / bits.length;
-  const letter = String(name ?? '?').slice(0, 1).toUpperCase();
+  const { hue, bits } = sealParams(name);
+  const ink = `hsl(${hue} 32% 52%)`;
+  // 15 bits fill the left three columns; the right two mirror them.
+  const cells = [];
+  for (let row = 0; row < 5; row++) {
+    for (let col = 0; col < 5; col++) {
+      const src = col < 3 ? col : 4 - col;
+      const bit = bits[(row * 3 + src) % bits.length] !== ((row + src) % 4 === 1);
+      if (bit) cells.push([col, row]);
+    }
+  }
   return (
     <svg
       className="seal-avatar"
       width={size}
       height={size}
-      viewBox="0 0 40 40"
+      viewBox="0 0 20 20"
       role="img"
       aria-label={title ?? String(name)}
+      style={{ background: 'var(--well)', border: '1px solid var(--hairline-strong)' }}
     >
       {title ? <title>{title}</title> : null}
-      <circle cx="20" cy="20" r="13.5" fill={c2} />
-      <circle cx="20" cy="20" r="13.5" fill={`url(#seal-sheen)`} opacity="0.35" />
-      <g stroke={c1} strokeWidth="2.6" fill="none" strokeLinecap="round" transform={`rotate(${rotate} 20 20)`}>
-        {bits.map((on, i) =>
-          on ? <path key={i} d={arcPath(20, 20, 17.4, i * seg + 3, (i + 1) * seg - 3)} /> : null
-        )}
-      </g>
-      <text
-        x="20"
-        y="20"
-        dy="0.36em"
-        textAnchor="middle"
-        fontFamily="Iowan Old Style, Palatino, Georgia, serif"
-        fontSize="15"
-        fontWeight="600"
-        fill="rgba(255,252,245,0.92)"
-      >
-        {letter}
-      </text>
-      <defs>
-        <radialGradient id="seal-sheen" cx="0.32" cy="0.25" r="0.9">
-          <stop offset="0%" stopColor="#fff" stopOpacity="0.55" />
-          <stop offset="55%" stopColor="#fff" stopOpacity="0.05" />
-          <stop offset="100%" stopColor="#000" stopOpacity="0.25" />
-        </radialGradient>
-      </defs>
+      {cells.map(([c, r]) => (
+        <rect key={`${c}${r}`} x={2.5 + c * 3} y={2.5 + r * 3} width="3" height="3" fill={ink} />
+      ))}
     </svg>
   );
 }

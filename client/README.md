@@ -37,15 +37,22 @@ server metadata is rebroadcast (encrypted) after every member add.
 - Onboarding cannot be completed without downloading the recovery file
   and confirming the code is stored off-device.
 
-### Design system
+### Design system — "the register"
 
-The UI is its own product register ("quorum — sealed rooms"), not a
-Discord/Slack skin: a token-based design system in `src/styles.css` with
-two themes — **obsidian** (dark, default) and **vellum** (light), toggled
-from the masthead and persisted per device — serif display type for
-identity, mono for anything cryptographic, and deterministic **seal
-identicons** (`src/lib/identicon.js`) derived from each handle: avatars
-are computed from identity, never uploaded. Chrome layout: a full-width
+The UI is its own product language, not a Discord/Slack skin and not an
+AI-default gradient theme. The register is an engineering ledger in the
+International Typographic tradition: hierarchy comes from 1px rules,
+spacing and type — never from glow, gradient, blur or shadow stacks;
+geometry is sharp (0–2px radii, no pills). Two near-monochrome themes off
+one token contract in `src/styles.css` — **carbon** (dark, default) and
+**paper** (light) — with a single **signal-yellow** accent used strictly
+functionally (selection, primary action, focus); green and red appear
+only where they carry meaning (trust, danger). The monospace carries the
+brand: wordmark, section indices (`01 CIRCLES`), epochs, timestamps,
+handles, statuses — anything the system says, it says in mono. Member
+avatars are **cipher marks** (`src/lib/identicon.js`): flat 5×5 mirrored
+module glyphs computed from the handle — identity is a key, so the
+avatar is a fingerprint, never an upload. Chrome layout: a full-width
 masthead (brand · circle + epoch · invite · ⌘K palette · theme · relay
 state), a single sidebar (circles → rooms → voice → self card), the
 conversation (grouped messages, day dividers, hover timestamps), and the
@@ -55,7 +62,7 @@ All icons are inline SVG (`src/components/icons.jsx`) — no fonts, no CDN.
 **UI gallery**: `npm run preview:ui` serves `/preview.html`, which renders
 the real components against mock state (no relay, no WASM) — views:
 `?view=app|onboarding|invited|empty|banner|palette|modal-*`, plus
-`&theme=vellum`. Useful for design review and screenshots when the crypto
+`&theme=paper`. Useful for design review and screenshots when the crypto
 core isn't built.
 
 ### Invite links
