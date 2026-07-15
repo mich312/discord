@@ -9,6 +9,7 @@ description = "MLS (RFC 9420) group messaging core via OpenMLS, compiled to WASM
 crate-type = ["cdylib", "rlib"]
 
 [dependencies]
+argon2 = "0.5"
 openmls = "0.7"
 openmls_rust_crypto = "0.4"
 openmls_traits = "0.4"

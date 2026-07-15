@@ -3,6 +3,7 @@
 //! send so subscribers observe the log in seq order, and tracks online
 //! users for direct Welcome delivery.
 
+use crate::account::AccountService;
 use crate::blobs::BlobStore;
 use crate::proto::{ClientMsg, ServerMsg, AUTH_CONTEXT};
 use crate::push::PushService;
@@ -22,6 +23,7 @@ pub struct App {
     pub hub: Mutex<Hub>,
     pub blobs: BlobStore,
     pub push: PushService,
+    pub accounts: AccountService,
 }
 
 #[derive(Default)]
@@ -42,7 +44,13 @@ impl App {
     }
 
     pub fn with_parts(store: Box<dyn Store>, blobs: BlobStore, push: PushService) -> Arc<Self> {
-        Arc::new(Self { store, hub: Mutex::new(Hub::default()), blobs, push })
+        Arc::new(Self {
+            store,
+            hub: Mutex::new(Hub::default()),
+            blobs,
+            push,
+            accounts: AccountService::from_env(),
+        })
     }
 
     /// Fire-and-forget web push to every subscription of `user`; dead
@@ -469,6 +477,46 @@ async fn handle_request(
                 });
             }
             Some(ServerMsg::Ok { rid, seq: None })
+        }
+
+        ClientMsg::VaultSet { rid, kind, salt, verifier, wrapped, credential } => {
+            if kind != "password" && kind != "passkey" {
+                return err(rid, "kind must be password or passkey");
+            }
+            let (Ok(salt), Ok(verifier), Ok(wrapped)) =
+                (decode_b64(&salt), decode_b64(&verifier), decode_b64(&wrapped))
+            else {
+                return err(rid, "invalid base64");
+            };
+            let vault = crate::store::VaultRecord { kind, salt, verifier, wrapped, credential };
+            match app.store.set_vault(user, vault).await {
+                Ok(()) => Some(ServerMsg::Ok { rid, seq: None }),
+                Err(e) => err(rid, e),
+            }
+        }
+
+        ClientMsg::VaultStatus { rid } => {
+            match app.store.get_vault(user).await {
+                Ok(vault) => Some(ServerMsg::VaultStatus {
+                    rid,
+                    kind: vault.map(|v| v.kind),
+                }),
+                Err(e) => err(rid, e),
+            }
+        }
+
+        ClientMsg::PasskeyRegisterStart { rid } => {
+            match app.accounts.start_registration(user) {
+                Ok(options) => Some(ServerMsg::Passkey { rid, payload: options }),
+                Err(e) => err(rid, e),
+            }
+        }
+
+        ClientMsg::PasskeyRegisterFinish { rid, credential } => {
+            match app.accounts.finish_registration(user, &credential) {
+                Ok(passkey_json) => Some(ServerMsg::Passkey { rid, payload: passkey_json }),
+                Err(e) => err(rid, e),
+            }
         }
 
         ClientMsg::PushInfo { rid } => {

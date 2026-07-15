@@ -320,3 +320,17 @@ fn safety_numbers_are_symmetric_and_pairwise_distinct() {
 
     assert!(alice.safety_number(G, "nobody").is_err());
 }
+
+#[test]
+fn login_key_derivation_is_deterministic_and_salted() {
+    let a = crypto_core::derive_login_keys("correct horse battery", b"salt-0123456789ab").unwrap();
+    let b = crypto_core::derive_login_keys("correct horse battery", b"salt-0123456789ab").unwrap();
+    let c = crypto_core::derive_login_keys("correct horse battery", b"salt-DIFFERENT-9ab").unwrap();
+    let d = crypto_core::derive_login_keys("wrong password here", b"salt-0123456789ab").unwrap();
+    assert_eq!(a.len(), 64);
+    assert_eq!(a, b, "same password+salt must derive the same keys");
+    assert_ne!(a, c, "salt must matter");
+    assert_ne!(a, d, "password must matter");
+    // The two halves are independent keys.
+    assert_ne!(&a[..32], &a[32..]);
+}

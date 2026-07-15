@@ -1,3 +1,4 @@
+pub mod account;
 pub mod blobs;
 pub mod pg;
 pub mod proto;
@@ -14,15 +15,27 @@ use axum::Router;
 use server::App;
 use std::sync::Arc;
 use tower_http::cors::CorsLayer;
+use tower_http::services::ServeDir;
 
 pub fn router(app: Arc<App>) -> Router {
-    Router::new()
+    let mut router = Router::new()
         .route("/ws", any(ws_handler))
         // Attachment blobs: opaque AES-GCM ciphertext on disk. The id is a
         // client-generated random capability; the file key travels inside
         // the MLS message. CORS is open — content is ciphertext and ids are
         // unguessable.
         .route("/blobs/{id}", axum::routing::put(put_blob).get(get_blob))
+        // Account sign-in (pre-auth: a new device has no identity key yet).
+        .route("/account/{user}/params", axum::routing::get(account::params))
+        .route("/account/{user}/login", axum::routing::post(account::password_login))
+        .route("/account/{user}/passkey/challenge", axum::routing::post(account::passkey_challenge))
+        .route("/account/{user}/passkey/login", axum::routing::post(account::passkey_login));
+    // Single-container mode: the relay serves the built client too, so one
+    // process on one port is the whole deployment.
+    if let Ok(dir) = std::env::var("CLIENT_DIR") {
+        router = router.fallback_service(ServeDir::new(dir));
+    }
+    router
         .layer(DefaultBodyLimit::max(blobs::MAX_BLOB_BYTES + 1024))
         .layer(CorsLayer::permissive())
         .with_state(app)

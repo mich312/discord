@@ -18,8 +18,9 @@ const initial = {
   messages: [], // active channel only
   connection: 'connecting',
   toast: null,
-  modal: null, // {type:'invite', url} | {type:'identity', key} | {type:'safety', ...}
+  modal: null, // invite | identity | safety | secure
   voice: { active: null, connections: {}, presence: {} },
+  vault: { kind: undefined, securedLocal: true }, // kind: undefined=unknown, null=none
 };
 
 function reducer(state, action) {
@@ -64,6 +65,8 @@ function reducer(state, action) {
       return { ...state, modal: action.modal };
     case 'voice':
       return { ...state, voice: action.state };
+    case 'vault':
+      return { ...state, vault: { kind: action.kind, securedLocal: action.securedLocal } };
     default:
       return state;
   }
@@ -75,7 +78,10 @@ export default function App() {
 
   useEffect(() => {
     const params = new URLSearchParams(location.search);
-    const relayUrl = params.get('relay') ?? `ws://${location.hostname}:9601/ws`;
+    // Default: same origin (single-container mode, relay serves this page).
+    // Dev setups (vite on another port) pass ?relay=ws://localhost:9601/ws.
+    const wsProto = location.protocol === 'https:' ? 'wss' : 'ws';
+    const relayUrl = params.get('relay') ?? `${wsProto}://${location.host}/ws`;
     const controller = new Controller({
       db: null,
       crypto: createCrypto(),
@@ -119,8 +125,26 @@ export default function App() {
     return <Onboarding controller={controllerRef.current} />;
   }
 
+  const unsecured = state.vault.kind === null && !state.vault.securedLocal;
+
   return (
-    <div className="app">
+    <div className="app-shell">
+      {unsecured && (
+        <div className="secure-banner" data-testid="secure-banner">
+          <span>
+            this account exists only in this browser — lose it and <strong>{state.me}</strong> is
+            gone forever
+          </span>
+          <button
+            className="button"
+            data-testid="secure-now"
+            onClick={() => dispatch({ type: 'modal', modal: { type: 'secure' } })}
+          >
+            secure account
+          </button>
+        </div>
+      )}
+      <div className="app">
       <Rail
         servers={state.servers}
         active={server}
@@ -226,18 +250,27 @@ export default function App() {
               create one from the rail, follow an invite link, or ask someone to add you —
               they need your handle: <strong>{state.me}</strong>
             </p>
-            <button
-              className="button"
-              data-testid="identity-open-empty"
-              onClick={() =>
-                dispatch({
-                  type: 'modal',
-                  modal: { type: 'identity', key: controllerRef.current.identityKeyString() },
-                })
-              }
-            >
-              identity key
-            </button>
+            <div className="row centered-row">
+              <button
+                className="button"
+                data-testid="identity-open-empty"
+                onClick={() =>
+                  dispatch({
+                    type: 'modal',
+                    modal: { type: 'identity', key: controllerRef.current.identityKeyString() },
+                  })
+                }
+              >
+                identity key
+              </button>
+              <button
+                className="button"
+                data-testid="secure-open-empty"
+                onClick={() => dispatch({ type: 'modal', modal: { type: 'secure' } })}
+              >
+                secure account
+              </button>
+            </div>
           </div>
         </div>
       )}
@@ -251,8 +284,24 @@ export default function App() {
             dispatch({ type: 'modal', modal: null });
             dispatch({ type: 'toast', text: `${peer} marked as verified` });
           }}
+          onSecurePasskey={async () => {
+            await controllerRef.current.secureWithPasskey();
+            dispatch({ type: 'modal', modal: null });
+            dispatch({ type: 'toast', text: 'account secured with a passkey' });
+          }}
+          onSecurePassword={async (password) => {
+            await controllerRef.current.secureWithPassword(password);
+            dispatch({ type: 'modal', modal: null });
+            dispatch({ type: 'toast', text: 'account secured with a password' });
+          }}
+          onSecureFile={async () => {
+            await controllerRef.current.markSecuredLocal();
+            dispatch({ type: 'toast', text: 'key file downloaded — store it safely' });
+          }}
+          identityKey={controllerRef.current?.identityKeyString()}
         />
       )}
+      </div>
     </div>
   );
 }

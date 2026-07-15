@@ -420,3 +420,23 @@ h2 { font-size: 14px; font-weight: 600; }
 }
 .voice-participants .accent { color: var(--accent); }
 .channel-list:not(.voice-list) { flex: 1; }
+
+/* ===== accounts (passkeys/password) ===== */
+.app-shell { display: flex; flex-direction: column; height: 100%; }
+.app-shell .app { flex: 1; min-height: 0; }
+.secure-banner {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 14px;
+  padding: 8px 14px;
+  font-size: 13px;
+  background: rgba(181, 165, 131, 0.12);
+  border-bottom: 1px solid rgba(181, 165, 131, 0.35);
+}
+.secure-banner .button { padding: 4px 12px; font-size: 12px; }
+.button.wide { display: block; width: 100%; text-align: center; }
+.linkish { background: none; border: none; color: var(--accent); cursor: pointer; padding: 0; font-size: inherit; }
+.advanced { margin-top: 14px; }
+.advanced summary { cursor: pointer; font-size: 12px; margin-bottom: 10px; }
+.card .row { margin-top: 4px; }

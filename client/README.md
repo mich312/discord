@@ -101,6 +101,25 @@ a microphone the client joins listen-only (silent WebAudio track).
 Default STUN is Google's; real deployments behind symmetric NATs need
 their own STUN/TURN (TURN sees ciphertext only, per the plan).
 
+### Accounts: passkeys and passwords
+
+Sign-in from a new device without moving files. Securing an account parks
+the identity bundle on the relay, encrypted client-side:
+
+- **Passkey (recommended)**: WebAuthn registration + the PRF extension —
+  the passkey deterministically derives the wrap key. Phishing-resistant,
+  nothing brute-forceable stored anywhere, and synced passkeys make it
+  portable across the user's devices.
+- **Password**: Argon2id (in the crypto WASM) yields 64 bytes — the auth
+  half is sent (server stores only its hash), the wrap half encrypts the
+  bundle locally. The honest caveat: the relay could brute-force *weak*
+  passwords offline against the blob.
+
+Invite-link joiners skip the recovery gate entirely (handle → in the
+group in seconds) and get a persistent banner until they secure the
+account by any method (passkey, password, or key-file download). Signing
+in restores identity, never message history.
+
 ### Recovery scope (honest version)
 
 The recovery key protects the **identity key** — the thing the relay has
