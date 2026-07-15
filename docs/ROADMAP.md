@@ -49,6 +49,7 @@ membership control is true.
 | 2.4 | **Device & recovery screen** | Plan screen #5. Consolidates what exists but is scattered across modals and the nag banner: vault status (passkey/password/none), identity export (file / paste-string / recovery), storage-persistence state, and what signing in elsewhere does and doesn't restore. |
 | 2.5 | **Circle settings screen** | Plan screen #4: rename circle, channel rename/delete, the invite list from 1.3, leave from 1.2. Channel deletion is a `meta` update — the plan calls channels "cheap and disposable," but today the list only ever grows. |
 | 2.6 | **Message franking + report flow** | Plan §2's answer to "no content moderation," and the one item here needing real design: the WhatsApp scheme requires the relay to bind a signed context to each delivered blob (it can do this blind — group, seq, commitment tag). Design doc first, then implement. If it slips a milestone, slip it — but it's a standing promise, not a nice-to-have. |
+| 2.7 | **In-person verification (Threema model)** | Upgrade the binary verified/unverified badge to three graded levels: **(1)** key came from the relay (added by handle or joined via link — today's default), **(2)** safety number compared out of band (today's flow), **(3)** identity key scanned in person via QR — the strongest claim, because no channel sat between the two devices. Show your QR (handle + identity public key) full-screen; scanning verifies the *scanned* party to the *scanner*, so mutual level 3 takes one scan each, exactly like Threema. The crypto already supports lifting this above circles: safety numbers derive from the identity signature keys, which are identical in every group — so verification becomes a property of the *person*, stored once and reflected in every shared circle (migrating today's per-circle `verified` list). Scanning checks the QR key against the key pinned in a shared group and refuses loudly on mismatch — that's the attack it exists to catch. Voice gets it for free: signaling is MLS-signed, so a level-3 roster means level-3 media paths, and the voice UI shows each participant's level. Implementation: `BarcodeDetector` where available, jsQR fallback; QR render client-side; no relay involvement at any point. |
 
 ---
 
@@ -111,7 +112,9 @@ switches for:
 ```
 M1 (trust loop) ──► M2.2 (roles) ──► M2.3 (approval queue)
                 └─► M2.5 (settings screen: invites, leave)
-M2.1 (search) — independent, any time
+M2.1 (search), M2.7 (QR verification) — independent, any time
+M2.7 pairs well with M2.3: an approval queue is most useful when
+  "approve" can mean "I scanned them at the meetup"
 M3.3 (message ids) ──► 3.4 (edit/delete), 3.5 (replies), 3.8 (pins)
 M3.* otherwise independent and parallelizable
 M4.2 ──► 4.3 (group video rides the SFU)
