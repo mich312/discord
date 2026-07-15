@@ -30,12 +30,40 @@ server metadata is rebroadcast (encrypted) after every member add.
 
 ### Load-bearing UI (per the plan)
 
-- Member list is the security boundary — labeled "who can read this",
-  with add-member right there, and epoch visible in the header.
+- The roster is the security boundary — "everyone who holds the keys",
+  with add-member right there, and the key epoch visible in the masthead.
 - Permanent join watermark at the top of every channel.
-- Composer states the encryption scope ("encrypted for N members").
+- Composer states the encryption scope ("sealed for N members").
 - Onboarding cannot be completed without downloading the recovery file
   and confirming the code is stored off-device.
+
+### Design system — "the register"
+
+The UI is its own product language, not a Discord/Slack skin and not an
+AI-default gradient theme. The register is an engineering ledger in the
+International Typographic tradition: hierarchy comes from 1px rules,
+spacing and type — never from glow, gradient, blur or shadow stacks;
+geometry is sharp (0–2px radii, no pills). Two near-monochrome themes off
+one token contract in `src/styles.css` — **carbon** (dark, default) and
+**paper** (light) — with a single **signal-yellow** accent used strictly
+functionally (selection, primary action, focus); green and red appear
+only where they carry meaning (trust, danger). The monospace carries the
+brand: wordmark, section indices (`01 CIRCLES`), epochs, timestamps,
+handles, statuses — anything the system says, it says in mono. Member
+avatars are **cipher marks** (`src/lib/identicon.js`): flat 5×5 mirrored
+module glyphs computed from the handle — identity is a key, so the
+avatar is a fingerprint, never an upload. Chrome layout: a full-width
+masthead (brand · circle + epoch · invite · ⌘K palette · theme · relay
+state), a single sidebar (circles → rooms → voice → self card), the
+conversation (grouped messages, day dividers, hover timestamps), and the
+roster. `Ctrl/⌘-K` opens a command palette (rooms, circles, actions).
+All icons are inline SVG (`src/components/icons.jsx`) — no fonts, no CDN.
+
+**UI gallery**: `npm run preview:ui` serves `/preview.html`, which renders
+the real components against mock state (no relay, no WASM) — views:
+`?view=app|onboarding|invited|empty|banner|palette|modal-*`, plus
+`&theme=paper`. Useful for design review and screenshots when the crypto
+core isn't built.
 
 ### Invite links
 

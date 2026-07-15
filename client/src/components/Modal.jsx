@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { LinkGlyph, Key, ShieldCheck, Copy, Download, X, Check } from './icons.jsx';
 
 export default function Modal({
   modal,
@@ -38,31 +39,44 @@ export default function Modal({
     setTimeout(() => setCopied(false), 1500);
   }
 
+  const heads = {
+    invite: { glyph: <LinkGlyph />, title: 'Invite link' },
+    secure: { glyph: <ShieldCheck />, title: 'Secure your account' },
+    safety: { glyph: <ShieldCheck />, title: `Safety number — ${modal.peer ?? ''}` },
+    identity: { glyph: <Key />, title: 'Identity key' },
+  };
+  const head = heads[modal.type];
+
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div className="card modal" onClick={(e) => e.stopPropagation()}>
+        {head && (
+          <div className="dialog-head">
+            <span className="dialog-glyph">{head.glyph}</span>
+            <h1>{head.title}</h1>
+          </div>
+        )}
         {modal.type === 'invite' && (
           <>
-            <h1>invite link</h1>
             <p className="muted">
               The part after <code>#</code> is the decryption key — browsers never send it
               over the network, so the server stores an invite blob it cannot read.
             </p>
             <textarea className="keybox" readOnly value={modal.url} data-testid="invite-url" />
             <button className="button primary" onClick={() => copy(modal.url)} data-testid="copy-invite">
+              {copied ? <Check size={14} /> : <Copy size={14} />}
               {copied ? 'copied' : 'copy link'}
             </button>
             <p className="fineprint muted">
               This link is a bearer token: whoever holds it becomes a member. It expires in
               7 days, dies if the blob goes stale while you're offline, and anyone who joins
-              with it is marked <em>unverified</em> in the member list. Revoking it later
+              with it is marked <em>unverified</em> in the roster. Revoking it later
               only stops new joins — removing a member is what actually rotates the keys.
             </p>
           </>
         )}
         {modal.type === 'secure' && (
           <>
-            <h1>secure your account</h1>
             <p className="muted">
               Your identity key lives only in this browser right now. Park an{' '}
               <em>encrypted</em> copy on the server so you can sign in elsewhere — the
@@ -76,7 +90,7 @@ export default function Modal({
             >
               use a passkey (recommended)
             </button>
-            <div className="divider muted">or a password</div>
+            <div className="divider">or a password</div>
             <form
               onSubmit={(e) => {
                 e.preventDefault();
@@ -101,7 +115,7 @@ export default function Modal({
               to guess a <em>weak</em> one offline against the encrypted copy — pick a real
               passphrase.
             </p>
-            <div className="divider muted">or keep it manual</div>
+            <div className="divider">or keep it manual</div>
             <a
               className="button"
               href={identityKey ? URL.createObjectURL(new Blob([identityKey], { type: 'text/plain' })) : '#'}
@@ -109,6 +123,7 @@ export default function Modal({
               data-testid="secure-file"
               onClick={() => onSecureFile()}
             >
+              <Download size={14} />
               download key file
             </a>
             {error && <p className="error">{error}</p>}
@@ -116,7 +131,6 @@ export default function Modal({
         )}
         {modal.type === 'safety' && (
           <>
-            <h1>safety number — {modal.peer}</h1>
             <p className="muted">
               Compare these digits with {modal.peer} over a channel you already trust (in
               person, a call). If they match, nobody — including the relay — has swapped
@@ -131,10 +145,11 @@ export default function Modal({
               <p className="fineprint muted">already marked verified on this device.</p>
             ) : (
               <button
-                className="button primary"
+                className="button primary wide"
                 data-testid="mark-verified"
                 onClick={() => onVerify(modal.server, modal.peer)}
               >
+                <Check size={14} />
                 the numbers match — mark verified
               </button>
             )}
@@ -146,7 +161,6 @@ export default function Modal({
         )}
         {modal.type === 'identity' && (
           <>
-            <h1>identity key</h1>
             <p className="muted">
               This string is your whole identity — the private key that signs your messages
               and logs you in. <strong>Anyone who has it is you.</strong>
@@ -154,6 +168,7 @@ export default function Modal({
             <textarea className="keybox" readOnly value={modal.key ?? ''} data-testid="identity-key" />
             <div className="row">
               <button className="button primary" onClick={() => copy(modal.key)} data-testid="copy-identity">
+                {copied ? <Check size={14} /> : <Copy size={14} />}
                 {copied ? 'copied' : 'copy key'}
               </button>
               <a
@@ -162,6 +177,7 @@ export default function Modal({
                 download="identity.e2ee-key"
                 data-testid="download-identity"
               >
+                <Download size={14} />
                 download
               </a>
             </div>
@@ -172,8 +188,8 @@ export default function Modal({
             </p>
           </>
         )}
-        <button className="ghost close" onClick={onClose} data-testid="close-modal">
-          close
+        <button className="ghost close" onClick={onClose} data-testid="close-modal" title="close">
+          <X size={14} />
         </button>
       </div>
     </div>

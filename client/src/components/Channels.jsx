@@ -1,25 +1,22 @@
 import React, { useState } from 'react';
+import Seal from './Seal.jsx';
+import { Hash, Wave, Plus } from './icons.jsx';
 
-export default function Channels({ server, activeChannel, me, connection, onSelect, onCreate, onInvite, onIdentity, onAlerts, voice, onVoiceJoin, onVoiceLeave }) {
+// Rooms and voice tables of the active circle. Channel names travel inside
+// the encryption, so even this sidebar is knowledge the relay never has.
+export default function Channels({ server, activeChannel, me, onSelect, onCreate, voice, onVoiceJoin, onVoiceLeave }) {
   const [adding, setAdding] = useState(false);
   const [name, setName] = useState('');
 
   return (
     <aside className="channels">
-      <header className="pane-head">
-        <h2 data-testid="server-name">{server.name}</h2>
-        <span className="muted mono">epoch {server.epoch}</span>
-        <button className="ghost push-right" title="create invite link" data-testid="create-invite" onClick={onInvite}>
-          invite
-        </button>
-      </header>
-      <div className="pane-label">
-        channels
-        <button className="ghost" title="new channel" data-testid="new-channel" onClick={() => setAdding(true)}>
-          +
+      <div className="section-label">
+        <span className="overline"><span className="idx">02</span>rooms</span>
+        <button className="ghost" title="new room" data-testid="new-channel" onClick={() => setAdding(true)}>
+          <Plus size={13} />
         </button>
       </div>
-      <ul className="channel-list">
+      <ul className="channel-list rooms">
         {server.channels.map((ch) => (
           <li key={ch}>
             <button
@@ -27,7 +24,10 @@ export default function Channels({ server, activeChannel, me, connection, onSele
               data-testid={`channel-${ch}`}
               onClick={() => onSelect(ch)}
             >
-              <span className="hash">#</span> {ch}
+              <span className="glyph">
+                <Hash size={13} />
+              </span>
+              {ch}
             </button>
           </li>
         ))}
@@ -47,14 +47,16 @@ export default function Channels({ server, activeChannel, me, connection, onSele
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 onBlur={() => setAdding(false)}
-                placeholder="channel-name"
+                placeholder="room-name"
                 data-testid="new-channel-name"
               />
             </form>
           </li>
         )}
       </ul>
-      <div className="pane-label">voice</div>
+      <div className="section-label">
+        <span className="overline"><span className="idx">03</span>voice</span>
+      </div>
       <ul className="channel-list voice-list">
         {(server.voiceChannels ?? ['lounge']).map((ch) => {
           const key = `${server.id}/${ch}`;
@@ -64,17 +66,24 @@ export default function Channels({ server, activeChannel, me, connection, onSele
             <li key={ch} className="voice-channel">
               <div className="voice-row">
                 <span className="channel">
-                  <span className="hash">))</span> {ch}
+                  <span className="glyph">
+                    <Wave size={13} />
+                  </span>
+                  {ch}
                 </span>
                 {joined ? (
                   <>
-                    {voice.listenOnly && <span className="muted" title="no microphone found">listen-only</span>}
-                    <button className="ghost danger" data-testid={`voice-leave-${ch}`} onClick={onVoiceLeave}>
+                    {voice.listenOnly && (
+                      <span className="listen-only" title="no microphone found — hearing others, sending nothing">
+                        listen-only
+                      </span>
+                    )}
+                    <button className="voice-join leave" data-testid={`voice-leave-${ch}`} onClick={onVoiceLeave}>
                       leave
                     </button>
                   </>
                 ) : (
-                  <button className="ghost" data-testid={`voice-join-${ch}`} onClick={() => onVoiceJoin(ch)}>
+                  <button className="voice-join" data-testid={`voice-join-${ch}`} onClick={() => onVoiceJoin(ch)}>
                     join
                   </button>
                 )}
@@ -82,11 +91,12 @@ export default function Channels({ server, activeChannel, me, connection, onSele
               {participants.length > 0 && (
                 <ul className="voice-participants" data-testid={`voice-participants-${ch}`}>
                   {participants.map((p) => (
-                    <li key={p} className={p === me ? 'mono accent' : 'mono'}>
+                    <li key={p} className={p === me ? 'me' : undefined}>
+                      <Seal name={p} size={16} />
                       {p}
-                      {joined && p !== me && voice.connections[p] && voice.connections[p] !== 'connected'
-                        ? ` · ${voice.connections[p]}`
-                        : ''}
+                      {joined && p !== me && voice.connections[p] && voice.connections[p] !== 'connected' && (
+                        <span className="link-state">· {voice.connections[p]}</span>
+                      )}
                     </li>
                   ))}
                 </ul>
@@ -95,16 +105,6 @@ export default function Channels({ server, activeChannel, me, connection, onSele
           );
         })}
       </ul>
-      <footer className="self">
-        <span className="mono" data-testid="self-name">{me}</span>
-        <button className="ghost" title="identity key" data-testid="identity-open" onClick={onIdentity}>
-          key
-        </button>
-        <button className="ghost" title="enable push notifications" data-testid="enable-notifications" onClick={onAlerts}>
-          alerts
-        </button>
-        <span className={`muted conn-${connection}`}>{connection}</span>
-      </footer>
     </aside>
   );
 }
