@@ -2,7 +2,7 @@
 //! client-declared epoch stored alongside — exactly the shape in the build
 //! plan. Uses runtime queries (no compile-time DB dependency).
 
-use crate::store::{InviteRecord, RegisterOutcome, Store, StoreError, StoredMessage, StoredWelcome};
+use crate::store::{InviteRecord, RegisterOutcome, Store, StoreError, StoredMessage, StoredWelcome, VaultRecord};
 use async_trait::async_trait;
 use sqlx::{postgres::PgPoolOptions, PgPool, Row};
 
@@ -67,6 +67,15 @@ impl PgStore {
                 group_id text NOT NULL,
                 after_seq bigint NOT NULL,
                 payload bytea NOT NULL
+            );
+            CREATE TABLE IF NOT EXISTS vaults (
+                user_id text PRIMARY KEY REFERENCES users(user_id),
+                kind text NOT NULL,
+                salt bytea NOT NULL,
+                verifier bytea NOT NULL,
+                wrapped bytea NOT NULL,
+                credential text,
+                updated_at timestamptz NOT NULL DEFAULT now()
             );
             CREATE TABLE IF NOT EXISTS push_subscriptions (
                 user_id text NOT NULL,
@@ -223,6 +232,43 @@ impl Store for PgStore {
             .await
             .map_err(backend)?;
         Ok(rows.into_iter().map(|r| r.get("user_id")).collect())
+    }
+
+    async fn set_vault(&self, user: &str, vault: VaultRecord) -> Result<(), StoreError> {
+        sqlx::query(
+            "INSERT INTO vaults (user_id, kind, salt, verifier, wrapped, credential)
+             VALUES ($1, $2, $3, $4, $5, $6)
+             ON CONFLICT (user_id) DO UPDATE SET
+               kind = $2, salt = $3, verifier = $4, wrapped = $5,
+               credential = $6, updated_at = now()",
+        )
+        .bind(user)
+        .bind(&vault.kind)
+        .bind(&vault.salt)
+        .bind(&vault.verifier)
+        .bind(&vault.wrapped)
+        .bind(&vault.credential)
+        .execute(&self.pool)
+        .await
+        .map_err(backend)?;
+        Ok(())
+    }
+
+    async fn get_vault(&self, user: &str) -> Result<Option<VaultRecord>, StoreError> {
+        let row = sqlx::query(
+            "SELECT kind, salt, verifier, wrapped, credential FROM vaults WHERE user_id = $1",
+        )
+        .bind(user)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(backend)?;
+        Ok(row.map(|r| VaultRecord {
+            kind: r.get("kind"),
+            salt: r.get("salt"),
+            verifier: r.get("verifier"),
+            wrapped: r.get("wrapped"),
+            credential: r.get("credential"),
+        }))
     }
 
     async fn put_push_subscription(

@@ -22,8 +22,12 @@ if (!existsSync(relayBin)) {
   console.error('relay binary missing — run: cargo build -p relay');
   process.exit(1);
 }
+const localhostBase = `http://localhost:${HTTP}/?relay=${encodeURIComponent(`ws://127.0.0.1:${RELAY}/ws`)}`;
 const procs = [
-  spawn(relayBin, [], { stdio: 'inherit', env: { ...process.env, RELAY_PORT: RELAY } }),
+  spawn(relayBin, [], {
+    stdio: 'inherit',
+    env: { ...process.env, RELAY_PORT: RELAY, RP_ID: 'localhost', RP_ORIGIN: `http://localhost:${HTTP}` },
+  }),
   spawn('node', ['serve.mjs'], { cwd: dir, stdio: 'inherit', env: { ...process.env, HTTP_PORT: HTTP } }),
 ];
 const cleanup = () => procs.forEach((p) => p.kill());
@@ -49,6 +53,13 @@ async function onboard(page, handle, url = base) {
   await page.click('[data-testid=enter-app]');
   await page.waitForSelector(`[data-testid=self-name], .empty-state`);
   return { code, file };
+}
+
+async function joinViaInvite(page, handle, url) {
+  await page.goto(url);
+  await page.fill('[data-testid=handle-input]', handle);
+  await page.click('[data-testid=join-fast]');
+  await page.waitForSelector('[data-testid=self-name], .empty-state', { timeout: 20000 });
 }
 
 let failed = false;
@@ -148,10 +159,12 @@ try {
   const fresh = await freshCtx.newPage();
   fresh.on('pageerror', (e) => console.error('[fresh pageerror]', e.message));
   await fresh.goto(base);
-  await fresh.click('text=restore');
+  await fresh.click('[data-testid=tab-signin]');
+  await fresh.fill('[data-testid=signin-handle]', 'bob');
+  await fresh.click('summary');
   await fresh.setInputFiles('[data-testid=restore-file]', bobRecovery.file);
   await fresh.fill('[data-testid=restore-code]', bobRecovery.code);
-  await fresh.click('[data-testid=restore-identity]');
+  await fresh.click('[data-testid=signin-submit]');
   // Identity is back (same pinned key -> relay accepts as bob)…
   await fresh.waitForSelector('text=bob', { timeout: 15000 });
   // …but groups are intentionally gone (their keys died with the "device").
@@ -168,7 +181,9 @@ try {
   const charlieCtx = await browser.newContext();
   const charlie = await charlieCtx.newPage();
   charlie.on('pageerror', (e) => console.error('[charlie pageerror]', e.message));
-  await onboard(charlie, 'charlie', inviteUrl);
+  await joinViaInvite(charlie, 'charlie', inviteUrl);
+  // The fast path defers securing — the nag banner must be up.
+  await charlie.waitForSelector('[data-testid=secure-banner]', { timeout: 15000 });
   await charlie.waitForSelector('[data-testid=channel-general]', { timeout: 20000 });
   // Server name reaches charlie via the invite-owner's meta rebroadcast.
   await charlie.waitForFunction(
@@ -212,9 +227,11 @@ try {
   const imported = await importCtx.newPage();
   imported.on('pageerror', (e) => console.error('[import pageerror]', e.message));
   await imported.goto(base);
-  await imported.click('text=restore');
+  await imported.click('[data-testid=tab-signin]');
+  await imported.fill('[data-testid=signin-handle]', 'alice');
+  await imported.click('summary');
   await imported.fill('[data-testid=paste-key]', aliceKey);
-  await imported.click('[data-testid=restore-identity]');
+  await imported.click('[data-testid=signin-submit]');
   await imported.waitForSelector('.empty-state', { timeout: 15000 });
   const importedText = await imported.textContent('.empty-state');
   if (!importedText.includes('alice')) throw new Error('pasted identity key did not restore alice');
@@ -305,7 +322,7 @@ try {
   await daveCtx.grantPermissions(['microphone'], { origin: `http://127.0.0.1:${HTTP}` });
   const dave = await daveCtx.newPage();
   dave.on('pageerror', (e) => console.error('[dave pageerror]', e.message));
-  await onboard(dave, 'dave', inviteUrl2);
+  await joinViaInvite(dave, 'dave', inviteUrl2);
   await dave.waitForSelector('[data-testid=voice-join-lounge]', { timeout: 20000 });
   await dave.click('[data-testid=voice-join-lounge]');
   await dave.waitForFunction(
@@ -330,12 +347,91 @@ try {
     { timeout: 15000 }
   );
 
+  console.log('19. charlie secures the deferred account with a password');
+  await charlie.click('[data-testid=secure-now]');
+  await charlie.fill('[data-testid=secure-password]', 'tyre pressures at dawn');
+  await charlie.click('[data-testid=secure-password-submit]');
+  await charlie.waitForFunction(
+    () => !document.querySelector('[data-testid=secure-banner]'),
+    { timeout: 30000 }
+  );
+
+  console.log('20. fresh profile signs in as charlie with username + password');
+  const pwCtx = await browser.newContext();
+  const pwPage = await pwCtx.newPage();
+  pwPage.on('pageerror', (e) => console.error('[pw pageerror]', e.message));
+  await pwPage.goto(base);
+  await pwPage.click('[data-testid=tab-signin]');
+  await pwPage.fill('[data-testid=signin-handle]', 'charlie');
+  await pwPage.fill('[data-testid=signin-password]', 'tyre pressures at dawn');
+  await pwPage.click('[data-testid=signin-submit]');
+  await pwPage.waitForSelector('.empty-state', { timeout: 30000 });
+  if (!(await pwPage.textContent('.empty-state')).includes('charlie')) {
+    throw new Error('password sign-in did not restore charlie');
+  }
+  // Wrong password must fail without leaking the vault.
+  const pw2Ctx = await browser.newContext();
+  const pw2 = await pw2Ctx.newPage();
+  await pw2.goto(base);
+  await pw2.click('[data-testid=tab-signin]');
+  await pw2.fill('[data-testid=signin-handle]', 'charlie');
+  await pw2.fill('[data-testid=signin-password]', 'not the password');
+  await pw2.click('[data-testid=signin-submit]');
+  await pw2.waitForSelector('.error', { timeout: 30000 });
+
+  console.log('21. passkey: register with PRF, wipe, sign back in');
+  const erinCtx = await browser.newContext();
+  const erin = await erinCtx.newPage();
+  erin.on('pageerror', (e) => console.error('[erin pageerror]', e.message));
+  const cdp = await erinCtx.newCDPSession(erin);
+  await cdp.send('WebAuthn.enable');
+  let prfOk = true;
+  try {
+    await cdp.send('WebAuthn.addVirtualAuthenticator', {
+      options: {
+        protocol: 'ctap2',
+        transport: 'internal',
+        hasResidentKey: true,
+        hasUserVerification: true,
+        isUserVerified: true,
+        hasPrf: true,
+        automaticPresenceSimulation: true,
+      },
+    });
+  } catch (e) {
+    prfOk = false;
+    console.log(`   SKIPPED: virtual authenticator without PRF support (${e.message})`);
+  }
+  if (prfOk) {
+    await onboard(erin, 'erin', localhostBase);
+    await erin.click('[data-testid=secure-open-empty]');
+    await erin.click('[data-testid=secure-passkey]');
+    await erin.waitForSelector('text=account secured with a passkey', { timeout: 30000 });
+    // "New device", same (synced) passkey: wipe local state, sign in.
+    await erin.evaluate(() => {
+      localStorage.clear();
+      return new Promise((resolve) => {
+        const req = indexedDB.deleteDatabase('e2ee-client');
+        req.onsuccess = req.onerror = req.onblocked = () => resolve();
+      });
+    });
+    await erin.goto(localhostBase);
+    await erin.click('[data-testid=tab-signin]');
+    await erin.fill('[data-testid=signin-handle]', 'erin');
+    await erin.click('[data-testid=signin-passkey]');
+    await erin.waitForSelector('.empty-state', { timeout: 30000 });
+    if (!(await erin.textContent('.empty-state')).includes('erin')) {
+      throw new Error('passkey sign-in did not restore erin');
+    }
+  }
+
   console.log('\nPASS: full client journey — onboarding, E2EE chat, channels,');
   console.log('      IndexedDB persistence, recovery, invite-link external-commit');
   console.log('      join with unverified badge, localStorage identity survival,');
   console.log('      plain key export/import, encrypted attachments, safety');
-  console.log('      numbers, service-worker registration, and E2EE-signaled');
-  console.log('      mesh voice (2-way and 3-way, MLS-authenticated DTLS)');
+  console.log('      numbers, service-worker registration, E2EE-signaled mesh');
+  console.log('      voice, deferred invite onboarding, password vault sign-in,');
+  console.log('      and passkey (WebAuthn PRF) vault sign-in');
   await browser.close();
 } catch (e) {
   failed = true;

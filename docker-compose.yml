@@ -1,0 +1,43 @@
+# quorum + postgres. `docker compose up` and open http://localhost:9601.
+#
+# For anything beyond localhost, set RP_ID/RP_ORIGIN to the public origin
+# you serve from (passkeys are bound to it) and terminate TLS in front —
+# WebAuthn and getUserMedia require a secure context off localhost.
+services:
+  quorum:
+    build: .
+    ports:
+      - "9601:9601"
+    environment:
+      DATABASE_URL: postgres://quorum:quorum@db/quorum
+      RP_ID: ${RP_ID:-localhost}
+      RP_ORIGIN: ${RP_ORIGIN:-http://localhost:9601}
+      # Generate once and keep, or push subscriptions die on restart:
+      #   openssl ecparam -genkey -name prime256v1 | openssl ec -no_public \
+      #     -outform DER 2>/dev/null | tail -c 32 | basenc --base64url | tr -d '='
+      VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
+    volumes:
+      - blobs:/data
+    depends_on:
+      db:
+        condition: service_healthy
+    restart: unless-stopped
+
+  db:
+    image: postgres:16
+    environment:
+      POSTGRES_USER: quorum
+      POSTGRES_PASSWORD: quorum
+      POSTGRES_DB: quorum
+    volumes:
+      - pgdata:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U quorum"]
+      interval: 3s
+      timeout: 3s
+      retries: 15
+    restart: unless-stopped
+
+volumes:
+  blobs:
+  pgdata:

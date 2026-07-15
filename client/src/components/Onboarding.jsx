@@ -1,67 +1,101 @@
 import React, { useState } from 'react';
 import { generateCode, wrapIdentity, unwrapIdentity } from '../lib/recovery.js';
 
-// Identity creation + the recovery-key gate. The recovery step is not
-// skippable: losing the identity key means losing the account forever
-// (the relay has pinned it), so the file must leave the browser first.
+// Three ways in:
+//  - invite fast path: link-holders pick a handle and are in the group in
+//    seconds; securing the account is deferred (nagging banner inside)
+//  - new identity: keypair + forced recovery-key export
+//  - sign in: username + password or passkey against the relay vault;
+//    advanced: paste an identity key / recovery file + code
 export default function Onboarding({ controller }) {
-  const [mode, setMode] = useState('create'); // create | restore
+  const invited = !!controller.pendingInvite;
+  const [mode, setMode] = useState('create'); // create | signin
   const [step, setStep] = useState('name'); // name | recovery
   const [name, setName] = useState('');
   const [busy, setBusy] = useState(false);
+  const [busyText, setBusyText] = useState(null);
   const [error, setError] = useState(null);
   const [recovery, setRecovery] = useState(null); // {code, url, filename}
   const [downloaded, setDownloaded] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
+  const [password, setPassword] = useState('');
   const [restoreFile, setRestoreFile] = useState(null);
   const [restoreCode, setRestoreCode] = useState('');
   const [pastedKey, setPastedKey] = useState('');
 
+  const validHandle = (h) => /^[a-z0-9_.-]{2,32}$/.test(h);
+
+  async function run(label, fn) {
+    setBusy(true);
+    setBusyText(label);
+    setError(null);
+    try {
+      await fn();
+    } catch (e) {
+      setError(e.message);
+      setBusy(false);
+      setBusyText(null);
+    }
+  }
+
+  async function joinFast(e) {
+    e.preventDefault();
+    const handle = name.trim().toLowerCase();
+    if (!validHandle(handle)) return setError('handle: 2–32 chars, a-z 0-9 _ . -');
+    await run('creating keys…', async () => {
+      await controller.createIdentity(handle);
+      // Deferred securing: the banner inside nags until a vault exists.
+      await controller.completeOnboarding(false);
+    });
+  }
+
   async function createIdentity(e) {
     e.preventDefault();
     const handle = name.trim().toLowerCase();
-    if (!/^[a-z0-9_.-]{2,32}$/.test(handle)) {
-      setError('handle: 2–32 chars, a-z 0-9 _ . -');
-      return;
-    }
-    setBusy(true);
-    setError(null);
-    try {
+    if (!validHandle(handle)) return setError('handle: 2–32 chars, a-z 0-9 _ . -');
+    await run('generating keys…', async () => {
       const identity = await controller.createIdentity(handle);
       const code = generateCode();
       const fileBytes = await wrapIdentity(identity, code);
       const url = URL.createObjectURL(new Blob([fileBytes], { type: 'application/octet-stream' }));
       setRecovery({ code, url, filename: `recovery-${handle}.e2ee` });
       setStep('recovery');
-    } catch (e2) {
-      setError(e2.message);
-    } finally {
       setBusy(false);
-    }
+      setBusyText(null);
+    });
   }
 
-  async function restore(e) {
+  async function signIn(e) {
     e.preventDefault();
-    setBusy(true);
-    setError(null);
-    try {
-      let identity;
-      if (pastedKey.trim()) {
-        identity = Uint8Array.from(atob(pastedKey.trim()), (c) => c.charCodeAt(0));
-      } else if (restoreFile && restoreCode.trim()) {
-        const bytes = new Uint8Array(await restoreFile.arrayBuffer());
-        identity = await unwrapIdentity(bytes, restoreCode.trim());
-      } else {
-        setError('paste an identity key, or provide recovery file + code');
-        setBusy(false);
-        return;
-      }
-      await controller.restoreIdentity(identity);
-      await controller.completeOnboarding();
-    } catch {
-      setError('could not restore — wrong code, bad key, or corrupt file');
-      setBusy(false);
+    const handle = name.trim().toLowerCase();
+    if (!validHandle(handle)) return setError('enter your handle first');
+    if (pastedKey.trim()) {
+      return run('restoring…', async () => {
+        const identity = Uint8Array.from(atob(pastedKey.trim()), (c) => c.charCodeAt(0));
+        await controller.restoreIdentity(identity);
+        await controller.completeOnboarding(true);
+      });
     }
+    if (restoreFile && restoreCode.trim()) {
+      return run('decrypting…', async () => {
+        const bytes = new Uint8Array(await restoreFile.arrayBuffer());
+        const identity = await unwrapIdentity(bytes, restoreCode.trim()).catch(() => {
+          throw new Error('could not decrypt — wrong code or corrupt file');
+        });
+        await controller.restoreIdentity(identity);
+        await controller.completeOnboarding(true);
+      });
+    }
+    if (!password) return setError('enter your password (or use the passkey button)');
+    await run('deriving keys… (a second or two)', () =>
+      controller.signInWithPassword(handle, password)
+    );
+  }
+
+  async function signInPasskey() {
+    const handle = name.trim().toLowerCase();
+    if (!validHandle(handle)) return setError('enter your handle first');
+    await run('waiting for your passkey…', () => controller.signInWithPasskey(handle));
   }
 
   if (step === 'recovery') {
@@ -70,9 +104,9 @@ export default function Onboarding({ controller }) {
         <div className="card" data-testid="recovery-step">
           <h1>save your recovery key</h1>
           <p className="muted">
-            This file plus this code is the <em>only</em> way back into your account if this
-            device is lost or the browser clears its storage. The server cannot reset it —
-            it never sees your keys.
+            This file plus this code gets your account back if this device is lost. The
+            server cannot reset it — it never sees your keys. (You can also add a passkey
+            or password later, from inside.)
           </p>
           <div className="recovery-code" data-testid="recovery-code">{recovery.code}</div>
           <a
@@ -97,17 +131,46 @@ export default function Onboarding({ controller }) {
             className="button primary"
             disabled={!downloaded || !confirmed || busy}
             data-testid="enter-app"
-            onClick={async () => {
-              setBusy(true);
-              await controller.completeOnboarding();
-            }}
+            onClick={() => run('entering…', () => controller.completeOnboarding(true))}
           >
             enter
           </button>
-          <p className="fineprint muted">
-            What this protects: your identity key (your name on the relay). Group history
-            and live message keys stay on this device only.
+        </div>
+      </div>
+    );
+  }
+
+  if (invited) {
+    return (
+      <div className="centered">
+        <div className="card">
+          <h1>you’ve been invited</h1>
+          <p className="muted">
+            Pick a handle and you’re in — encrypted end-to-end from the first message.
+            You can secure the account right after.
           </p>
+          <form onSubmit={joinFast}>
+            <label className="field">
+              <span>handle</span>
+              <input
+                autoFocus
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="e.g. sam"
+                data-testid="handle-input"
+              />
+            </label>
+            <button className="button primary" disabled={busy} data-testid="join-fast">
+              {busyText ?? 'join'}
+            </button>
+          </form>
+          <p className="fineprint muted">
+            Already have an account here?{' '}
+            <button className="linkish" onClick={() => (location.href = location.pathname)}>
+              sign in first, then use the link again
+            </button>
+          </p>
+          {error && <p className="error">{error}</p>}
         </div>
       </div>
     );
@@ -122,8 +185,8 @@ export default function Onboarding({ controller }) {
           <button className={mode === 'create' ? 'tab active' : 'tab'} onClick={() => setMode('create')}>
             new identity
           </button>
-          <button className={mode === 'restore' ? 'tab active' : 'tab'} onClick={() => setMode('restore')}>
-            restore
+          <button className={mode === 'signin' ? 'tab active' : 'tab'} data-testid="tab-signin" onClick={() => setMode('signin')}>
+            sign in
           </button>
         </div>
         {mode === 'create' ? (
@@ -139,45 +202,75 @@ export default function Onboarding({ controller }) {
               />
             </label>
             <button className="button primary" disabled={busy} data-testid="create-identity">
-              {busy ? 'generating keys…' : 'create'}
+              {busyText ?? 'create'}
             </button>
             <p className="fineprint muted">
-              Your identity is a keypair generated in this browser. No email, no password —
-              and no account recovery except the key file you’re about to save.
+              Your identity is a keypair generated in this browser. No email — recovery is
+              the key file you’re about to save, plus any passkey/password you add later.
             </p>
           </form>
         ) : (
-          <form onSubmit={restore}>
+          <form onSubmit={signIn}>
             <label className="field">
-              <span>identity key (paste)</span>
-              <textarea
-                className="keybox small"
-                value={pastedKey}
-                onChange={(e) => setPastedKey(e.target.value)}
-                placeholder="paste an exported identity key…"
-                data-testid="paste-key"
-              />
-            </label>
-            <div className="divider muted">or recovery file + code</div>
-            <label className="field">
-              <span>recovery file</span>
-              <input type="file" onChange={(e) => setRestoreFile(e.target.files[0] ?? null)} data-testid="restore-file" />
-            </label>
-            <label className="field">
-              <span>recovery code</span>
+              <span>handle</span>
               <input
-                value={restoreCode}
-                onChange={(e) => setRestoreCode(e.target.value)}
-                placeholder="XXXX-XXXX-XXXX-XXXX"
-                data-testid="restore-code"
+                value={name}
+                onChange={(e) => setName(e.target.value)}
+                placeholder="your handle"
+                data-testid="signin-handle"
               />
             </label>
-            <button className="button primary" disabled={busy} data-testid="restore-identity">
-              {busy ? 'decrypting…' : 'restore identity'}
-            </button>
+            <label className="field">
+              <span>password</span>
+              <input
+                type="password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                data-testid="signin-password"
+              />
+            </label>
+            <div className="row">
+              <button className="button primary" disabled={busy} data-testid="signin-submit">
+                {busyText ?? 'sign in'}
+              </button>
+              <button
+                type="button"
+                className="button"
+                disabled={busy}
+                data-testid="signin-passkey"
+                onClick={signInPasskey}
+              >
+                use passkey
+              </button>
+            </div>
+            <details className="advanced">
+              <summary className="muted">advanced: identity key or recovery file</summary>
+              <label className="field">
+                <span>identity key (paste)</span>
+                <textarea
+                  className="keybox small"
+                  value={pastedKey}
+                  onChange={(e) => setPastedKey(e.target.value)}
+                  data-testid="paste-key"
+                />
+              </label>
+              <label className="field">
+                <span>recovery file</span>
+                <input type="file" onChange={(e) => setRestoreFile(e.target.files[0] ?? null)} data-testid="restore-file" />
+              </label>
+              <label className="field">
+                <span>recovery code</span>
+                <input
+                  value={restoreCode}
+                  onChange={(e) => setRestoreCode(e.target.value)}
+                  placeholder="XXXX-XXXX-XXXX-XXXX"
+                  data-testid="restore-code"
+                />
+              </label>
+            </details>
             <p className="fineprint muted">
-              Restores your identity and account name. Old group messages cannot come back —
-              their keys lived only on the lost device. Ask to be re-added.
+              Signing in restores your identity, not old messages — their keys lived only
+              on the previous device. Ask to be re-added to groups.
             </p>
           </form>
         )}

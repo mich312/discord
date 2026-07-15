@@ -32,6 +32,23 @@ pub struct InviteRecord {
     pub uses: u64,
 }
 
+/// Account vault: the user's identity bundle, encrypted client-side under
+/// a key the server never sees (Argon2id wrap half, or a passkey's PRF
+/// output). `verifier` gates blob retrieval for the password kind; the
+/// passkey kind gates on a WebAuthn assertion against `credential`.
+#[derive(Debug, Clone)]
+pub struct VaultRecord {
+    /// "password" | "passkey"
+    pub kind: String,
+    pub salt: Vec<u8>,
+    /// SHA-256 of the client's auth key (password kind; empty otherwise).
+    pub verifier: Vec<u8>,
+    /// The encrypted identity bundle. Opaque.
+    pub wrapped: Vec<u8>,
+    /// Serialized webauthn credential (passkey kind).
+    pub credential: Option<String>,
+}
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum RegisterOutcome {
     /// User was unknown; this pubkey is now pinned.
@@ -83,6 +100,10 @@ pub trait Store: Send + Sync {
     /// Remove and return all Welcomes queued for `to`.
     async fn take_welcomes(&self, to: &str) -> Result<Vec<StoredWelcome>, StoreError>;
 
+    // --- account vaults ---
+    async fn set_vault(&self, user: &str, vault: VaultRecord) -> Result<(), StoreError>;
+    async fn get_vault(&self, user: &str) -> Result<Option<VaultRecord>, StoreError>;
+
     // --- push subscriptions ---
     async fn put_push_subscription(
         &self,
@@ -113,6 +134,7 @@ struct MemoryInner {
     invites: HashMap<String, InviteRecord>,
     /// user -> endpoint -> subscription json
     push_subs: HashMap<String, HashMap<String, String>>,
+    vaults: HashMap<String, VaultRecord>,
 }
 
 #[derive(Default)]
@@ -190,6 +212,17 @@ impl Store for MemoryStore {
         let inner = self.inner.lock().unwrap();
         let data = inner.groups.get(group).ok_or(StoreError::NoSuchGroup)?;
         Ok(data.members.clone())
+    }
+
+    async fn set_vault(&self, user: &str, vault: VaultRecord) -> Result<(), StoreError> {
+        let mut inner = self.inner.lock().unwrap();
+        inner.vaults.insert(user.to_string(), vault);
+        Ok(())
+    }
+
+    async fn get_vault(&self, user: &str) -> Result<Option<VaultRecord>, StoreError> {
+        let inner = self.inner.lock().unwrap();
+        Ok(inner.vaults.get(user).cloned())
     }
 
     async fn put_push_subscription(

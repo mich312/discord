@@ -24,6 +24,13 @@ impl AddResult {
     }
 }
 
+/// Argon2id(password, salt) -> 64 bytes: [0..32] auth key (server-checked
+/// hash), [32..64] wrap key (client-side identity encryption).
+#[wasm_bindgen(js_name = deriveLoginKeys)]
+pub fn derive_login_keys(password: &str, salt: &[u8]) -> Result<Vec<u8>, JsError> {
+    Ok(crate::client::derive_login_keys(password, salt)?)
+}
+
 #[wasm_bindgen]
 pub struct ExternalJoin {
     group: String,

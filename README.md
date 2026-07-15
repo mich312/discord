@@ -39,6 +39,13 @@ threat-model sections still apply verbatim.
 - **Web Push** — offline members get an encrypted nudge (group id only —
   content never exists server-side). Requires `VAPID_PRIVATE_KEY` in
   production.
+- **Accounts (passkeys / password)** — sign in from a new device without
+  moving key files. The identity bundle is parked on the relay *encrypted
+  client-side*: under a passkey's PRF output (nothing brute-forceable
+  anywhere), or the wrap half of Argon2id(password) — the auth half is
+  all the server ever checks. Invite-link joiners onboard in seconds and
+  are nagged to secure the account afterwards. Signing in restores who
+  you are, never old messages — those keys lived on the old device.
 
 ## Architecture
 
@@ -60,34 +67,51 @@ docs say so plainly rather than overclaiming.
 
 ## Running it
 
-Everything is designed to run on a single VM.
+### Docker (recommended)
 
 ```sh
-# prerequisites: rust + wasm32 target, wasm-pack, node 20+, postgres (optional)
-rustup target add wasm32-unknown-unknown
-
-# 1. crypto core → WASM
-crypto-core/build-wasm.sh
-
-# 2. relay (in-memory store without DATABASE_URL — fine for trying it out)
-cargo run -p relay --release
-
-# 3. client
-cd client && npm install && npm run build
-node e2e/serve.mjs        # or serve dist/ with anything static
+docker compose up --build     # quorum + postgres
+# open http://localhost:9601
 ```
 
-Open `http://<host>:9700`, create an identity, create a server, share an
-invite link.
+Or just the app container (in-memory store, nothing survives restarts):
+
+```sh
+docker build -t quorum .
+docker run -p 9601:9601 -v quorum-data:/data quorum
+```
+
+One container serves everything: the relay, the client, attachments, and
+account sign-in on a single port. For any host other than localhost, set
+`RP_ID`/`RP_ORIGIN` to your public origin (passkeys are bound to it) and
+put TLS in front — WebAuthn and microphone access require a secure
+context off localhost.
+
+### From source
+
+```sh
+# prerequisites: rust + wasm32 target, wasm-pack, node 20+
+crypto-core/build-wasm.sh
+(cd client && npm install && npm run build)
+CLIENT_DIR=client/dist cargo run -p relay --release
+# open http://localhost:9601
+```
+
+For client dev with hot reload: `cargo run -p relay` in one shell,
+`npm run dev` in another, and open the vite URL with
+`?relay=ws://localhost:9601/ws` (the client defaults to a same-origin
+relay).
 
 ### Relay configuration (env)
 
 | Variable | Default | Notes |
 |---|---|---|
-| `RELAY_PORT` | `9601` | WebSocket + blob HTTP port |
+| `RELAY_PORT` / `RELAY_BIND` | `9601` / `0.0.0.0` | one port for ws, blobs, accounts, and the client |
+| `CLIENT_DIR` | unset | serve the built client from this directory |
 | `DATABASE_URL` | unset | Postgres; unset = in-memory (nothing survives restart) |
 | `BLOB_DIR` | `./blobs` | encrypted attachment storage on disk |
 | `VAPID_PRIVATE_KEY` | unset | base64url P-256 scalar; unset = ephemeral (push subscriptions die on restart) |
+| `RP_ID` / `RP_ORIGIN` | `localhost` / `http://localhost:9601` | WebAuthn relying party — must match the origin users load the client from |
 
 For real deployments: terminate TLS in front of the relay (`wss://`),
 serve the client over HTTPS with the CSP/SRI hardening from plan §5.1,
@@ -134,6 +158,10 @@ joins, identity recovery, encrypted attachments, safety numbers, and
 - **One device per identity** — cross-device sync is out of scope (each
   device would be its own MLS leaf); recovery restores identity, not
   group ratchets.
+- **Password vaults can be brute-forced by the server** — only for weak
+  passwords, and only offline against the encrypted bundle (Argon2id,
+  19 MiB/t=2). Passkey vaults have no such surface. The sign-in params
+  endpoint also confirms whether a username exists.
 - **Browser code delivery is the weak point** (plan §5.1) — SRI, strict
   CSP, and reproducible builds mitigate broad silent attacks, not
   targeted ones. State it, don't hide it.

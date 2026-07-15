@@ -537,6 +537,25 @@ fn members_of(group: &MlsGroup) -> Vec<String> {
         .collect()
 }
 
+/// Derive the two halves of a password login from Argon2id: the first 32
+/// bytes are the *auth key* (sent to the relay, which stores only a hash
+/// of it), the last 32 the *wrap key* (encrypts the identity bundle and
+/// never leaves the client). The password itself is never transmitted.
+/// The honest caveat stands: a malicious relay holding the wrapped bundle
+/// can brute-force weak passwords offline — Argon2id (19 MiB, t=2) makes
+/// that expensive, not impossible.
+pub fn derive_login_keys(password: &str, salt: &[u8]) -> Result<Vec<u8>, CoreError> {
+    use argon2::{Algorithm, Argon2, Params, Version};
+    let params = Params::new(19_456, 2, 1, Some(64))
+        .map_err(|e| CoreError::Mls(e.to_string()))?;
+    let argon = Argon2::new(Algorithm::Argon2id, Version::V0x13, params);
+    let mut out = vec![0u8; 64];
+    argon
+        .hash_password_into(password.as_bytes(), salt, &mut out)
+        .map_err(|e| CoreError::Mls(e.to_string()))?;
+    Ok(out)
+}
+
 fn identity_of(credential: &Credential) -> Option<String> {
     BasicCredential::try_from(credential.clone())
         .ok()

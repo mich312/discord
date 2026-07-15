@@ -4,16 +4,18 @@
 //
 // Mutating commands piggyback a fresh full-state snapshot (`state`) on
 // their result so the main thread can persist after every ratchet turn.
-import init, { Client } from '/pkg/crypto_core.js';
+import init, { Client, deriveLoginKeys } from '/pkg/crypto_core.js';
 
 let client = null;
+let initPromise = null;
+const ensureInit = () => (initPromise ??= init());
 
 const snapshot = () => client.exportState();
 
 const commands = {
   /** Create fresh, restore from device snapshot, or from recovery identity. */
   async boot({ name, state, identity }) {
-    await init();
+    await ensureInit();
     if (state) client = Client.fromState(state);
     else if (identity) client = Client.fromIdentity(identity);
     else client = new Client(name);
@@ -21,6 +23,11 @@ const commands = {
   },
   pubkey() {
     return client.signaturePublicKey();
+  },
+  // Pre-boot: sign-in derives keys before any identity exists locally.
+  async deriveLoginKeys({ password, salt }) {
+    await ensureInit();
+    return deriveLoginKeys(password, salt);
   },
   sign({ bytes }) {
     return client.sign(bytes);

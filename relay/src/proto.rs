@@ -52,6 +52,21 @@ pub enum ClientMsg {
     /// presence (MLS-encrypted like everything else) — transient by
     /// nature, so replaying it on catch-up would only confuse clients.
     Ephemeral { rid: u64, group: String, payload: String },
+    /// Store/replace this user's account vault (client-side-encrypted
+    /// identity bundle + retrieval gate). Authenticated users only.
+    VaultSet {
+        rid: u64,
+        kind: String,
+        salt: String,
+        verifier: String,
+        wrapped: String,
+        credential: Option<String>,
+    },
+    /// Is this account secured, and how?
+    VaultStatus { rid: u64 },
+    /// WebAuthn registration ceremony (authenticated side).
+    PasskeyRegisterStart { rid: u64 },
+    PasskeyRegisterFinish { rid: u64, credential: String },
     /// The server's VAPID public key (browser `applicationServerKey`).
     PushInfo { rid: u64 },
     /// Store a PushSubscription (its JSON serialization) for this user.
@@ -71,6 +86,9 @@ pub enum ServerMsg {
     Invite { rid: u64, group: String, payload: String },
     PushInfo { rid: u64, pubkey: String },
     Eph { group: String, sender: String, payload: String },
+    VaultStatus { rid: u64, kind: Option<String> },
+    /// WebAuthn ceremony payloads (JSON passthrough).
+    Passkey { rid: u64, payload: String },
 }
 
 pub const AUTH_CONTEXT: &[u8] = b"relay-auth-v1";

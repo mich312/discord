@@ -15,6 +15,14 @@
 import { b64, Relay } from './relay.js';
 import { VoiceManager } from './voice.js';
 import {
+  derivePrfSecret,
+  parseCreationOptions,
+  parseRequestOptions,
+  prfSecret,
+  serializeAssertion,
+  serializeRegistration,
+} from './webauthn.js';
+import {
   b64url,
   buildInviteUrl,
   decryptBlob,
@@ -98,8 +106,9 @@ export class Controller {
     return localStorage.getItem(IDENTITY_LS_KEY);
   }
 
-  async completeOnboarding() {
+  async completeOnboarding(securedLocal = true) {
     await this.db.kvPut('session', { name: this.me, createdAt: Date.now() });
+    await this.db.kvPut('securedLocal', securedLocal);
     // Ask the browser not to evict our keys; best-effort (plan §5.2).
     try {
       await navigator.storage?.persist?.();
@@ -150,6 +159,7 @@ export class Controller {
         for (const record of this.servers.values()) {
           this.voice.probe(record.id);
         }
+        this.checkVault();
         // Refresh the push subscription silently if permission was already
         // granted (endpoints rotate; VAPID keys may too).
         if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
@@ -391,6 +401,133 @@ export class Controller {
     await this.sendContent(serverId, { k: 'meta', name: record.name, channels: record.channels });
     await this.db.serverPut(record);
     this.dispatch({ type: 'servers', servers: this.snapshotServers() });
+  }
+
+  // === account vaults =====================================================
+
+  async checkVault() {
+    try {
+      const reply = await this.relay.request({ t: 'vault_status' });
+      const securedLocal = (await this.db.kvGet('securedLocal')) ?? true;
+      this.dispatch({ type: 'vault', kind: reply.kind ?? null, securedLocal });
+    } catch (e) {
+      console.warn(`vault status: ${e.message}`);
+    }
+  }
+
+  identityBytes() {
+    const stored = this.identityKeyString();
+    if (!stored) throw new Error('no identity on this device');
+    return b64.dec(stored);
+  }
+
+  async markSecuredLocal() {
+    await this.db.kvPut('securedLocal', true);
+    await this.checkVault();
+  }
+
+  /** Password vault: Argon2id splits into an auth half (relay stores only
+      its hash) and a wrap half (encrypts the identity, never leaves). */
+  async secureWithPassword(password) {
+    if ((password ?? '').length < 8) throw new Error('password: 8 characters minimum');
+    const salt = crypto.getRandomValues(new Uint8Array(16));
+    const keys = new Uint8Array(await this.crypto('deriveLoginKeys', { password, salt }));
+    const authKey = keys.slice(0, 32);
+    const wrapKey = keys.slice(32);
+    const verifier = new Uint8Array(await crypto.subtle.digest('SHA-256', authKey));
+    const wrapped = await encryptBlob(wrapKey, this.identityBytes());
+    await this.relay.request({
+      t: 'vault_set',
+      kind: 'password',
+      salt: b64.enc(salt),
+      verifier: b64.enc(verifier),
+      wrapped: b64.enc(wrapped),
+      credential: null,
+    });
+    await this.markSecuredLocal();
+  }
+
+  /** Passkey vault: register a WebAuthn credential, derive a wrap key via
+      the PRF extension, park the wrapped identity. Nothing brute-forceable
+      is stored anywhere. */
+  async secureWithPasskey() {
+    if (!navigator.credentials?.create) throw new Error('WebAuthn unavailable in this browser');
+    const start = await this.relay.request({ t: 'passkey_register_start' });
+    const created = await navigator.credentials.create({
+      publicKey: parseCreationOptions(JSON.parse(start.payload)),
+    });
+    const finish = await this.relay.request({
+      t: 'passkey_register_finish',
+      credential: JSON.stringify(serializeRegistration(created)),
+    });
+    const prfSalt = crypto.getRandomValues(new Uint8Array(32));
+    const secret = await derivePrfSecret(created.rawId, prfSalt);
+    if (!secret) {
+      throw new Error('this authenticator does not support the PRF extension — use a password instead');
+    }
+    const wrapped = await encryptBlob(secret, this.identityBytes());
+    await this.relay.request({
+      t: 'vault_set',
+      kind: 'passkey',
+      salt: b64.enc(prfSalt),
+      verifier: b64.enc(new Uint8Array(0)),
+      wrapped: b64.enc(wrapped),
+      credential: finish.payload,
+    });
+    await this.markSecuredLocal();
+  }
+
+  /** Pre-boot sign-in on a fresh device: fetch the vault, unwrap locally,
+      adopt the identity. Groups don't transfer — only who you are. */
+  async signInWithPassword(user, password) {
+    const params = await this.accountFetch(`/account/${encodeURIComponent(user)}/params`);
+    if (params.kind !== 'password') throw new Error(`this account uses ${params.kind} sign-in`);
+    const salt = b64.dec(params.salt);
+    const keys = new Uint8Array(await this.crypto('deriveLoginKeys', { password, salt }));
+    const reply = await this.accountFetch(`/account/${encodeURIComponent(user)}/login`, {
+      auth_key: b64.enc(keys.slice(0, 32)),
+    });
+    const identity = await decryptBlob(keys.slice(32), b64.dec(reply.wrapped)).catch(() => {
+      throw new Error('could not decrypt vault — corrupt data');
+    });
+    await this.restoreIdentity(identity);
+    await this.completeOnboarding(true);
+  }
+
+  async signInWithPasskey(user) {
+    const params = await this.accountFetch(`/account/${encodeURIComponent(user)}/params`);
+    if (params.kind !== 'passkey') throw new Error(`this account uses ${params.kind} sign-in`);
+    const prfSalt = b64.dec(params.salt);
+    const challenge = await this.accountFetch(
+      `/account/${encodeURIComponent(user)}/passkey/challenge`,
+      {}
+    );
+    const assertion = await navigator.credentials.get({
+      publicKey: parseRequestOptions(challenge, prfSalt),
+    });
+    const secret = prfSecret(assertion);
+    if (!secret) throw new Error('authenticator returned no PRF secret');
+    const reply = await this.accountFetch(`/account/${encodeURIComponent(user)}/passkey/login`, {
+      assertion: serializeAssertion(assertion),
+    });
+    const identity = await decryptBlob(secret, b64.dec(reply.wrapped)).catch(() => {
+      throw new Error('could not decrypt vault — corrupt data');
+    });
+    await this.restoreIdentity(identity);
+    await this.completeOnboarding(true);
+  }
+
+  async accountFetch(path, body) {
+    const res = await fetch(`${this.httpBase()}${path}`, {
+      method: body === undefined ? 'GET' : 'POST',
+      headers: body === undefined ? {} : { 'content-type': 'application/json' },
+      body: body === undefined ? undefined : JSON.stringify(body),
+    });
+    if (!res.ok) {
+      const text = await res.text();
+      throw new Error(res.status === 404 ? 'no such account' : text || `HTTP ${res.status}`);
+    }
+    return res.json();
   }
 
   // === attachments ========================================================
