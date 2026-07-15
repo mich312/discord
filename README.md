@@ -1,66 +1,139 @@
-# Encrypted Group Chat
+# quorum — encrypted group chat
 
-Small, persistent, invite-only groups (10–50 people) formed around something
-specific — a race team, a photo club, a project. **Discord's skeleton,
-Signal's social model.**
+Small, persistent, invite-only groups (10–50 people) formed around
+something specific — a race team, a photo club, a project. **Discord's
+skeleton, Signal's social model.** End-to-end encrypted with
+**MLS (RFC 9420)**; the server stores ciphertext it can never read.
 
-This is not a public server you stumble into. End-to-end encryption forbids
-scrollback for new members, so any positioning that depends on
-lurking-then-joining is structurally impossible. The differentiator
-(encryption) is invisible; the costs (no history, no server-side search, no
-content moderation) are visible. That trade works for groups that already
-want to be private — it does not work as a general Discord replacement.
+This is not a public server you stumble into. E2EE forbids scrollback for
+new members, so any positioning that depends on lurking-then-joining is
+structurally impossible. The differentiator (encryption) is invisible;
+the costs (no history for joiners, no server-side search, no content
+moderation) are visible — and the UI says so instead of hiding it.
 
-The full design and phased build order live in
-**[docs/BUILD_PLAN.md](docs/BUILD_PLAN.md)**. Read it before touching
-anything — every architectural choice downstream follows from the decision
-to build on **MLS (RFC 9420)**.
+The full design rationale lives in **[docs/BUILD_PLAN.md](docs/BUILD_PLAN.md)**;
+phases 1–7 of it are implemented. The plan's honest-assessment and
+threat-model sections still apply verbatim.
 
-## Architecture at a glance
+## What works
+
+- **Text channels** inside E2EE servers — channel structure and server
+  names travel *inside* the encryption; the relay never learns them.
+- **Invite links** (`?j=<id>#k=<key>`) — the decryption key rides in the
+  URL fragment, which browsers never transmit. Joining uses MLS External
+  Commits, so nobody has to be online to let you in. Link-joiners are
+  badged **unverified** until someone checks their safety number.
+- **Safety numbers** — symmetric 60-digit fingerprints per member pair,
+  derived from the MLS identity keys; verification is device-local
+  judgement and flips the badge to ✓.
+- **Attachments** — AES-GCM encrypted in the browser under a random
+  per-file key that travels inside the MLS message; the relay stores
+  opaque bytes on disk under unguessable ids.
+- **Voice channels** — audio-only WebRTC mesh (viable to ~6–8; a 1:1
+  call is a two-person channel). Signaling is MLS-encrypted and never
+  logged, which authenticates the DTLS fingerprints for free. Media is
+  peer-to-peer; the server carries none of it. No mic → listen-only.
+- **Persistence** — MLS state snapshots in IndexedDB survive reloads
+  with live ratchets; the identity key is mirrored to localStorage and
+  exportable (file, paste-string, or passphrase-wrapped recovery file).
+- **Web Push** — offline members get an encrypted nudge (group id only —
+  content never exists server-side). Requires `VAPID_PRIVATE_KEY` in
+  production.
+
+## Architecture
 
 | Component | Directory | Stack |
 |---|---|---|
-| Crypto core | [`crypto-core/`](crypto-core/) | Rust + OpenMLS, compiled to WASM, runs in a Web Worker |
-| Relay | [`relay/`](relay/) | Rust (axum), WebSocket; dumb ordered log + fan-out over opaque blobs; Postgres |
-| Web client | [`client/`](client/) | React + Vite; UI never touches keys (crypto worker + IndexedDB) |
-| Test harness | [`harness/`](harness/) | Bare browser page + two-tab Playwright e2e against the real relay (no product UI) |
+| Crypto core | [`crypto-core/`](crypto-core/) | Rust + OpenMLS → WASM, runs in a Web Worker |
+| Relay | [`relay/`](relay/) | Rust (axum), WebSocket; ordered log + fan-out over opaque blobs; Postgres or in-memory |
+| Web client | [`client/`](client/) | React + Vite; the UI never touches key material |
+| Test harness | [`harness/`](harness/) | Bare two-tab Playwright e2e against the relay (no product UI) |
 
 The relay is a **delivery service and ordered log**, nothing more: it
-authenticates connections, stores ciphertext keyed by
-`(group_id, epoch, seq)`, hosts pre-published KeyPackages, enforces
-per-group ordering, and fans out. It cannot read messages, membership, or
-invite blobs. It *can* observe metadata — who talks to whom, when, how
-often — and the docs say so plainly rather than overclaiming.
+authenticates connections (challenge-response against each user's pinned
+MLS identity key — no passwords), stores ciphertext keyed by
+`(group_id, epoch, seq)`, hosts pre-published KeyPackages and invite
+blobs, enforces per-group ordering, and fans out. It cannot read
+messages, membership, channel names, invite blobs, or call signaling.
+It *can* observe metadata — who talks to whom, when, how often — and the
+docs say so plainly rather than overclaiming.
 
-## Build order
+## Running it
+
+Everything is designed to run on a single VM.
+
+```sh
+# prerequisites: rust + wasm32 target, wasm-pack, node 20+, postgres (optional)
+rustup target add wasm32-unknown-unknown
+
+# 1. crypto core → WASM
+crypto-core/build-wasm.sh
+
+# 2. relay (in-memory store without DATABASE_URL — fine for trying it out)
+cargo run -p relay --release
+
+# 3. client
+cd client && npm install && npm run build
+node e2e/serve.mjs        # or serve dist/ with anything static
+```
+
+Open `http://<host>:9700`, create an identity, create a server, share an
+invite link.
+
+### Relay configuration (env)
+
+| Variable | Default | Notes |
+|---|---|---|
+| `RELAY_PORT` | `9601` | WebSocket + blob HTTP port |
+| `DATABASE_URL` | unset | Postgres; unset = in-memory (nothing survives restart) |
+| `BLOB_DIR` | `./blobs` | encrypted attachment storage on disk |
+| `VAPID_PRIVATE_KEY` | unset | base64url P-256 scalar; unset = ephemeral (push subscriptions die on restart) |
+
+For real deployments: terminate TLS in front of the relay (`wss://`),
+serve the client over HTTPS with the CSP/SRI hardening from plan §5.1,
+and run your own STUN/TURN if members sit behind hard NATs (TURN relays
+ciphertext only).
+
+## Testing
+
+```sh
+cargo test                                            # 27 tests, in-memory store
+TEST_DATABASE_URL=postgres://… cargo test             # + postgres contract tests
+cd client && npm run build && npm run e2e             # 18-step browser journey
+```
+
+The client e2e drives five real browser profiles through onboarding,
+E2EE chat, the no-scrollback guarantee, reload persistence, invite-link
+joins, identity recovery, encrypted attachments, safety numbers, and
+2-way + 3-way mesh voice calls.
+
+## Status against the plan
 
 | Phase | Work | Status |
 |---|---|---|
-| 1 | Rust core + OpenMLS → WASM; two browser tabs exchanging MLS messages via stub relay | **done** |
-| 2 | Relay: auth, KeyPackage store, ordered delivery, epoch handling | **done** |
-| 3 | Web client: rail, channels, messages, IndexedDB, recovery-key flow | **done** |
-| 4 | Invite links: encrypted GroupInfo blobs, external commits, unverified-member UI | **done** |
-| 5 | Attachments + safety-numbers UI | **done** |
-| 6 | Web Push + service worker | **done** |
-| 7 | Voice: 1:1 + audio mesh voice channels (≤~8), E2EE signaling over the relay | **done** |
-| 8 | Large group calls: LiveKit + SFrame keyed from the MLS exporter secret | not started — mesh covers small groups; SFU only if channels outgrow it |
+| 1 | Rust core + OpenMLS → WASM, two tabs exchanging MLS messages | done |
+| 2 | Relay: auth, KeyPackage store, ordered delivery, epoch handling | done |
+| 3 | Web client: rail, channels, messages, IndexedDB, recovery keys | done |
+| 4 | Invite links: encrypted GroupInfo, external commits, unverified UI | done |
+| 5 | Attachments + safety numbers | done |
+| 6 | Web Push + service worker | done |
+| 7 | Voice: 1:1 + audio mesh channels, E2EE signaling | done |
+| 8 | Large group calls (LiveKit + SFrame from the MLS exporter secret) | not started — mesh covers this product's group sizes; an SFU only pays off past ~8 concurrent speakers |
 
-Phases 1–7 are a coherent, shippable product. Phase 8 is where the
-infrastructure bill starts.
+## Known limitations (by design or honestly deferred)
 
-**Phase 1 is where this lives or dies** — not the crypto (OpenMLS handles
-that) but epoch management under unreliable clients: a tab closed for three
-weeks rejoining a group that has advanced 400 epochs. If Phase 1 takes six
-weeks instead of two, that's the reason, and it's normal.
-
-## Open decision (blocks Phase 1)
-
-The plan poses one scoping question that must be answered before writing
-code (see [§9 of the plan](docs/BUILD_PLAN.md#9-voice-the-scoping-question)):
-
-- **Encrypted small-group text** → ship through Phase 7 and stop. Coherent,
-  finishable, cheap to run.
-- **Actually Discord** → voice is the MVP and text is the sideshow.
-  Different build order, infra bill from day one, only ~40% shared work.
-
-The current phase ordering assumes the first answer.
+- **No scrollback for joiners** — inherent to forward secrecy; shown as a
+  permanent watermark, not an error.
+- **Metadata is visible to the relay** — who, when, how often, group
+  sizes, call participation. E2EE hides content, not traffic shape.
+- **Invite-link controls are weak** — expiry/max-uses are server-enforced;
+  a malicious relay can bypass them. It still can't read the blob.
+  Membership itself is cryptographically enforced and cannot be bypassed.
+- **Invite blobs go stale per epoch** — the link creator's client
+  refreshes them; if they're offline long enough the link pauses.
+- **One device per identity** — cross-device sync is out of scope (each
+  device would be its own MLS leaf); recovery restores identity, not
+  group ratchets.
+- **Browser code delivery is the weak point** (plan §5.1) — SRI, strict
+  CSP, and reproducible builds mitigate broad silent attacks, not
+  targeted ones. State it, don't hide it.
