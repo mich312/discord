@@ -71,14 +71,14 @@ docs say so plainly rather than overclaiming.
 
 ```sh
 docker compose up --build     # quorum + postgres
-# open http://localhost:9601
+# open http://localhost
 ```
 
 Or just the app container (in-memory store, nothing survives restarts):
 
 ```sh
 docker build -t quorum .
-docker run -p 9601:9601 -v quorum-data:/data quorum
+docker run -p 80:80 -v quorum-data:/data quorum
 ```
 
 One container serves everything: the relay, the client, attachments, and
@@ -106,7 +106,7 @@ relay).
 
 | Variable | Default | Notes |
 |---|---|---|
-| `RELAY_PORT` / `RELAY_BIND` | `9601` / `0.0.0.0` | one port for ws, blobs, accounts, and the client |
+| `RELAY_PORT` / `RELAY_BIND` | `9601` / `0.0.0.0` | one port for ws, blobs, accounts, and the client (the Docker image sets `80`) |
 | `CLIENT_DIR` | unset | serve the built client from this directory |
 | `DATABASE_URL` | unset | Postgres; unset = in-memory (nothing survives restart) |
 | `BLOB_DIR` | `./blobs` | encrypted attachment storage on disk |
