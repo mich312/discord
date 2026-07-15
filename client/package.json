@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "node scripts/copy-pkg.mjs && vite",
     "build": "node scripts/copy-pkg.mjs && vite build",
-    "e2e": "node e2e/run.mjs"
+    "e2e": "node e2e/run.mjs",
+    "preview:ui": "vite --open /preview.html"
   },
   "dependencies": {
     "react": "^18.3.1",
