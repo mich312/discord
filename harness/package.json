@@ -1,0 +1,16 @@
+{
+  "name": "mls-harness",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "relay": "node relay.mjs",
+    "serve": "node serve.mjs",
+    "e2e": "node e2e.mjs"
+  },
+  "dependencies": {
+    "ws": "^8.18.0"
+  },
+  "devDependencies": {
+    "playwright": "^1.49.0"
+  }
+}

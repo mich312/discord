@@ -1,0 +1,32 @@
+[package]
+name = "crypto-core"
+version = "0.1.0"
+edition = "2021"
+license = "MIT"
+description = "MLS (RFC 9420) group messaging core via OpenMLS, compiled to WASM for the web client"
+
+[lib]
+crate-type = ["cdylib", "rlib"]
+
+[dependencies]
+openmls = "0.7"
+openmls_rust_crypto = "0.4"
+openmls_traits = "0.4"
+openmls_basic_credential = "0.4"
+tls_codec = "0.4"
+serde = { version = "1", features = ["derive"] }
+thiserror = "2"
+
+[target.'cfg(target_arch = "wasm32")'.dependencies]
+openmls = { version = "0.7", features = ["js"] }
+wasm-bindgen = "0.2"
+serde-wasm-bindgen = "0.6"
+
+[profile.release]
+opt-level = "s"
+lto = true
+
+# wasm-pack can't download binaryen in restricted environments; the build
+# script runs the system wasm-opt on pkg/ afterwards instead.
+[package.metadata.wasm-pack.profile.release]
+wasm-opt = false
