@@ -1,4 +1,4 @@
-# quorum + postgres. `docker compose up` and open http://localhost:9601.
+# quorum + postgres. `docker compose up` and open http://localhost.
 #
 # For anything beyond localhost, set RP_ID/RP_ORIGIN to the public origin
 # you serve from (passkeys are bound to it) and terminate TLS in front —
@@ -7,11 +7,11 @@ services:
   quorum:
     build: .
     ports:
-      - "9601:9601"
+      - "80:80"
     environment:
       DATABASE_URL: postgres://quorum:quorum@db/quorum
       RP_ID: ${RP_ID:-localhost}
-      RP_ORIGIN: ${RP_ORIGIN:-http://localhost:9601}
+      RP_ORIGIN: ${RP_ORIGIN:-http://localhost}
       # Generate once and keep, or push subscriptions die on restart:
       #   openssl ecparam -genkey -name prime256v1 | openssl ec -no_public \
       #     -outform DER 2>/dev/null | tail -c 32 | basenc --base64url | tr -d '='

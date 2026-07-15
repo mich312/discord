@@ -2,7 +2,7 @@
 # files, served by the relay). One process, one port.
 #
 #   docker build -t quorum .
-#   docker run -p 9601:9601 -v quorum-data:/data \
+#   docker run -p 80:80 -v quorum-data:/data \
 #     -e RP_ID=chat.example.org -e RP_ORIGIN=https://chat.example.org \
 #     -e VAPID_PRIVATE_KEY=... -e DATABASE_URL=postgres://... quorum
 #
@@ -38,8 +38,8 @@ COPY --from=rust-build /src/target/release/relay /usr/local/bin/relay
 COPY --from=client-build /src/client/dist /app/public
 ENV CLIENT_DIR=/app/public \
     BLOB_DIR=/data/blobs \
-    RELAY_PORT=9601 \
+    RELAY_PORT=80 \
     RELAY_BIND=0.0.0.0
 VOLUME /data
-EXPOSE 9601
+EXPOSE 80
 CMD ["relay"]
