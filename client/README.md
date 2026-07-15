@@ -1,31 +1,131 @@
 # client
 
-Web client (SvelteKit or React — undecided until Phase 3). Talks to
-`crypto-core` running in a Web Worker; **never touches keys directly**.
+The web client (React + Vite). Talks to `crypto-core` running in a Web
+Worker; **never touches key material** — the main thread sees ciphertext
+blobs, decrypted events, and opaque state snapshots only.
 
-## MVP screens (6, total)
+## Architecture
 
-1. Server rail + channel list
-2. Channel — messages, composer, attachments
-3. Member list → member detail with verification
-4. Server settings — invites, channels, leave
-5. Device management + recovery key
-6. Onboarding — identity creation, recovery key export
+- `public/worker.js` — the crypto boundary. Owns the WASM `Client`;
+  mutating commands piggyback a full MLS state snapshot which the main
+  thread persists to IndexedDB, so a reload resumes with live ratchets.
+- `src/lib/controller.js` — orchestration: worker ↔ relay ↔ IndexedDB ↔
+  React. Owns the canonical server records.
+- `src/lib/relay.js` — relay socket: challenge-response auth (signed by
+  the MLS identity key in the worker), rid-correlated requests, reconnect
+  with backoff; on ready it re-subscribes each group from `lastSeq` and
+  tops up the KeyPackage store.
+- `src/lib/db.js` — IndexedDB: MLS state snapshot, server records,
+  decrypted message history (per-device store; there is no server copy).
+- `src/lib/recovery.js` — recovery key: identity bundle wrapped with
+  PBKDF2-SHA256 (310k) → AES-256-GCM under a generated code.
 
-**Explicitly cut:** profiles, reactions, threads, status/presence, roles
-beyond admin/member.
+### Servers and channels
 
-## Load-bearing UI that Discord doesn't have
+One MLS group per server. Channels are routing *inside* the encryption —
+message plaintext is a JSON envelope (`{k:'chat', ch, text}`,
+`{k:'chan', ch}`, `{k:'meta', name, channels}`), so the relay never learns
+channel structure or server names. Because joiners have no scrollback,
+server metadata is rebroadcast (encrypted) after every member add.
 
-- Member list is primary — in E2EE it *is* the security boundary
-- Permanent join-time watermark per channel (no scrollback exists)
-- Safety numbers per member; link-joined members marked **unverified**
-- Device list as a first-class settings screen
-- Search labeled "searching messages on this device"
-- Recovery-key status, visible and nagging until saved
+### Load-bearing UI (per the plan)
 
-## Delivery hardening (see plan §5.1)
+- Member list is the security boundary — labeled "who can read this",
+  with add-member right there, and epoch visible in the header.
+- Permanent join watermark at the top of every channel.
+- Composer states the encryption scope ("encrypted for N members").
+- Onboarding cannot be completed without downloading the recovery file
+  and confirming the code is stored off-device.
 
-Subresource Integrity on every asset, strict CSP (no `unsafe-inline` /
-`unsafe-eval`), reproducible build with published hashes. This mitigates
-broad silent attacks; it does not stop a targeted one — the docs say so.
+### Invite links
+
+`?j=<invite-id>#k=<key>` — the invite id is server-visible; the AES-GCM
+key rides in the fragment, which browsers never transmit. Creating an
+invite exports the group's signed GroupInfo (ratchet tree included),
+encrypts it under a fresh fragment key, and parks it on the relay with a
+7-day expiry. Redeeming decrypts the blob and joins by **External Commit**
+(RFC 9420 §12.4) — no existing member needs to be online. GroupInfo dies
+with its epoch, so the invite creator re-encrypts and re-uploads after
+every membership change; if they're offline too long the link goes stale
+until they return. Link-joined members carry a persistent
+"via link · unverified" badge in the member list until safety numbers
+land (Phase 5).
+
+### Identity storage
+
+The identity bundle lives in **two places**: the full MLS state snapshot
+in IndexedDB (groups + ratchets, same device only) and the identity key
+alone in localStorage. If IndexedDB is wiped, boot falls back to the
+localStorage identity: the account survives, group keys don't, and the UI
+says exactly that. The identity key is also exportable from the UI as a
+plain string (copy or download — labeled loudly, since whoever holds it
+IS you) and importable by pasting on the onboarding restore screen.
+
+### Attachments
+
+Files are AES-GCM-encrypted in the browser under a random per-file key,
+uploaded to the relay's disk under a random capability id, and the key
+rides inside the MLS message envelope (`{k:'file', ch, file}`). Receivers
+fetch the ciphertext and decrypt locally — images render inline, other
+files decrypt on click. The relay stores bytes it cannot read.
+
+### Safety numbers
+
+Click a member: both sides derive the same 60 digits from the pair's MLS
+identity keys (the keys that sign every message). Compare out of band,
+mark verified — stored on this device only. Verification replaces the
+"via link · unverified" badge with "✓ verified".
+
+### Notifications (Web Push)
+
+`sw.js` handles `push`/`notificationclick`; the "alerts" button asks for
+permission, subscribes via the relay's VAPID key, and hands the
+subscription over `push_subscribe`. The relay nudges this device only
+while it's offline, with a generic encrypted payload (no content — the
+server never has any). iOS Safari: installed-PWA only, per the plan.
+
+### Voice channels (audio mesh)
+
+Each server has voice channels (default `lounge`). Audio-only mesh: every
+participant holds a pairwise `RTCPeerConnection` to every other (the
+lexicographically smaller name offers — no glare), viable to ~6–8 people;
+a 1:1 call is just a two-person channel. All signaling — presence
+(`join`/`here`/`leave`/`probe`) and SDP/ICE — travels as MLS-encrypted
+**ephemeral** messages: the relay fans them out but never logs them and
+cannot read them, so the DTLS fingerprints inside the SDP arrive over an
+authenticated channel. That is the fingerprint verification: a relay that
+tampered with signaling would fail MLS authentication. Media itself is
+DTLS-SRTP peer-to-peer; the relay never touches it. On a membership
+change, remaining participants drop connections to anyone kicked. Without
+a microphone the client joins listen-only (silent WebAudio track).
+Default STUN is Google's; real deployments behind symmetric NATs need
+their own STUN/TURN (TURN sees ciphertext only, per the plan).
+
+### Recovery scope (honest version)
+
+The recovery key protects the **identity key** — the thing the relay has
+pinned; losing it loses the account name forever. It deliberately does
+not snapshot group ratchet state: a stale ratchet can't decrypt anything
+newer anyway. After a restore you keep your identity and get re-added.
+Same-device reloads are the IndexedDB snapshot's job, not recovery's.
+
+## Run & test
+
+```sh
+../crypto-core/build-wasm.sh    # WASM first
+cargo build -p relay            # e2e spawns target/debug/relay
+npm install
+npm run build
+npm run e2e                     # full journey, two browser profiles
+```
+
+The e2e covers: onboarding with the recovery gate, server + channel
+creation, add-by-handle, encrypted chat both directions, the no-scrollback
+assertion (pre-join message must NOT appear for the joiner), reload with
+IndexedDB state (history intact and ratchets live), and identity restore
+in a fresh profile. `CHROMIUM_PATH=/path/to/chrome` overrides the browser.
+`node e2e/screenshot.mjs` renders a demo session to a PNG.
+
+For interactive dev: `cargo run -p relay` in one shell, `npm run dev` in
+another (the dev server proxies nothing — the client connects straight to
+`ws://localhost:9601/ws`, override with `?relay=`).

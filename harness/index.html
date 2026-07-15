@@ -1,0 +1,21 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <title>MLS harness</title>
+  <style>
+    body { font: 14px/1.5 ui-monospace, monospace; max-width: 48rem; margin: 2rem auto; padding: 0 1rem; }
+    #status { color: #666; border-bottom: 1px solid #ddd; padding-bottom: .5rem; }
+    #log .system { color: #888; }
+    #log .error { color: #b00; }
+    #form { display: flex; gap: .5rem; margin-top: 1rem; }
+    #input { flex: 1; font: inherit; padding: .3rem; }
+  </style>
+</head>
+<body>
+  <div id="status">connecting…</div>
+  <div id="log"></div>
+  <form id="form"><input id="input" autocomplete="off" placeholder="message"><button>send</button></form>
+  <script type="module" src="/app.js"></script>
+</body>
+</html>
