@@ -12,9 +12,9 @@ const commands = {
     client = new Client(name);
     return { name };
   },
-  createGroup() {
-    client.createGroup();
-    return { epoch: Number(client.epoch()) };
+  createGroup({ group }) {
+    client.createGroup(group);
+    return { epoch: Number(client.epoch(group)) };
   },
   keyPackage() {
     return client.keyPackage();
@@ -25,24 +25,29 @@ const commands = {
   sign({ bytes }) {
     return client.sign(bytes);
   },
-  addMember({ keyPackage }) {
-    const r = client.addMember(keyPackage);
-    return { commit: r.commit, welcome: r.welcome, epoch: Number(client.epoch()), members: client.members() };
+  addMember({ group, keyPackage }) {
+    const r = client.addMember(group, keyPackage);
+    return {
+      commit: r.commit,
+      welcome: r.welcome,
+      epoch: Number(client.epoch(group)),
+      members: client.members(group),
+    };
   },
   joinFromWelcome({ welcome }) {
-    client.joinFromWelcome(welcome);
-    return { epoch: Number(client.epoch()), members: client.members() };
+    const group = client.joinFromWelcome(welcome);
+    return { group, epoch: Number(client.epoch(group)), members: client.members(group) };
   },
-  send({ text }) {
-    return client.send(text);
+  send({ group, text }) {
+    return client.send(group, text);
   },
   receive({ bytes }) {
     const event = client.receive(bytes);
     if (event.epoch !== undefined) event.epoch = Number(event.epoch);
     return event;
   },
-  status() {
-    return { epoch: Number(client.epoch()), members: client.members() };
+  status({ group }) {
+    return { epoch: Number(client.epoch(group)), members: client.members(group) };
   },
 };
 

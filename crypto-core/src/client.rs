@@ -1,11 +1,16 @@
 //! Pure-Rust MLS client core. No wasm types here — this module is exercised
 //! by native integration tests; `crate::wasm` wraps it for the browser.
+//!
+//! One `ChatClient` holds one identity and any number of groups ("servers"
+//! in the product). Groups are keyed by the relay's group id, which is also
+//! used verbatim as the MLS GroupId so incoming messages route themselves.
 
 use openmls::prelude::*;
 use openmls_basic_credential::SignatureKeyPair;
-use openmls_traits::signatures::Signer;
 use openmls_rust_crypto::OpenMlsRustCrypto;
+use openmls_traits::signatures::Signer;
 use serde::{Deserialize, Serialize};
+use std::collections::HashMap;
 use tls_codec::{Deserialize as TlsDeserialize, Serialize as TlsSerialize};
 
 const CIPHERSUITE: Ciphersuite = Ciphersuite::MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519;
@@ -19,10 +24,12 @@ const MAX_PAST_EPOCHS: usize = 2;
 
 #[derive(Debug, thiserror::Error)]
 pub enum CoreError {
-    #[error("not in a group")]
-    NoGroup,
-    #[error("already in a group")]
-    AlreadyInGroup,
+    #[error("unknown group {0}")]
+    UnknownGroup(String),
+    #[error("already in group {0}")]
+    AlreadyInGroup(String),
+    #[error("bad state bundle: {0}")]
+    BadState(String),
     #[error("{0}")]
     Mls(String),
 }
@@ -39,13 +46,13 @@ impl CoreError {
 pub enum Event {
     /// A decrypted application message.
     #[serde(rename_all = "camelCase")]
-    Message { sender: String, text: String, epoch: u64 },
+    Message { group: String, sender: String, text: String, epoch: u64 },
     /// A commit was merged; the group moved to a new epoch.
     #[serde(rename_all = "camelCase")]
-    MembershipChange { epoch: u64, members: Vec<String> },
+    MembershipChange { group: String, epoch: u64, members: Vec<String> },
     /// A proposal was queued; nothing user-visible yet.
     #[serde(rename_all = "camelCase")]
-    ProposalStored { epoch: u64 },
+    ProposalStored { group: String, epoch: u64 },
 }
 
 /// Result of adding a member: both blobs must reach the relay —
@@ -55,36 +62,61 @@ pub struct AddResult {
     pub welcome: Vec<u8>,
 }
 
+/// Header of the versioned state bundle (followed by the raw storage map).
+#[derive(Serialize, Deserialize)]
+struct StateHeader {
+    v: u32,
+    name: String,
+    signer: SignatureKeyPair,
+    groups: Vec<String>,
+}
+
+/// Identity-only bundle for the recovery key. Deliberately excludes group
+/// ratchet state: a restored snapshot of ratchets would be stale and
+/// unusable anyway. What recovery must preserve is the identity key the
+/// relay has pinned — with it, the user keeps their account and can be
+/// re-added to groups.
+#[derive(Serialize, Deserialize)]
+struct IdentityBundle {
+    v: u32,
+    name: String,
+    signer: SignatureKeyPair,
+}
+
 pub struct ChatClient {
     provider: OpenMlsRustCrypto,
     signer: SignatureKeyPair,
     credential_with_key: CredentialWithKey,
-    group: Option<MlsGroup>,
+    groups: HashMap<String, MlsGroup>,
     name: String,
 }
 
 impl ChatClient {
     pub fn new(name: &str) -> Result<Self, CoreError> {
-        let provider = OpenMlsRustCrypto::default();
-        let credential = BasicCredential::new(name.as_bytes().to_vec());
         let signer = SignatureKeyPair::new(CIPHERSUITE.signature_algorithm())
-            .map_err(CoreError::mls)?;
+            .map_err(|e| CoreError::Mls(format!("{e:?}")))?;
+        Self::with_identity(name.to_string(), signer)
+    }
+
+    fn with_identity(name: String, signer: SignatureKeyPair) -> Result<Self, CoreError> {
+        let provider = OpenMlsRustCrypto::default();
         signer.store(provider.storage()).map_err(CoreError::mls)?;
+        let credential = BasicCredential::new(name.as_bytes().to_vec());
         let credential_with_key = CredentialWithKey {
             credential: credential.into(),
             signature_key: signer.public().into(),
         };
-        Ok(Self {
-            provider,
-            signer,
-            credential_with_key,
-            group: None,
-            name: name.to_string(),
-        })
+        Ok(Self { provider, signer, credential_with_key, groups: HashMap::new(), name })
     }
 
     pub fn name(&self) -> &str {
         &self.name
+    }
+
+    pub fn group_ids(&self) -> Vec<String> {
+        let mut ids: Vec<String> = self.groups.keys().cloned().collect();
+        ids.sort();
+        ids
     }
 
     /// Raw Ed25519 public key of this client's MLS identity. The relay
@@ -100,6 +132,108 @@ impl ChatClient {
             .sign(message)
             .map_err(|e| CoreError::Mls(format!("{e:?}")))
     }
+
+    // === persistence ======================================================
+
+    /// Full state snapshot: identity + every group's MLS state. Written to
+    /// IndexedDB after each mutating operation so a reload resumes exactly
+    /// where the ratchets left off. Device-local; never leaves the device.
+    pub fn export_state(&self) -> Result<Vec<u8>, CoreError> {
+        let header = StateHeader {
+            v: 1,
+            name: self.name.clone(),
+            signer: clone_signer(&self.signer)?,
+            groups: self.group_ids(),
+        };
+        let header = serde_json::to_vec(&header).map_err(CoreError::mls)?;
+        let mut out = (header.len() as u32).to_be_bytes().to_vec();
+        out.extend_from_slice(&header);
+
+        let values = self.provider.storage().values.read().unwrap();
+        out.extend_from_slice(&(values.len() as u64).to_be_bytes());
+        for (k, v) in values.iter() {
+            out.extend_from_slice(&(k.len() as u64).to_be_bytes());
+            out.extend_from_slice(&(v.len() as u64).to_be_bytes());
+            out.extend_from_slice(k);
+            out.extend_from_slice(v);
+        }
+        Ok(out)
+    }
+
+    pub fn import_state(bytes: &[u8]) -> Result<Self, CoreError> {
+        let bad = |m: &str| CoreError::BadState(m.to_string());
+        let mut rest = bytes;
+        let mut take = |n: usize| -> Result<&[u8], CoreError> {
+            if rest.len() < n {
+                return Err(bad("truncated"));
+            }
+            let (head, tail) = rest.split_at(n);
+            rest = tail;
+            Ok(head)
+        };
+
+        let header_len = u32::from_be_bytes(take(4)?.try_into().unwrap()) as usize;
+        let header: StateHeader =
+            serde_json::from_slice(take(header_len)?).map_err(|e| bad(&e.to_string()))?;
+        if header.v != 1 {
+            return Err(bad("unsupported version"));
+        }
+
+        let count = u64::from_be_bytes(take(8)?.try_into().unwrap());
+        let mut map = HashMap::new();
+        for _ in 0..count {
+            let k_len = u64::from_be_bytes(take(8)?.try_into().unwrap()) as usize;
+            let v_len = u64::from_be_bytes(take(8)?.try_into().unwrap()) as usize;
+            let k = take(k_len)?.to_vec();
+            let v = take(v_len)?.to_vec();
+            map.insert(k, v);
+        }
+
+        let provider = OpenMlsRustCrypto::default();
+        *provider.storage().values.write().unwrap() = map;
+
+        let credential = BasicCredential::new(header.name.as_bytes().to_vec());
+        let credential_with_key = CredentialWithKey {
+            credential: credential.into(),
+            signature_key: header.signer.public().into(),
+        };
+        let mut groups = HashMap::new();
+        for id in header.groups {
+            let group = MlsGroup::load(provider.storage(), &GroupId::from_slice(id.as_bytes()))
+                .map_err(|e| CoreError::Mls(format!("{e:?}")))?
+                .ok_or_else(|| bad(&format!("group {id} missing from storage")))?;
+            groups.insert(id, group);
+        }
+        Ok(Self {
+            provider,
+            signer: header.signer,
+            credential_with_key,
+            groups,
+            name: header.name,
+        })
+    }
+
+    /// Identity-only export for the recovery key (no group state — see
+    /// `IdentityBundle`). The caller passphrase-encrypts this.
+    pub fn export_identity(&self) -> Result<Vec<u8>, CoreError> {
+        let bundle = IdentityBundle {
+            v: 1,
+            name: self.name.clone(),
+            signer: clone_signer(&self.signer)?,
+        };
+        serde_json::to_vec(&bundle).map_err(CoreError::mls)
+    }
+
+    pub fn import_identity(bytes: &[u8]) -> Result<Self, CoreError> {
+        let bundle: IdentityBundle =
+            serde_json::from_slice(bytes).map_err(|e| CoreError::BadState(e.to_string()))?;
+        if bundle.v != 1 {
+            return Err(CoreError::BadState("unsupported version".into()));
+        }
+        Self::with_identity(bundle.name, bundle.signer)
+    }
+
+    // === key packages =====================================================
 
     /// Generate a fresh KeyPackage and return it TLS-serialized. The private
     /// parts are kept in the provider's storage for the later Welcome.
@@ -118,10 +252,13 @@ impl ChatClient {
             .map_err(CoreError::mls)
     }
 
-    /// Create a new group with this client as the only member.
-    pub fn create_group(&mut self) -> Result<(), CoreError> {
-        if self.group.is_some() {
-            return Err(CoreError::AlreadyInGroup);
+    // === groups ===========================================================
+
+    /// Create a new group with this client as the only member. `id` is the
+    /// relay-visible group id and doubles as the MLS GroupId.
+    pub fn create_group(&mut self, id: &str) -> Result<(), CoreError> {
+        if self.groups.contains_key(id) {
+            return Err(CoreError::AlreadyInGroup(id.to_string()));
         }
         // The ratchet-tree extension keeps Welcomes self-contained, so the
         // relay never needs to serve the tree out of band.
@@ -130,32 +267,40 @@ impl ChatClient {
             .use_ratchet_tree_extension(true)
             .max_past_epochs(MAX_PAST_EPOCHS)
             .build();
-        let group = MlsGroup::new(
+        let group = MlsGroup::new_with_group_id(
             &self.provider,
             &self.signer,
             &config,
+            GroupId::from_slice(id.as_bytes()),
             self.credential_with_key.clone(),
         )
         .map_err(CoreError::mls)?;
-        self.group = Some(group);
+        self.groups.insert(id.to_string(), group);
         Ok(())
+    }
+
+    fn group_ref(&self, id: &str) -> Result<&MlsGroup, CoreError> {
+        self.groups
+            .get(id)
+            .ok_or_else(|| CoreError::UnknownGroup(id.to_string()))
     }
 
     /// Add a member from their serialized KeyPackage. Returns the commit
     /// (for the group) and the Welcome (for the joiner), both serialized.
-    pub fn add_member(&mut self, key_package_bytes: &[u8]) -> Result<AddResult, CoreError> {
-        let group = self.group.as_mut().ok_or(CoreError::NoGroup)?;
+    pub fn add_member(&mut self, id: &str, key_package_bytes: &[u8]) -> Result<AddResult, CoreError> {
         let kp_in = KeyPackageIn::tls_deserialize_exact(key_package_bytes)
             .map_err(CoreError::mls)?;
         let key_package = kp_in
             .validate(self.provider.crypto(), ProtocolVersion::Mls10)
             .map_err(CoreError::mls)?;
+        let group = self
+            .groups
+            .get_mut(id)
+            .ok_or_else(|| CoreError::UnknownGroup(id.to_string()))?;
         let (commit, welcome, _group_info) = group
             .add_members(&self.provider, &self.signer, &[key_package])
             .map_err(CoreError::mls)?;
-        group
-            .merge_pending_commit(&self.provider)
-            .map_err(CoreError::mls)?;
+        group.merge_pending_commit(&self.provider).map_err(CoreError::mls)?;
         Ok(AddResult {
             commit: commit.tls_serialize_detached().map_err(CoreError::mls)?,
             welcome: welcome.tls_serialize_detached().map_err(CoreError::mls)?,
@@ -163,8 +308,11 @@ impl ChatClient {
     }
 
     /// Remove a member by name. Returns the serialized commit for fan-out.
-    pub fn remove_member(&mut self, name: &str) -> Result<Vec<u8>, CoreError> {
-        let group = self.group.as_mut().ok_or(CoreError::NoGroup)?;
+    pub fn remove_member(&mut self, id: &str, name: &str) -> Result<Vec<u8>, CoreError> {
+        let group = self
+            .groups
+            .get_mut(id)
+            .ok_or_else(|| CoreError::UnknownGroup(id.to_string()))?;
         let target = group
             .members()
             .find(|m| identity_of(&m.credential).as_deref() == Some(name))
@@ -172,17 +320,12 @@ impl ChatClient {
         let (commit, _welcome, _group_info) = group
             .remove_members(&self.provider, &self.signer, &[target.index])
             .map_err(CoreError::mls)?;
-        group
-            .merge_pending_commit(&self.provider)
-            .map_err(CoreError::mls)?;
+        group.merge_pending_commit(&self.provider).map_err(CoreError::mls)?;
         commit.tls_serialize_detached().map_err(CoreError::mls)
     }
 
-    /// Join a group from a serialized Welcome message.
-    pub fn join_from_welcome(&mut self, welcome_bytes: &[u8]) -> Result<(), CoreError> {
-        if self.group.is_some() {
-            return Err(CoreError::AlreadyInGroup);
-        }
+    /// Join a group from a serialized Welcome message. Returns the group id.
+    pub fn join_from_welcome(&mut self, welcome_bytes: &[u8]) -> Result<String, CoreError> {
         let message = MlsMessageIn::tls_deserialize_exact(welcome_bytes)
             .map_err(CoreError::mls)?;
         let welcome = match message.extract() {
@@ -200,89 +343,107 @@ impl ChatClient {
         let staged = StagedWelcome::new_from_welcome(&self.provider, &config, welcome, None)
             .map_err(CoreError::mls)?;
         let group = staged.into_group(&self.provider).map_err(CoreError::mls)?;
-        self.group = Some(group);
-        Ok(())
+        let id = String::from_utf8_lossy(group.group_id().as_slice()).into_owned();
+        if self.groups.contains_key(&id) {
+            return Err(CoreError::AlreadyInGroup(id));
+        }
+        self.groups.insert(id.clone(), group);
+        Ok(id)
     }
 
+    /// Leave-side cleanup when kicked, or when abandoning a group locally.
+    pub fn forget_group(&mut self, id: &str) {
+        self.groups.remove(id);
+    }
+
+    // === messaging ========================================================
+
     /// Encrypt an application message for the group's current epoch.
-    pub fn send_message(&mut self, text: &str) -> Result<Vec<u8>, CoreError> {
-        let group = self.group.as_mut().ok_or(CoreError::NoGroup)?;
+    pub fn send_message(&mut self, id: &str, text: &str) -> Result<Vec<u8>, CoreError> {
+        let group = self
+            .groups
+            .get_mut(id)
+            .ok_or_else(|| CoreError::UnknownGroup(id.to_string()))?;
         let message = group
             .create_message(&self.provider, &self.signer, text.as_bytes())
             .map_err(CoreError::mls)?;
         message.tls_serialize_detached().map_err(CoreError::mls)
     }
 
-    /// Process an incoming MLS message from the relay: decrypts application
-    /// messages, merges commits, stores proposals.
+    /// Process an incoming MLS message from the relay. The target group is
+    /// read from the message itself.
     pub fn process_incoming(&mut self, bytes: &[u8]) -> Result<Event, CoreError> {
-        let group = self.group.as_mut().ok_or(CoreError::NoGroup)?;
         let message = MlsMessageIn::tls_deserialize_exact(bytes).map_err(CoreError::mls)?;
         let protocol_message: ProtocolMessage = message
             .try_into_protocol_message()
             .map_err(CoreError::mls)?;
+        let id = String::from_utf8_lossy(protocol_message.group_id().as_slice()).into_owned();
+        let provider = &self.provider;
+        let group = self
+            .groups
+            .get_mut(&id)
+            .ok_or_else(|| CoreError::UnknownGroup(id.clone()))?;
         let processed = group
-            .process_message(&self.provider, protocol_message)
+            .process_message(provider, protocol_message)
             .map_err(CoreError::mls)?;
         let sender = identity_of(processed.credential()).unwrap_or_default();
 
         match processed.into_content() {
             ProcessedMessageContent::ApplicationMessage(app) => {
                 let text = String::from_utf8_lossy(&app.into_bytes()).into_owned();
-                Ok(Event::Message {
-                    sender,
-                    text,
-                    epoch: group.epoch().as_u64(),
-                })
+                let epoch = group.epoch().as_u64();
+                Ok(Event::Message { group: id, sender, text, epoch })
             }
             ProcessedMessageContent::StagedCommitMessage(staged) => {
                 group
-                    .merge_staged_commit(&self.provider, *staged)
+                    .merge_staged_commit(provider, *staged)
                     .map_err(CoreError::mls)?;
-                Ok(Event::MembershipChange {
-                    epoch: group.epoch().as_u64(),
-                    members: self.members()?,
-                })
+                let epoch = group.epoch().as_u64();
+                let members = members_of(group);
+                Ok(Event::MembershipChange { group: id, epoch, members })
             }
             ProcessedMessageContent::ProposalMessage(proposal) => {
                 group
-                    .store_pending_proposal(self.provider.storage(), *proposal)
+                    .store_pending_proposal(provider.storage(), *proposal)
                     .map_err(CoreError::mls)?;
-                Ok(Event::ProposalStored {
-                    epoch: group.epoch().as_u64(),
-                })
+                let epoch = group.epoch().as_u64();
+                Ok(Event::ProposalStored { group: id, epoch })
             }
             ProcessedMessageContent::ExternalJoinProposalMessage(proposal) => {
                 group
-                    .store_pending_proposal(self.provider.storage(), *proposal)
+                    .store_pending_proposal(provider.storage(), *proposal)
                     .map_err(CoreError::mls)?;
-                Ok(Event::ProposalStored {
-                    epoch: group.epoch().as_u64(),
-                })
+                let epoch = group.epoch().as_u64();
+                Ok(Event::ProposalStored { group: id, epoch })
             }
         }
     }
 
-    pub fn epoch(&self) -> Result<u64, CoreError> {
-        Ok(self
-            .group
-            .as_ref()
-            .ok_or(CoreError::NoGroup)?
-            .epoch()
-            .as_u64())
+    pub fn epoch(&self, id: &str) -> Result<u64, CoreError> {
+        Ok(self.group_ref(id)?.epoch().as_u64())
     }
 
-    pub fn members(&self) -> Result<Vec<String>, CoreError> {
-        let group = self.group.as_ref().ok_or(CoreError::NoGroup)?;
-        Ok(group
-            .members()
-            .filter_map(|m| identity_of(&m.credential))
-            .collect())
+    pub fn members(&self, id: &str) -> Result<Vec<String>, CoreError> {
+        Ok(members_of(self.group_ref(id)?))
     }
+}
+
+fn members_of(group: &MlsGroup) -> Vec<String> {
+    group
+        .members()
+        .filter_map(|m| identity_of(&m.credential))
+        .collect()
 }
 
 fn identity_of(credential: &Credential) -> Option<String> {
     BasicCredential::try_from(credential.clone())
         .ok()
         .map(|c| String::from_utf8_lossy(c.identity()).into_owned())
+}
+
+// SignatureKeyPair is serde-serializable but not Clone (without a feature
+// flag); round-trip through serde where a owned copy is needed.
+fn clone_signer(signer: &SignatureKeyPair) -> Result<SignatureKeyPair, CoreError> {
+    serde_json::from_slice(&serde_json::to_vec(signer).map_err(CoreError::mls)?)
+        .map_err(CoreError::mls)
 }

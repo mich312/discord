@@ -361,6 +361,7 @@ dependencies = [
  "openmls_traits",
  "serde",
  "serde-wasm-bindgen",
+ "serde_json",
  "thiserror 2.0.18",
  "tls_codec",
  "wasm-bindgen",

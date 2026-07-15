@@ -127,7 +127,7 @@ ws.onopen = async () => {
   log('system', `authenticated as ${NAME}`);
 
   if (ROLE === 'create') {
-    const { epoch } = await mls('createGroup');
+    const { epoch } = await mls('createGroup', { group: GROUP });
     await request({ t: 'create_group', group: GROUP });
     updateStatus(epoch, [NAME]);
     log('system', `created group ${GROUP} (epoch ${epoch})`);
@@ -147,6 +147,7 @@ async function addWhenPublished(peer) {
       const reply = await request({ t: 'fetch_kp', user: peer });
       if (reply.payload) {
         const { commit, welcome, epoch, members } = await mls('addMember', {
+          group: GROUP,
           keyPackage: b64.dec(reply.payload),
         });
         const sent = await request({ t: 'send', group: GROUP, epoch, payload: b64.enc(commit) });
@@ -171,8 +172,8 @@ document.getElementById('form').addEventListener('submit', async (e) => {
   const text = input.value.trim();
   if (!text) return;
   input.value = '';
-  const blob = await mls('send', { text });
-  const { epoch } = await mls('status');
+  const blob = await mls('send', { group: GROUP, text });
+  const { epoch } = await mls('status', { group: GROUP });
   await request({ t: 'send', group: GROUP, epoch, payload: b64.enc(blob) });
   log('message', `${NAME}: ${text}`);
 });

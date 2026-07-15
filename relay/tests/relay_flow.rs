@@ -142,8 +142,8 @@ impl TestClient {
     }
 
     async fn send_group(&mut self, group: &str, text: &str) -> u64 {
-        let blob = self.mls.send_message(text).unwrap();
-        let epoch = self.mls.epoch().unwrap();
+        let blob = self.mls.send_message(group, text).unwrap();
+        let epoch = self.mls.epoch(group).unwrap();
         let reply = self
             .request(json!({"t": "send", "group": group, "epoch": epoch, "payload": B64.encode(blob)}))
             .await;
@@ -249,16 +249,16 @@ async fn full_flow_with_offline_welcome() {
     // alice assembles the group while bob is away.
     let mut alice =
         TestClient::connect(addr, ChatClient::new("alice").unwrap(), "alice").await.unwrap();
-    alice.mls.create_group().unwrap();
+    alice.mls.create_group("g1").unwrap();
     let reply = alice.request(json!({"t": "create_group", "group": "g1"})).await;
     assert_eq!(reply["t"], "ok");
 
     let kp = alice.request(json!({"t": "fetch_kp", "user": "bob"})).await;
     let kp_bytes = B64.decode(kp["payload"].as_str().unwrap()).unwrap();
-    let add = alice.mls.add_member(&kp_bytes).unwrap();
+    let add = alice.mls.add_member("g1", &kp_bytes).unwrap();
 
     // Commit goes on the log first so the Welcome can point past it.
-    let epoch = alice.mls.epoch().unwrap();
+    let epoch = alice.mls.epoch("g1").unwrap();
     let reply = alice
         .request(json!({"t": "send", "group": "g1", "epoch": epoch, "payload": B64.encode(&add.commit)}))
         .await;
@@ -282,7 +282,7 @@ async fn full_flow_with_offline_welcome() {
     assert_eq!(welcome["group"], "g1");
     let payload = B64.decode(welcome["payload"].as_str().unwrap()).unwrap();
     bob.mls.join_from_welcome(&payload).unwrap();
-    assert_eq!(bob.mls.members().unwrap(), vec!["alice", "bob"]);
+    assert_eq!(bob.mls.members("g1").unwrap(), vec!["alice", "bob"]);
 
     let after = welcome["after"].as_u64().unwrap();
     let reply = bob.request(json!({"t": "subscribe", "group": "g1", "after": after})).await;
@@ -304,12 +304,12 @@ async fn catch_up_replays_missed_messages_in_order() {
 
     let mut alice =
         TestClient::connect(addr, ChatClient::new("alice").unwrap(), "alice").await.unwrap();
-    alice.mls.create_group().unwrap();
+    alice.mls.create_group("g1").unwrap();
     alice.request(json!({"t": "create_group", "group": "g1"})).await;
     let kp = alice.request(json!({"t": "fetch_kp", "user": "bob"})).await;
     let kp_bytes = B64.decode(kp["payload"].as_str().unwrap()).unwrap();
-    let add = alice.mls.add_member(&kp_bytes).unwrap();
-    let epoch = alice.mls.epoch().unwrap();
+    let add = alice.mls.add_member("g1", &kp_bytes).unwrap();
+    let epoch = alice.mls.epoch("g1").unwrap();
     let reply = alice
         .request(json!({"t": "send", "group": "g1", "epoch": epoch, "payload": B64.encode(&add.commit)}))
         .await;
