@@ -1,0 +1,22 @@
+# Caddy reverse proxy — terminates TLS in front of the quorum relay.
+#
+# Caddy obtains and renews a Let's Encrypt certificate automatically for the
+# domain below (HTTP-01 challenge on :80, served on :443). WebSocket upgrades
+# on /ws are proxied transparently — no special config needed.
+#
+# The domain is read from the CADDY_DOMAIN environment variable (set it in
+# deploy/.env). Everything is proxied to the relay container on its internal
+# port 80.
+
+{$CADDY_DOMAIN} {
+	encode zstd gzip
+
+	# Relay + client + blobs + accounts + /ws all live on one port.
+	reverse_proxy quorum:80
+
+	# Optional: uncomment to use Let's Encrypt staging while testing, so you
+	# don't hit the production rate limit. Remove once the setup is proven.
+	# tls {
+	# 	ca https://acme-staging-v02.api.letsencrypt.org/directory
+	# }
+}

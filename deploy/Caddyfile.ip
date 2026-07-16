@@ -1,0 +1,19 @@
+# Caddy reverse proxy for a bare IP address, using a self-signed certificate.
+#
+# `tls internal` makes Caddy generate a certificate from its own local CA —
+# no ACME, no domain required. Browsers do NOT trust this CA, so visitors get
+# a certificate warning they must click through once per device. After they
+# proceed, the origin is a secure context and the app works.
+#
+# CAVEAT: passkeys (WebAuthn) will NOT work on an IP address — the WebAuthn
+# spec forbids an IP as the relying-party ID. Password accounts and all E2EE
+# chat/voice work fine. For working passkeys and no warning, front the relay
+# with a real hostname instead (e.g. <ip>.sslip.io) and use ./Caddyfile.
+#
+# CADDY_SITE_ADDRESS is set from the compose overlay, e.g. https://203.0.113.10
+
+{$CADDY_SITE_ADDRESS} {
+	tls internal
+	encode zstd gzip
+	reverse_proxy quorum:80
+}

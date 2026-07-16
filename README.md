@@ -116,7 +116,9 @@ relay).
 For real deployments: terminate TLS in front of the relay (`wss://`),
 serve the client over HTTPS with the CSP/SRI hardening from plan §5.1,
 and run your own STUN/TURN if members sit behind hard NATs (TURN relays
-ciphertext only).
+ciphertext only). **[`deploy/`](deploy/)** has a ready-to-run Caddy setup
+that auto-provisions Let's Encrypt certificates — see
+[`deploy/README.md`](deploy/README.md) for a step-by-step Hetzner VM walkthrough.
 
 ## Testing
 
