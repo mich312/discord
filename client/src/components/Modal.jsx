@@ -17,6 +17,8 @@ export default function Modal({
   onSecurePassword,
   onSecureFile,
   onChannelSettings,
+  onChannelRename,
+  onChannelDelete,
   identityKey,
 }) {
   const [password, setPassword] = useState('');
@@ -27,6 +29,7 @@ export default function Modal({
   const [topic, setTopic] = useState(meta.topic ?? '');
   const [history, setHistory] = useState(!!meta.hid);
   const [retention, setRetention] = useState(meta.retention ?? 0);
+  const [renameTo, setRenameTo] = useState(modal.type === 'channel' ? modal.channel ?? '' : '');
 
   async function attempt(fn) {
     setBusy(true);
@@ -59,7 +62,12 @@ export default function Modal({
     safety: { glyph: <ShieldCheck />, title: `Safety number — ${modal.peer ?? ''}` },
     identity: { glyph: <Key />, title: 'Identity key' },
     admin: { glyph: <ShieldCheck />, title: 'Relay admin overview' },
-    channel: { glyph: <Gear />, title: `#${modal.channel ?? ''} settings` },
+    channel: {
+      glyph: <Gear />,
+      title: modal.voice
+        ? `${modal.channel ?? ''} — voice room`
+        : `#${modal.channel ?? ''} settings`,
+    },
   };
   const head = heads[modal.type];
 
@@ -206,70 +214,121 @@ export default function Modal({
           </>
         )}
         {modal.type === 'channel' && (
-          <form
-            onSubmit={(e) => {
-              e.preventDefault();
-              attempt(async () => {
-                await onChannelSettings(modal.server, modal.channel, {
-                  topic: topic.trim(),
-                  retention: Number(retention) || 0,
-                  history,
-                });
-                onClose();
-              });
-            }}
-          >
-            <label className="field">
-              <span>topic — shown at the top of the room</span>
-              <input
-                type="text"
-                value={topic}
-                onChange={(e) => setTopic(e.target.value)}
-                placeholder="what this room is for"
-                data-testid="channel-topic"
-              />
-            </label>
-            <label className="field checkbox">
-              <input
-                type="checkbox"
-                checked={history}
-                onChange={(e) => setHistory(e.target.checked)}
-                data-testid="channel-history"
-              />
-              <span>keep history for future joiners</span>
-            </label>
-            <p className="fineprint muted">
-              On: messages are also sealed under a room key that travels inside the
-              encryption to whoever is in the roster — new members and your own next
-              device can read back. The relay still sees only ciphertext, but this
-              deliberately gives up forward secrecy for this room: anyone admitted
-              later can read what the key unlocks. Off: messages exist only on the
-              devices that were present.
-            </p>
-            <label className="field">
-              <span>auto-delete messages</span>
-              <select
-                value={retention}
-                onChange={(e) => setRetention(e.target.value)}
-                data-testid="channel-retention"
+          <>
+            {!modal.voice && (
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  attempt(async () => {
+                    await onChannelSettings(modal.server, modal.channel, {
+                      topic: topic.trim(),
+                      retention: Number(retention) || 0,
+                      history,
+                    });
+                    onClose();
+                  });
+                }}
               >
-                {RETENTION_CHOICES.map((c) => (
-                  <option key={c.value} value={c.value}>
-                    {c.label}
-                  </option>
-                ))}
-              </select>
-            </label>
-            <p className="fineprint muted">
-              Auto-delete removes this room's messages from this device and the
-              relay's history log. Other devices honor it when they next open the
-              room — it is a shared setting, not a cryptographic guarantee.
-            </p>
-            <button className="button primary wide" disabled={busy} data-testid="channel-save">
-              {busy ? 'saving…' : 'save settings'}
-            </button>
+                <label className="field">
+                  <span>topic — shown at the top of the room</span>
+                  <input
+                    type="text"
+                    value={topic}
+                    onChange={(e) => setTopic(e.target.value)}
+                    placeholder="what this room is for"
+                    data-testid="channel-topic"
+                  />
+                </label>
+                <label className="field checkbox">
+                  <input
+                    type="checkbox"
+                    checked={history}
+                    onChange={(e) => setHistory(e.target.checked)}
+                    data-testid="channel-history"
+                  />
+                  <span>keep history for future joiners</span>
+                </label>
+                <p className="fineprint muted">
+                  On: messages are also sealed under a room key that travels inside the
+                  encryption to whoever is in the roster — new members and your own next
+                  device can read back. The relay still sees only ciphertext, but this
+                  deliberately gives up forward secrecy for this room: anyone admitted
+                  later can read what the key unlocks. Off: messages exist only on the
+                  devices that were present.
+                </p>
+                <label className="field">
+                  <span>auto-delete messages</span>
+                  <select
+                    value={retention}
+                    onChange={(e) => setRetention(e.target.value)}
+                    data-testid="channel-retention"
+                  >
+                    {RETENTION_CHOICES.map((c) => (
+                      <option key={c.value} value={c.value}>
+                        {c.label}
+                      </option>
+                    ))}
+                  </select>
+                </label>
+                <p className="fineprint muted">
+                  Auto-delete removes this room's messages from this device and the
+                  relay's history log. Other devices honor it when they next open the
+                  room — it is a shared setting, not a cryptographic guarantee.
+                </p>
+                <button className="button primary wide" disabled={busy} data-testid="channel-save">
+                  {busy ? 'saving…' : 'save settings'}
+                </button>
+              </form>
+            )}
+            <div className="chan-manage">
+              <label className="field">
+                <span>rename {modal.voice ? 'voice room' : 'channel'}</span>
+                <input
+                  type="text"
+                  value={renameTo}
+                  onChange={(e) => setRenameTo(e.target.value)}
+                  data-testid="channel-rename-input"
+                />
+              </label>
+              <div className="row">
+                <button
+                  type="button"
+                  className="button"
+                  data-testid="channel-rename"
+                  disabled={busy || !renameTo.trim() || renameTo.trim() === modal.channel}
+                  onClick={() =>
+                    attempt(async () => {
+                      await onChannelRename(modal.server, modal.channel, renameTo.trim(), !!modal.voice);
+                      onClose();
+                    })
+                  }
+                >
+                  rename
+                </button>
+                <button
+                  type="button"
+                  className="button danger"
+                  data-testid="channel-delete"
+                  disabled={busy}
+                  onClick={() => {
+                    const ok = window.confirm(
+                      modal.voice
+                        ? `Delete the voice room "${modal.channel}" for everyone?`
+                        : `Delete #${modal.channel} and its history for everyone? This can't be undone.`
+                    );
+                    if (!ok) return;
+                    attempt(async () => {
+                      await onChannelDelete(modal.server, modal.channel, !!modal.voice);
+                      onClose();
+                    });
+                  }}
+                >
+                  delete {modal.voice ? 'voice room' : 'channel'}
+                </button>
+              </div>
+            </div>
             {error && <p className="error">{error}</p>}
-          </form>
+          </>
         )}
         {modal.type === 'identity' && (
           <>

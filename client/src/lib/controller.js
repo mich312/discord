@@ -480,6 +480,61 @@ export class Controller {
         }
         break;
       }
+      case 'chan-ren': {
+        if (record.roles?.[sender] && record.roles[sender] !== 'admin') break;
+        if (record.channels.includes(content.ch) && !record.channels.includes(content.to)) {
+          record.channels = record.channels.map((c) => (c === content.ch ? content.to : c));
+          if (record.chanMeta?.[content.ch]) {
+            record.chanMeta = { ...record.chanMeta, [content.to]: record.chanMeta[content.ch] };
+            delete record.chanMeta[content.ch];
+          }
+          await this.db.msgsRename(record.id, content.ch, content.to);
+          await this.addSystemMessage(record.id, `#${content.ch} renamed to #${content.to}`, content.to);
+          this.dispatch({ type: 'refreshMessages' });
+          this.scheduleBackup();
+        }
+        break;
+      }
+      case 'chan-del': {
+        if (record.roles?.[sender] && record.roles[sender] !== 'admin') break;
+        if (record.channels.includes(content.ch) && record.channels.length > 1) {
+          record.channels = record.channels.filter((c) => c !== content.ch);
+          if (record.chanMeta?.[content.ch]) {
+            record.chanMeta = { ...record.chanMeta };
+            delete record.chanMeta[content.ch];
+          }
+          await this.db.msgsDelete(record.id, content.ch);
+          await this.addSystemMessage(record.id, `#${content.ch} deleted by ${sender}`);
+          this.scheduleBackup();
+        }
+        break;
+      }
+      case 'vchan-ren': {
+        if (record.roles?.[sender] && record.roles[sender] !== 'admin') break;
+        const rooms = record.voiceChannels ?? ['lounge'];
+        if (rooms.includes(content.ch) && !rooms.includes(content.to)) {
+          record.voiceChannels = rooms.map((c) => (c === content.ch ? content.to : c));
+          if (this.voice?.active?.server === record.id && this.voice.active.channel === content.ch) {
+            await this.voice.leave();
+          }
+          await this.addSystemMessage(record.id, `voice room "${content.ch}" renamed to "${content.to}"`);
+          this.scheduleBackup();
+        }
+        break;
+      }
+      case 'vchan-del': {
+        if (record.roles?.[sender] && record.roles[sender] !== 'admin') break;
+        const rooms = record.voiceChannels ?? ['lounge'];
+        if (rooms.includes(content.ch)) {
+          record.voiceChannels = rooms.filter((c) => c !== content.ch);
+          if (this.voice?.active?.server === record.id && this.voice.active.channel === content.ch) {
+            await this.voice.leave();
+          }
+          await this.addSystemMessage(record.id, `voice room "${content.ch}" deleted by ${sender}`);
+          this.scheduleBackup();
+        }
+        break;
+      }
       case 'role': {
         // Roles live in the relay's ACL; this envelope just tells everyone
         // to re-read them and leaves a trace in the channel.
@@ -609,6 +664,78 @@ export class Controller {
     if (!ch || rooms.includes(ch)) return;
     record.voiceChannels = [...rooms, ch];
     await this.sendContent(serverId, { k: 'vchan', ch });
+    await this.db.serverPut(record);
+    this.dispatch({ type: 'servers', servers: this.snapshotServers() });
+    this.scheduleBackup();
+  }
+
+  static slugChannel(name) {
+    return name.toLowerCase().replace(/[^a-z0-9-]+/g, '-').replace(/^-+|-+$/g, '');
+  }
+
+  /** Rename a text channel: its message history and settings follow the new
+      name. Announced in-channel like other admin actions. */
+  async renameChannel(serverId, from, to) {
+    const record = this.servers.get(serverId);
+    const ch = Controller.slugChannel(to);
+    if (!ch || ch === from || !record.channels.includes(from) || record.channels.includes(ch)) return;
+    record.channels = record.channels.map((c) => (c === from ? ch : c));
+    if (record.chanMeta?.[from]) {
+      record.chanMeta = { ...record.chanMeta, [ch]: record.chanMeta[from] };
+      delete record.chanMeta[from];
+    }
+    await this.db.msgsRename(serverId, from, ch);
+    await this.sendContent(serverId, { k: 'chan-ren', ch: from, to: ch });
+    await this.addSystemMessage(serverId, `#${from} renamed to #${ch}`, ch);
+    await this.db.serverPut(record);
+    this.dispatch({ type: 'servers', servers: this.snapshotServers() });
+    this.dispatch({ type: 'refreshMessages' });
+    this.scheduleBackup();
+  }
+
+  /** Delete a text channel and purge its local history. */
+  async deleteChannel(serverId, channel) {
+    const record = this.servers.get(serverId);
+    if (!record.channels.includes(channel)) return;
+    if (record.channels.length <= 1) throw new Error('a server needs at least one channel');
+    record.channels = record.channels.filter((c) => c !== channel);
+    if (record.chanMeta?.[channel]) {
+      record.chanMeta = { ...record.chanMeta };
+      delete record.chanMeta[channel];
+    }
+    await this.db.msgsDelete(serverId, channel);
+    await this.sendContent(serverId, { k: 'chan-del', ch: channel });
+    await this.db.serverPut(record);
+    this.dispatch({ type: 'servers', servers: this.snapshotServers() });
+    this.scheduleBackup();
+  }
+
+  async renameVoiceChannel(serverId, from, to) {
+    const record = this.servers.get(serverId);
+    const rooms = record.voiceChannels ?? ['lounge'];
+    const ch = Controller.slugChannel(to);
+    if (!ch || ch === from || !rooms.includes(from) || rooms.includes(ch)) return;
+    record.voiceChannels = rooms.map((c) => (c === from ? ch : c));
+    if (this.voice?.active?.server === serverId && this.voice.active.channel === from) {
+      await this.voice.leave();
+    }
+    await this.sendContent(serverId, { k: 'vchan-ren', ch: from, to: ch });
+    await this.addSystemMessage(serverId, `voice room "${from}" renamed to "${ch}"`);
+    await this.db.serverPut(record);
+    this.dispatch({ type: 'servers', servers: this.snapshotServers() });
+    this.scheduleBackup();
+  }
+
+  async deleteVoiceChannel(serverId, channel) {
+    const record = this.servers.get(serverId);
+    const rooms = record.voiceChannels ?? ['lounge'];
+    if (!rooms.includes(channel)) return;
+    record.voiceChannels = rooms.filter((c) => c !== channel);
+    if (this.voice?.active?.server === serverId && this.voice.active.channel === channel) {
+      await this.voice.leave();
+    }
+    await this.sendContent(serverId, { k: 'vchan-del', ch: channel });
+    await this.addSystemMessage(serverId, `voice room "${channel}" deleted`);
     await this.db.serverPut(record);
     this.dispatch({ type: 'servers', servers: this.snapshotServers() });
     this.scheduleBackup();

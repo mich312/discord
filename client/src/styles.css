@@ -488,6 +488,15 @@ kbd {
 .room-row .channel { flex: 1; min-width: 0; }
 .room-row .chan-gear { opacity: 0; flex-shrink: 0; padding: 3px 5px; }
 .room-row:hover .chan-gear, .room-row .chan-gear:focus-visible { opacity: 1; }
+.voice-row .chan-gear { opacity: 0; flex-shrink: 0; padding: 3px 5px; }
+.voice-row:hover .chan-gear, .voice-row .chan-gear:focus-visible { opacity: 1; }
+@media (hover: none) {
+  .room-row .chan-gear, .voice-row .chan-gear { opacity: 1; }
+}
+/* channel-settings modal: rename + delete management block */
+.chan-manage { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--hairline); }
+.button.danger { color: var(--danger); border-color: var(--danger); }
+.button.danger:hover { background: var(--danger-soft); border-color: var(--danger); }
 .channel .chan-flag { margin-left: auto; color: var(--ink-mute); display: grid; place-items: center; }
 .channel {
   position: relative;
