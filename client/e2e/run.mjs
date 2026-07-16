@@ -306,6 +306,20 @@ try {
   await alice.click('[data-testid=enable-notifications]');
   await alice.waitForSelector('.toast', { timeout: 10000 });
 
+  console.log('15b. settings panel: opens, shows audio + theme controls, theme toggles');
+  await alice.click('[data-testid=open-settings]');
+  await alice.waitForSelector('[data-testid=settings-mic]', { timeout: 8000 });
+  await alice.waitForSelector('[data-testid=settings-theme]');
+  const themeBefore = await alice.evaluate(() => document.documentElement.dataset.theme);
+  await alice.click('[data-testid=settings-theme]');
+  await alice.waitForFunction((b) => document.documentElement.dataset.theme !== b, themeBefore, {
+    timeout: 5000,
+  });
+  await alice.click('[data-testid=settings-close]');
+  await alice.waitForFunction(() => !document.querySelector('[data-testid=settings-mic]'), {
+    timeout: 8000,
+  });
+
   console.log('16. voice: alice joins lounge, charlie sees presence and joins — DTLS connects');
   await aliceCtx.grantPermissions(['microphone'], { origin: `http://127.0.0.1:${HTTP}` });
   await charlieCtx.grantPermissions(['microphone'], { origin: `http://127.0.0.1:${HTTP}` });

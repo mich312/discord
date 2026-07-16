@@ -69,6 +69,13 @@ export const Plus = (p) => (
   </Svg>
 );
 
+export const Gear = (p) => (
+  <Svg {...p}>
+    <circle cx="8" cy="8" r="2.1" />
+    <path d="M8 1.6v1.5M8 12.9v1.5M3.5 3.5l1.1 1.1M11.4 11.4l1.1 1.1M1.6 8h1.5M12.9 8h1.5M3.5 12.5l1.1-1.1M11.4 4.6l1.1-1.1" />
+  </Svg>
+);
+
 export const Phone = (p) => (
   <Svg {...p}>
     <g transform="scale(0.667)">
