@@ -78,6 +78,8 @@ sends an aes128gcm-encrypted push carrying only what it already knows —
 the group id, never content. Dead endpoints are dropped on 404/410.
 Set `VAPID_PRIVATE_KEY` (base64url raw P-256 scalar) in production; an
 ephemeral key is generated (and subscriptions die on restart) otherwise.
+A malformed key logs an error and falls back to an ephemeral key rather
+than aborting startup — push degrades, but the relay stays up.
 
 ## Accounts
 

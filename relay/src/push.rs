@@ -23,26 +23,48 @@ impl PushService {
     /// Key from `VAPID_PRIVATE_KEY` (base64url raw scalar), or an ephemeral
     /// one — fine for dev; subscriptions die with the key, so set the env
     /// var in production.
+    ///
+    /// A malformed `VAPID_PRIVATE_KEY` never aborts startup: push is an
+    /// auxiliary "nudge offline devices" feature, so we log a loud error and
+    /// fall back to an ephemeral key rather than crash-looping the whole
+    /// relay (messaging, groups, blobs) over a misconfigured push key.
     pub fn from_env() -> Self {
-        let private_b64 = match std::env::var("VAPID_PRIVATE_KEY") {
-            Ok(v) => v,
-            Err(_) => {
-                let key = p256::SecretKey::random(&mut rand::rngs::OsRng);
-                let b64 = URL_SAFE_NO_PAD.encode(key.to_bytes());
-                tracing::warn!(
-                    "VAPID_PRIVATE_KEY not set — generated ephemeral key (push \
-                     subscriptions will not survive restarts)"
-                );
-                b64
-            }
-        };
-        let secret = p256::SecretKey::from_slice(
-            &URL_SAFE_NO_PAD.decode(&private_b64).expect("VAPID key: bad base64url"),
-        )
-        .expect("VAPID key: not a valid P-256 scalar");
+        let (private_b64, secret) = Self::load_key();
         let public_b64 =
             URL_SAFE_NO_PAD.encode(secret.public_key().to_encoded_point(false).as_bytes());
         Self { private_b64, public_b64, client: HyperWebPushClient::new() }
+    }
+
+    /// Resolve the VAPID key, falling back to a freshly generated ephemeral
+    /// key when the env var is unset or invalid.
+    fn load_key() -> (String, p256::SecretKey) {
+        match std::env::var("VAPID_PRIVATE_KEY") {
+            Ok(v) => match Self::parse_key(&v) {
+                // Store the trimmed key so `send`'s `from_base64` sees exactly
+                // what `parse_key` validated (no stray whitespace/newline).
+                Ok(secret) => return (v.trim().to_string(), secret),
+                Err(e) => tracing::error!(
+                    "VAPID_PRIVATE_KEY is set but invalid ({e}); falling back to an \
+                     ephemeral key. Expected base64url (no padding) of a 32-byte raw \
+                     P-256 scalar. Existing push subscriptions will not work until \
+                     this is fixed."
+                ),
+            },
+            Err(_) => tracing::warn!(
+                "VAPID_PRIVATE_KEY not set — generated ephemeral key (push \
+                 subscriptions will not survive restarts)"
+            ),
+        }
+        let key = p256::SecretKey::random(&mut rand::rngs::OsRng);
+        let b64 = URL_SAFE_NO_PAD.encode(key.to_bytes());
+        (b64, key)
+    }
+
+    fn parse_key(private_b64: &str) -> Result<p256::SecretKey, String> {
+        let bytes = URL_SAFE_NO_PAD
+            .decode(private_b64.trim())
+            .map_err(|e| format!("bad base64url: {e}"))?;
+        p256::SecretKey::from_slice(&bytes).map_err(|e| format!("not a valid P-256 scalar: {e}"))
     }
 
     /// Send `payload` to one subscription. Returns Ok(false) when the
@@ -64,5 +86,32 @@ impl PushService {
             | Err(web_push::WebPushError::EndpointNotValid(_)) => Ok(false),
             Err(e) => Err(e.to_string()),
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn parse_key_rejects_bad_base64() {
+        assert!(PushService::parse_key("not base64!!!").is_err());
+    }
+
+    #[test]
+    fn parse_key_rejects_non_scalar() {
+        // Valid base64url, but the wrong length for a raw P-256 scalar
+        // (e.g. a PEM/DER key or public key pasted by mistake).
+        let too_short = URL_SAFE_NO_PAD.encode([0u8; 16]);
+        assert!(PushService::parse_key(&too_short).is_err());
+    }
+
+    #[test]
+    fn parse_key_round_trips_generated_key() {
+        let key = p256::SecretKey::random(&mut rand::rngs::OsRng);
+        let b64 = URL_SAFE_NO_PAD.encode(key.to_bytes());
+        // Trailing whitespace (a stray newline from `$(cat key)`) is tolerated.
+        let parsed = PushService::parse_key(&format!("{b64}\n")).expect("valid key");
+        assert_eq!(parsed.to_bytes(), key.to_bytes());
     }
 }
