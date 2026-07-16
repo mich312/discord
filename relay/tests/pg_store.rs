@@ -42,6 +42,11 @@ async fn user_registration_pins_first_key() {
         "second registration must return the pinned key, not overwrite it"
     );
     assert_eq!(s.get_user_pubkey(&user).await.unwrap(), Some(b"key-1".to_vec()));
+
+    // user_count moves with registrations (shared test DB: relative check).
+    let before = s.user_count().await.unwrap();
+    s.register_user(&unique("bob"), b"key-3").await.unwrap();
+    assert_eq!(s.user_count().await.unwrap(), before + 1);
 }
 
 #[tokio::test]
@@ -131,11 +136,16 @@ async fn invites_enforce_expiry_uses_and_atomic_counting() {
     let expired = unique("inv");
     s.create_invite(&expired, record(None, Some(500))).await.unwrap();
     assert!(s.redeem_invite(&expired, 1000).await.is_err());
+    assert!(s.invite_usable(&expired, 1000).await.unwrap() == false);
+    assert!(s.invite_usable(&expired, 400).await.unwrap(), "not yet expired at t=400");
     assert!(s.redeem_invite(&expired, 400).await.is_ok(), "not yet expired at t=400");
 
     // max_uses is atomic: two redemptions of a 1-use invite can't both win.
     let once = unique("inv");
     s.create_invite(&once, record(Some(1), None)).await.unwrap();
+    // The registration gate's check does NOT consume a use.
+    assert!(s.invite_usable(&once, 100).await.unwrap());
+    assert!(s.invite_usable(&once, 100).await.unwrap(), "usability checks must not count uses");
     let (a, b) = tokio::join!(s.redeem_invite(&once, 100), s.redeem_invite(&once, 100));
     assert_eq!(
         [a.is_ok(), b.is_ok()].iter().filter(|x| **x).count(),
@@ -143,9 +153,13 @@ async fn invites_enforce_expiry_uses_and_atomic_counting() {
         "exactly one concurrent redemption may succeed"
     );
 
+    // A spent 1-use invite is no longer usable.
+    assert!(!s.invite_usable(&once, 100).await.unwrap());
+
     // Revoke.
     s.revoke_invite(&inv).await.unwrap();
     assert!(s.redeem_invite(&inv, 1000).await.is_err());
+    assert!(!s.invite_usable(&inv, 1000).await.unwrap());
     assert_eq!(s.invite_group(&inv).await.unwrap(), None);
 
     // Unknown group refused.

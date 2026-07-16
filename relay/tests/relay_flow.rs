@@ -15,7 +15,7 @@ use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
-async fn spawn_relay() -> SocketAddr {
+async fn spawn_relay_with(open_registration: bool) -> SocketAddr {
     let blobs = relay::blobs::BlobStore::new(
         tempfile::tempdir().map(|d| d.keep()).unwrap(),
     )
@@ -24,6 +24,7 @@ async fn spawn_relay() -> SocketAddr {
         Box::new(MemoryStore::default()),
         blobs,
         relay::push::PushService::from_env(),
+        open_registration,
     );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -31,6 +32,10 @@ async fn spawn_relay() -> SocketAddr {
         axum::serve(listener, relay::router(app)).await.unwrap();
     });
     addr
+}
+
+async fn spawn_relay() -> SocketAddr {
+    spawn_relay_with(true).await
 }
 
 struct TestClient {
@@ -44,6 +49,17 @@ struct TestClient {
 impl TestClient {
     /// Connect and authenticate; the MLS identity key answers the challenge.
     async fn connect(addr: SocketAddr, mls: ChatClient, name: &str) -> Result<Self, String> {
+        Self::connect_with_invite(addr, mls, name, None).await
+    }
+
+    /// Like `connect`, but the hello carries an invite id — required for
+    /// first-time registration on an invite-only relay.
+    async fn connect_with_invite(
+        addr: SocketAddr,
+        mls: ChatClient,
+        name: &str,
+        invite: Option<&str>,
+    ) -> Result<Self, String> {
         let (ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/ws"))
             .await
             .map_err(|e| e.to_string())?;
@@ -59,6 +75,7 @@ impl TestClient {
                 "t": "hello",
                 "user": name,
                 "pubkey": B64.encode(client.mls.signature_public_key()),
+                "invite": invite,
             }))
             .await;
         let challenge = client.recv().await;
@@ -553,4 +570,68 @@ async fn ephemeral_messages_fan_out_but_never_touch_the_log() {
     let mut eve = TestClient::connect(addr, ChatClient::new("eve").unwrap(), "eve").await.unwrap();
     let reply = eve.request(json!({"t": "ephemeral", "group": "g1", "payload": "AA=="})).await;
     assert_eq!(reply["t"], "error");
+}
+
+#[tokio::test]
+async fn invite_only_registration_gate() {
+    let addr = spawn_relay_with(false).await;
+
+    // Bootstrap: the very first user registers with no invite at all.
+    let mut alice = TestClient::connect(addr, ChatClient::new("alice").unwrap(), "alice")
+        .await
+        .expect("first user must bootstrap without an invite");
+
+    // A second fresh handle without an invite is refused.
+    let err = match TestClient::connect(addr, ChatClient::new("bob").unwrap(), "bob").await {
+        Ok(_) => panic!("unknown handle without invite must be refused"),
+        Err(e) => e,
+    };
+    assert!(err.contains("invite-only"), "unexpected error: {err}");
+
+    // A garbage invite id doesn't help.
+    assert!(
+        TestClient::connect_with_invite(addr, ChatClient::new("bob").unwrap(), "bob", Some("nope"))
+            .await
+            .is_err(),
+        "nonexistent invite must not admit anyone"
+    );
+
+    // alice parks a real invite; presenting its id in the hello admits bob.
+    alice.mls.create_group("g1").unwrap();
+    alice.request(json!({"t": "create_group", "group": "g1"})).await;
+    let blob = B64.encode(alice.mls.export_group_info("g1").unwrap());
+    let reply = alice
+        .request(json!({
+            "t": "create_invite", "invite": "inv-reg", "group": "g1",
+            "payload": blob, "expires_at": null, "max_uses": null,
+        }))
+        .await;
+    assert_eq!(reply["t"], "ok");
+
+    let bob =
+        TestClient::connect_with_invite(addr, ChatClient::new("bob").unwrap(), "bob", Some("inv-reg"))
+            .await
+            .expect("a usable invite id must admit a new user");
+
+    // Once pinned, bob reconnects without any invite (the gate only guards
+    // first-time registration).
+    let bob_mls = bob.mls;
+    drop(bob.ws);
+    TestClient::connect(addr, bob_mls, "bob")
+        .await
+        .expect("registered users must reconnect without an invite");
+
+    // Expired invites don't admit anyone — the gate applies redeemability.
+    alice
+        .request(json!({
+            "t": "create_invite", "invite": "inv-old", "group": "g1",
+            "payload": "AA==", "expires_at": 1, "max_uses": null,
+        }))
+        .await;
+    assert!(
+        TestClient::connect_with_invite(addr, ChatClient::new("carol").unwrap(), "carol", Some("inv-old"))
+            .await
+            .is_err(),
+        "expired invite must not admit anyone"
+    );
 }

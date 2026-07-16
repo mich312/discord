@@ -26,7 +26,15 @@ const localhostBase = `http://localhost:${HTTP}/?relay=${encodeURIComponent(`ws:
 const procs = [
   spawn(relayBin, [], {
     stdio: 'inherit',
-    env: { ...process.env, RELAY_PORT: RELAY, RP_ID: 'localhost', RP_ORIGIN: `http://localhost:${HTTP}` },
+    // OPEN_REGISTRATION: this journey creates several identities directly;
+    // the invite-only registration gate has its own relay-level tests.
+    env: {
+      ...process.env,
+      RELAY_PORT: RELAY,
+      RP_ID: 'localhost',
+      RP_ORIGIN: `http://localhost:${HTTP}`,
+      OPEN_REGISTRATION: '1',
+    },
   }),
   spawn('node', ['serve.mjs'], { cwd: dir, stdio: 'inherit', env: { ...process.env, HTTP_PORT: HTTP } }),
 ];
@@ -166,7 +174,9 @@ try {
   await fresh.fill('[data-testid=restore-code]', bobRecovery.code);
   await fresh.click('[data-testid=signin-submit]');
   // Identity is back (same pinned key -> relay accepts as bob)…
-  await fresh.waitForSelector('text=bob', { timeout: 15000 });
+  // (data-testid, not text=bob: the avatar's svg <title> also matches the
+  // text engine, and being invisible it can never satisfy the wait)
+  await fresh.waitForSelector('[data-testid=self-name]:has-text("bob")', { timeout: 15000 });
   // …but groups are intentionally gone (their keys died with the "device").
   await fresh.waitForSelector('.empty-state', { timeout: 5000 });
 

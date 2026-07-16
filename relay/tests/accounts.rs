@@ -33,6 +33,7 @@ async fn password_vault_roundtrip() {
         Box::new(MemoryStore::default()),
         BlobStore::new(tempfile::tempdir().unwrap().keep()).unwrap(),
         PushService::from_env(),
+        true,
     );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -131,4 +132,47 @@ async fn password_vault_roundtrip() {
     )
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn register_policy_reflects_gate_and_bootstrap() {
+    let gated = App::with_parts(
+        Box::new(MemoryStore::default()),
+        BlobStore::new(tempfile::tempdir().unwrap().keep()).unwrap(),
+        PushService::from_env(),
+        false,
+    );
+
+    // Empty relay: the next registration bootstraps, so no invite needed yet.
+    let (status, body) = http(
+        &gated,
+        Request::get("/register/policy").body(Body::empty()).unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["invite_required"], json!(false));
+
+    // Once anyone is registered, fresh handles need an invite.
+    gated.store.register_user("alice", b"key").await.unwrap();
+    let (_, body) = http(
+        &gated,
+        Request::get("/register/policy").body(Body::empty()).unwrap(),
+    )
+    .await;
+    assert_eq!(body["invite_required"], json!(true));
+
+    // OPEN_REGISTRATION relays never require one.
+    let open = App::with_parts(
+        Box::new(MemoryStore::default()),
+        BlobStore::new(tempfile::tempdir().unwrap().keep()).unwrap(),
+        PushService::from_env(),
+        true,
+    );
+    open.store.register_user("alice", b"key").await.unwrap();
+    let (_, body) = http(
+        &open,
+        Request::get("/register/policy").body(Body::empty()).unwrap(),
+    )
+    .await;
+    assert_eq!(body["invite_required"], json!(false));
 }

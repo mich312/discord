@@ -133,10 +133,43 @@ export class Controller {
       name: this.me,
       getPubkey: () => this.crypto('pubkey'),
       sign: (bytes) => this.crypto('sign', { bytes }),
+      // Invite-only relays only register a fresh handle if the hello
+      // carries a usable invite id (link joiners have one pending).
+      getInvite: () => this.pendingInvite?.id ?? null,
+      onAuthError: (message) => {
+        this.onAuthRejected(message).catch((e) => console.warn(`auth rejection: ${e.message}`));
+      },
       onStatus: (status) => this.dispatch({ type: 'connection', status }),
       onEvent: (msg) => this.onRelayEvent(msg).catch((e) => this.toast(e.message)),
     });
     this.relay.connect();
+  }
+
+  /** The relay refused the handshake. For an invite-only refusal the
+      handle was never registered, so the locally generated identity is
+      worthless — clear it and park the user back at the gate with the
+      reason. A key-mismatch refusal keeps the local identity (it may be
+      the right one for a different relay/handle). */
+  async onAuthRejected(message) {
+    if (/invite-only/.test(message)) {
+      localStorage.removeItem(IDENTITY_LS_KEY);
+      await this.db.kvPut('session', null);
+      this.me = null;
+    }
+    this.authError = message;
+    this.dispatch({ type: 'phase', phase: 'onboarding' });
+  }
+
+  /** Does this relay admit fresh identities without an invite link?
+      UI hint only — fail open here; the WS handshake enforces it. */
+  async registerPolicy() {
+    try {
+      const res = await fetch(`${this.httpBase()}/register/policy`);
+      if (!res.ok) return { invite_required: false };
+      return await res.json();
+    } catch {
+      return { invite_required: false };
+    }
   }
 
   async onRelayEvent(msg) {

@@ -12,6 +12,8 @@ export class Relay {
   /**
    * @param {{url: string, name: string, getPubkey: () => Promise<Uint8Array>,
    *          sign: (bytes: Uint8Array) => Promise<Uint8Array>,
+   *          getInvite?: () => string|null,
+   *          onAuthError?: (message: string) => void,
    *          onEvent: (msg: any) => void,
    *          onStatus: (status: 'online'|'offline'|'connecting') => void}} opts
    */
@@ -33,11 +35,22 @@ export class Relay {
 
     ws.onopen = async () => {
       const pubkey = await this.opts.getPubkey();
-      ws.send(JSON.stringify({ t: 'hello', user: this.opts.name, pubkey: b64.enc(pubkey) }));
+      // First-time registration on an invite-only relay must present a
+      // usable invite id; pinned users are admitted regardless.
+      const invite = this.opts.getInvite?.() ?? null;
+      ws.send(JSON.stringify({ t: 'hello', user: this.opts.name, pubkey: b64.enc(pubkey), invite }));
     };
 
     ws.onmessage = async ({ data }) => {
       const msg = JSON.parse(data);
+      // An error before `ready` is a handshake refusal (invite-only
+      // registration, or the handle is pinned to another key). Retrying
+      // the same handshake can't succeed — stop reconnecting.
+      if (msg.t === 'error' && !this.ready) {
+        this.closed = true;
+        this.opts.onAuthError?.(msg.message);
+        return;
+      }
       if (msg.t === 'challenge') {
         const nonce = b64.dec(msg.nonce);
         const context = new TextEncoder().encode(AUTH_CONTEXT);

@@ -25,6 +25,10 @@ pub fn router(app: Arc<App>) -> Router {
         // the MLS message. CORS is open — content is ciphertext and ids are
         // unguessable.
         .route("/blobs/{id}", axum::routing::put(put_blob).get(get_blob))
+        // Can a fresh identity register without an invite right now? Lets
+        // the onboarding UI say "invite-only" up front instead of failing
+        // after key generation. The WS handshake enforces it regardless.
+        .route("/register/policy", axum::routing::get(register_policy))
         // Account sign-in (pre-auth: a new device has no identity key yet).
         .route("/account/{user}/params", axum::routing::get(account::params))
         .route("/account/{user}/login", axum::routing::post(account::password_login))
@@ -43,6 +47,11 @@ pub fn router(app: Arc<App>) -> Router {
 
 async fn ws_handler(ws: WebSocketUpgrade, State(app): State<Arc<App>>) -> impl IntoResponse {
     ws.on_upgrade(move |socket| server::handle_socket(socket, app))
+}
+
+async fn register_policy(State(app): State<Arc<App>>) -> impl IntoResponse {
+    let open = server::registration_allowed(&app, None).await;
+    axum::Json(serde_json::json!({ "invite_required": !open }))
 }
 
 async fn put_blob(

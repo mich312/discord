@@ -39,6 +39,11 @@ threat-model sections still apply verbatim.
 - **Web Push** — offline members get an encrypted nudge (group id only —
   content never exists server-side). Requires `VAPID_PRIVATE_KEY` in
   production.
+- **Invite-only registration** — the platform itself is gated, not just
+  the groups: the relay refuses to pin an unknown handle unless the
+  connection presents a currently-usable invite id (the one from the
+  `?j=<id>#k=<key>` link). The very first user bootstraps a fresh relay
+  without one; set `OPEN_REGISTRATION=1` to turn the gate off for dev.
 - **Accounts (passkeys / password)** — sign in from a new device without
   moving key files. The identity bundle is parked on the relay *encrypted
   client-side*: under a passkey's PRF output (nothing brute-forceable
@@ -111,6 +116,7 @@ relay).
 | `DATABASE_URL` | unset | Postgres; unset = in-memory (nothing survives restart) |
 | `BLOB_DIR` | `./blobs` | encrypted attachment storage on disk |
 | `VAPID_PRIVATE_KEY` | unset | base64url P-256 scalar; unset = ephemeral (push subscriptions die on restart) |
+| `OPEN_REGISTRATION` | unset | unset/`0` = invite-only: unknown handles register only with a usable invite id (the first user on an empty relay is exempt); `1`/`true` = anyone can register |
 | `RP_ID` / `RP_ORIGIN` | `localhost` / `http://localhost:9601` | WebAuthn relying party — must match the origin users load the client from |
 
 For real deployments: terminate TLS in front of the relay (`wss://`),

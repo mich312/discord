@@ -24,6 +24,11 @@ pub struct App {
     pub blobs: BlobStore,
     pub push: PushService,
     pub accounts: AccountService,
+    /// When false (the production default), an unknown handle can only be
+    /// registered by presenting a usable invite id in the Hello — except
+    /// for the very first user, who bootstraps the deployment. Existing
+    /// (pinned) users are never affected.
+    pub open_registration: bool,
 }
 
 #[derive(Default)]
@@ -35,21 +40,30 @@ pub struct Hub {
 }
 
 impl App {
-    /// Env-configured construction: BLOB_DIR (default ./blobs) and
-    /// VAPID_PRIVATE_KEY (ephemeral if unset).
+    /// Env-configured construction: BLOB_DIR (default ./blobs),
+    /// VAPID_PRIVATE_KEY (ephemeral if unset), and OPEN_REGISTRATION
+    /// (unset/0 = invite-only registration, the default).
     pub fn new(store: Box<dyn Store>) -> Arc<Self> {
         let dir = std::env::var("BLOB_DIR").unwrap_or_else(|_| "./blobs".into());
         let blobs = BlobStore::new(dir).expect("blob dir must be creatable");
-        Self::with_parts(store, blobs, PushService::from_env())
+        let open = std::env::var("OPEN_REGISTRATION")
+            .is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true"));
+        Self::with_parts(store, blobs, PushService::from_env(), open)
     }
 
-    pub fn with_parts(store: Box<dyn Store>, blobs: BlobStore, push: PushService) -> Arc<Self> {
+    pub fn with_parts(
+        store: Box<dyn Store>,
+        blobs: BlobStore,
+        push: PushService,
+        open_registration: bool,
+    ) -> Arc<Self> {
         Arc::new(Self {
             store,
             hub: Mutex::new(Hub::default()),
             blobs,
             push,
             accounts: AccountService::from_env(),
+            open_registration,
         })
     }
 
@@ -96,8 +110,8 @@ async fn next_text(socket: &mut WebSocket) -> Option<String> {
 /// hello -> challenge -> auth. Returns the authenticated user name.
 async fn authenticate(socket: &mut WebSocket, app: &App) -> Option<String> {
     let hello = next_text(socket).await?;
-    let (user, claimed_key) = match serde_json::from_str::<ClientMsg>(&hello) {
-        Ok(ClientMsg::Hello { user, pubkey }) => (user, pubkey),
+    let (user, claimed_key, invite) = match serde_json::from_str::<ClientMsg>(&hello) {
+        Ok(ClientMsg::Hello { user, pubkey, invite }) => (user, pubkey, invite),
         _ => {
             let _ = send_json(socket, &ServerMsg::Error { rid: None, message: "expected hello".into() }).await;
             return None;
@@ -143,6 +157,17 @@ async fn authenticate(socket: &mut WebSocket, app: &App) -> Option<String> {
     }
 
     if pinned.is_none() {
+        if !registration_allowed(app, invite.as_deref()).await {
+            let _ = send_json(
+                socket,
+                &ServerMsg::Error {
+                    rid: None,
+                    message: "registration is invite-only: open an invite link to join".into(),
+                },
+            )
+            .await;
+            return None;
+        }
         match app.store.register_user(&user, &claimed_key).await {
             Ok(RegisterOutcome::Registered) => {}
             // Raced with another connection registering a different key:
@@ -157,6 +182,23 @@ async fn authenticate(socket: &mut WebSocket, app: &App) -> Option<String> {
 
     send_json(socket, &ServerMsg::Ready { user: user.clone() }).await.ok()?;
     Some(user)
+}
+
+/// The invite gate for first-time registration. Open registration and the
+/// bootstrap user (empty relay) pass; everyone else needs an invite id
+/// that would currently redeem. The use itself is only spent when the
+/// joiner actually redeems after authenticating.
+pub async fn registration_allowed(app: &App, invite: Option<&str>) -> bool {
+    if app.open_registration {
+        return true;
+    }
+    if app.store.user_count().await.map(|n| n == 0).unwrap_or(false) {
+        return true;
+    }
+    match invite {
+        Some(id) => app.store.invite_usable(id, now_unix()).await.unwrap_or(false),
+        None => false,
+    }
 }
 
 fn verify_sig(pubkey: &[u8], message: &[u8], sig: &[u8]) -> bool {

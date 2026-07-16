@@ -16,6 +16,9 @@ services:
       #   openssl ecparam -genkey -name prime256v1 | openssl ec -no_public \
       #     -outform DER 2>/dev/null | tail -c 32 | basenc --base64url | tr -d '='
       VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
+      # Invite-only registration is the default (first user bootstraps);
+      # set OPEN_REGISTRATION=1 to let anyone create an account.
+      OPEN_REGISTRATION: ${OPEN_REGISTRATION:-}
     volumes:
       - blobs:/data
     depends_on:
