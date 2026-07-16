@@ -27,7 +27,30 @@ Two constraints make a bare IP awkward:
    relying-party ID to be a domain, so browsers reject an IP. Password accounts
    and all E2EE chat/voice still work; passkey sign-in does not.
 
-You have two options.
+You have two options. **The fastest way through either is the script below**
+(`deploy/setup.sh`) — it auto-detects your IP and does everything. The manual
+steps follow if you'd rather run them yourself.
+
+### Fastest: the setup script
+
+From a clone of this repo on the VM:
+
+```sh
+sudo ./deploy/setup.sh --firewall
+```
+
+That auto-detects the public IP, installs Docker if missing, opens 22/80/443
+(with `--firewall`), generates a VAPID key, writes `deploy/.env`, and brings the
+stack up on `https://<ip>.sslip.io` with a real Let's Encrypt cert. Variations:
+
+```sh
+sudo ./deploy/setup.sh --domain chat.example.org   # your own hostname
+sudo ./deploy/setup.sh --self-signed               # raw IP, self-signed cert
+sudo ./deploy/setup.sh --help                       # all options
+```
+
+It's safe to re-run (it backs up any existing `deploy/.env`). The manual
+equivalents are below.
 
 ### Option A (recommended): a free hostname that resolves to your IP
 
