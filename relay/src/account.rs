@@ -9,7 +9,6 @@
 //! passkey kind has no such surface.
 
 use crate::server::App;
-use crate::store::VaultRecord;
 use axum::extract::{Path, State};
 use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
@@ -151,7 +150,12 @@ pub async fn password_login(
     };
     match app.store.get_vault(&user).await {
         Ok(Some(vault)) if vault.kind == "password" => {
-            if verifier_of(&auth_key) == vault.verifier {
+            // Constant-time: both sides are SHA-256 digests, so a timing
+            // oracle would leak little — but ct_eq costs nothing.
+            if bool::from(subtle::ConstantTimeEq::ct_eq(
+                verifier_of(&auth_key).as_slice(),
+                vault.verifier.as_slice(),
+            )) {
                 Json(json!({ "wrapped": B64.encode(&vault.wrapped) })).into_response()
             } else {
                 err(StatusCode::FORBIDDEN, "wrong password")

@@ -22,6 +22,11 @@ async fn main() -> anyhow::Result<()> {
     let app = App::new(store);
     let listener = tokio::net::TcpListener::bind(format!("{bind}:{port}")).await?;
     tracing::info!("relay listening on {bind}:{port} (ws at /ws)");
-    axum::serve(listener, relay::router(app)).await?;
+    // with_connect_info: peer addresses feed the per-client rate limits.
+    axum::serve(
+        listener,
+        relay::router(app).into_make_service_with_connect_info::<std::net::SocketAddr>(),
+    )
+    .await?;
     Ok(())
 }

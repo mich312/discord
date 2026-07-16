@@ -176,3 +176,50 @@ async fn register_policy_reflects_gate_and_bootstrap() {
     .await;
     assert_eq!(body["invite_required"], json!(false));
 }
+
+#[tokio::test]
+async fn credential_endpoints_are_rate_limited() {
+    let app = App::with_parts(
+        Box::new(MemoryStore::default()),
+        BlobStore::new(tempfile::tempdir().unwrap().keep()).unwrap(),
+        PushService::from_env(),
+        true,
+    );
+
+    // No ConnectInfo in oneshot tests: every request shares one bucket,
+    // which is exactly what a single-client hammering test wants.
+    let login = || {
+        Request::post("/account/alice/login")
+            .header("content-type", "application/json")
+            .body(Body::from(json!({"auth_key": B64.encode([0u8; 32])}).to_string()))
+            .unwrap()
+    };
+    let mut limited = false;
+    for _ in 0..10 {
+        let (status, _) = http(&app, login()).await;
+        if status == StatusCode::TOO_MANY_REQUESTS {
+            limited = true;
+            break;
+        }
+        // Not limited yet: must be a normal auth outcome, not an error.
+        assert_eq!(status, StatusCode::NOT_FOUND, "no vault exists for alice");
+    }
+    let (status, _) = http(&app, login()).await;
+    limited = limited || status == StatusCode::TOO_MANY_REQUESTS;
+    assert!(limited, "11th credential attempt in a burst must be throttled");
+
+    // The params probe has its own (higher) bucket — still capped.
+    let mut limited = false;
+    for _ in 0..31 {
+        let (status, _) = http(
+            &app,
+            Request::get("/account/alice/params").body(Body::empty()).unwrap(),
+        )
+        .await;
+        if status == StatusCode::TOO_MANY_REQUESTS {
+            limited = true;
+            break;
+        }
+    }
+    assert!(limited, "enumeration sweeps must hit the params limit");
+}

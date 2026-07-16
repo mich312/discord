@@ -9,7 +9,8 @@ services:
     ports:
       - "80:80"
     environment:
-      DATABASE_URL: postgres://quorum:quorum@db/quorum
+      # Override POSTGRES_PASSWORD for any deployment that isn't localhost.
+      DATABASE_URL: postgres://quorum:${POSTGRES_PASSWORD:-quorum}@db/quorum
       RP_ID: ${RP_ID:-localhost}
       RP_ORIGIN: ${RP_ORIGIN:-http://localhost}
       # Generate once and keep, or push subscriptions die on restart:
@@ -30,7 +31,7 @@ services:
     image: postgres:16
     environment:
       POSTGRES_USER: quorum
-      POSTGRES_PASSWORD: quorum
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-quorum}
       POSTGRES_DB: quorum
     volumes:
       - pgdata:/var/lib/postgresql/data

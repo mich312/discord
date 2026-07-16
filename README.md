@@ -117,6 +117,7 @@ relay).
 | `BLOB_DIR` | `./blobs` | encrypted attachment storage on disk |
 | `VAPID_PRIVATE_KEY` | unset | base64url P-256 scalar; unset = ephemeral (push subscriptions die on restart) |
 | `OPEN_REGISTRATION` | unset | unset/`0` = invite-only: unknown handles register only with a usable invite id (the first user on an empty relay is exempt); `1`/`true` = anyone can register |
+| `TRUST_PROXY` | unset | `1` = key the rate limits on the first `X-Forwarded-For` hop instead of the socket peer — set it ONLY behind a proxy that overwrites the header (the `deploy/` Caddy setups do) |
 | `RP_ID` / `RP_ORIGIN` | `localhost` / `http://localhost:9601` | WebAuthn relying party — must match the origin users load the client from |
 
 For real deployments: terminate TLS in front of the relay (`wss://`),
@@ -169,7 +170,10 @@ joins, identity recovery, encrypted attachments, safety numbers, and
 - **Password vaults can be brute-forced by the server** — only for weak
   passwords, and only offline against the encrypted bundle (Argon2id,
   19 MiB/t=2). Passkey vaults have no such surface. The sign-in params
-  endpoint also confirms whether a username exists.
+  endpoint also confirms whether a username exists; online guessing and
+  enumeration sweeps are rate-limited per client IP (10 credential
+  attempts/min, 30 probes/min, 60 new connections/min — per relay
+  process, in memory).
 - **Browser code delivery is the weak point** (plan §5.1) — SRI, strict
   CSP, and reproducible builds mitigate broad silent attacks, not
   targeted ones. State it, don't hide it.

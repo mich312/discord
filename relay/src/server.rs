@@ -7,6 +7,7 @@ use crate::account::AccountService;
 use crate::blobs::BlobStore;
 use crate::proto::{ClientMsg, ServerMsg, AUTH_CONTEXT};
 use crate::push::PushService;
+use crate::ratelimit::RateLimiter;
 use crate::store::{InviteRecord, RegisterOutcome, Store, StoreError, StoredWelcome};
 use axum::extract::ws::{Message, WebSocket};
 use base64::engine::general_purpose::STANDARD as B64;
@@ -29,6 +30,30 @@ pub struct App {
     /// for the very first user, who bootstraps the deployment. Existing
     /// (pinned) users are never affected.
     pub open_registration: bool,
+    /// Per-client limits on the unauthenticated surface.
+    pub limits: Limits,
+    /// TRUST_PROXY=1: key rate limits on X-Forwarded-For (first hop)
+    /// instead of the socket peer. Only sane behind Caddy/nginx.
+    pub trust_proxy: bool,
+}
+
+pub struct Limits {
+    /// Credential attempts: password login, passkey challenge/login.
+    pub account: RateLimiter,
+    /// The sign-in params probe (username enumeration surface).
+    pub params: RateLimiter,
+    /// New WebSocket connections (auth handshake spam).
+    pub ws: RateLimiter,
+}
+
+impl Default for Limits {
+    fn default() -> Self {
+        Self {
+            account: RateLimiter::per_minute(10),
+            params: RateLimiter::per_minute(30),
+            ws: RateLimiter::per_minute(60),
+        }
+    }
 }
 
 #[derive(Default)]
@@ -64,6 +89,9 @@ impl App {
             push,
             accounts: AccountService::from_env(),
             open_registration,
+            limits: Limits::default(),
+            trust_proxy: std::env::var("TRUST_PROXY")
+                .is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true")),
         })
     }
 
