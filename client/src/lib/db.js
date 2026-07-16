@@ -55,5 +55,23 @@ function wrap(db) {
         req.onsuccess = () => resolve(req.result);
         req.onerror = () => reject(req.error);
       }),
+    /** Delete a channel's messages older than `beforeTs` (auto-delete). */
+    msgsPrune: (server, channel, beforeTs) =>
+      new Promise((resolve, reject) => {
+        const t = db.transaction('messages', 'readwrite');
+        const req = t.objectStore('messages').index('byChannel').openCursor([server, channel]);
+        let removed = 0;
+        req.onsuccess = () => {
+          const cursor = req.result;
+          if (!cursor) return;
+          if (cursor.value.ts < beforeTs) {
+            cursor.delete();
+            removed += 1;
+          }
+          cursor.continue();
+        };
+        t.oncomplete = () => resolve(removed);
+        t.onerror = () => reject(t.error);
+      }),
   };
 }

@@ -163,6 +163,13 @@ export const X = (p) => (
   </Svg>
 );
 
+export const Clock = (p) => (
+  <Svg {...p}>
+    <circle cx="8" cy="8" r="5.5" />
+    <path d="M8 4.8V8l2.2 1.6" />
+  </Svg>
+);
+
 export const ArrowRight = (p) => (
   <Svg {...p}>
     <path d="M2.5 8h11M9.5 4l4 4-4 4" />

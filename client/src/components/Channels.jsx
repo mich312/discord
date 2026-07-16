@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import Seal from './Seal.jsx';
 import VoiceMeter from './VoiceMeter.jsx';
-import { Hash, Wave, Plus } from './icons.jsx';
+import { Hash, Wave, Plus, Gear, Clock } from './icons.jsx';
 
 // Rooms and voice tables of the active circle. Channel names travel inside
 // the encryption, so even this sidebar is knowledge the relay never has.
@@ -11,6 +11,7 @@ export default function Channels({
   me,
   canManage,
   onSelect,
+  onSettings,
   onCreate,
   onVoiceCreate,
   voice,
@@ -33,20 +34,38 @@ export default function Channels({
         )}
       </div>
       <ul className="channel-list rooms">
-        {server.channels.map((ch) => (
-          <li key={ch}>
-            <button
-              className={ch === activeChannel ? 'channel active' : 'channel'}
-              data-testid={`channel-${ch}`}
-              onClick={() => onSelect(ch)}
-            >
-              <span className="glyph">
-                <Hash size={13} />
-              </span>
-              {ch}
-            </button>
-          </li>
-        ))}
+        {server.channels.map((ch) => {
+          const meta = server.chanMeta?.[ch] ?? {};
+          return (
+            <li key={ch} className="room-row">
+              <button
+                className={ch === activeChannel ? 'channel active' : 'channel'}
+                data-testid={`channel-${ch}`}
+                onClick={() => onSelect(ch)}
+              >
+                <span className="glyph">
+                  <Hash size={13} />
+                </span>
+                {ch}
+                {meta.retention ? (
+                  <span className="chan-flag" title="auto-delete is on">
+                    <Clock size={11} />
+                  </span>
+                ) : null}
+              </button>
+              {canManage && (
+                <button
+                  className="ghost chan-gear"
+                  title={`#${ch} settings`}
+                  data-testid={`channel-settings-${ch}`}
+                  onClick={() => onSettings(ch)}
+                >
+                  <Gear size={12} />
+                </button>
+              )}
+            </li>
+          );
+        })}
         {adding && (
           <li>
             <form

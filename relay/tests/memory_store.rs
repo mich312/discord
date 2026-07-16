@@ -191,3 +191,65 @@ async fn push_subscriptions_are_keyed_by_endpoint() {
     // Deleting a missing endpoint is a no-op.
     assert!(s.delete_push_subscription("alice", "https://gone").await.is_ok());
 }
+
+#[tokio::test]
+async fn history_logs_are_per_hid_ordered_and_expire() {
+    let s = store();
+    s.create_group("g1", "alice").await.unwrap();
+
+    // Unknown group errors; unknown hid inside a known group is just empty.
+    assert!(matches!(
+        s.append_history("missing", "h1", 10, None, b"x".to_vec()).await,
+        Err(StoreError::NoSuchGroup)
+    ));
+    assert!(s.history_after("g1", "h1", 0, 100).await.unwrap().is_empty());
+
+    assert_eq!(s.append_history("g1", "h1", 10, None, b"one".to_vec()).await.unwrap(), 1);
+    assert_eq!(s.append_history("g1", "h1", 20, Some(50), b"two".to_vec()).await.unwrap(), 2);
+    assert_eq!(s.append_history("g1", "h2", 30, None, b"other-log".to_vec()).await.unwrap(), 1);
+
+    // `after` is a cursor; logs are independent per hid.
+    let all = s.history_after("g1", "h1", 0, 40).await.unwrap();
+    assert_eq!(all.iter().map(|e| e.payload.clone()).collect::<Vec<_>>(), vec![b"one".to_vec(), b"two".to_vec()]);
+    assert_eq!(s.history_after("g1", "h1", 1, 40).await.unwrap().len(), 1);
+    assert_eq!(s.history_after("g1", "h2", 0, 40).await.unwrap().len(), 1);
+
+    // Past expires_at the entry is gone — and stays gone for earlier `now`
+    // reads too (expired ciphertext is deleted, not filtered per-read).
+    let live = s.history_after("g1", "h1", 0, 60).await.unwrap();
+    assert_eq!(live.len(), 1, "expired entry dropped");
+    assert_eq!(live[0].payload, b"one".to_vec());
+    assert_eq!(s.history_after("g1", "h1", 0, 40).await.unwrap().len(), 1);
+
+    // Seqs never restart after deletion: the client cursor stays valid.
+    assert_eq!(s.append_history("g1", "h1", 70, None, b"three".to_vec()).await.unwrap(), 3);
+}
+
+#[tokio::test]
+async fn history_prune_drops_older_entries_only() {
+    let s = store();
+    s.create_group("g1", "alice").await.unwrap();
+    s.append_history("g1", "h1", 10, None, b"old".to_vec()).await.unwrap();
+    s.append_history("g1", "h1", 20, None, b"kept".to_vec()).await.unwrap();
+
+    s.prune_history("g1", "h1", 20).await.unwrap();
+    let left = s.history_after("g1", "h1", 0, 0).await.unwrap();
+    assert_eq!(left.len(), 1);
+    assert_eq!(left[0].payload, b"kept".to_vec());
+
+    // Pruning an unknown hid is a no-op; unknown group errors.
+    assert!(s.prune_history("g1", "ghost", 100).await.is_ok());
+    assert!(matches!(s.prune_history("missing", "h1", 0).await, Err(StoreError::NoSuchGroup)));
+}
+
+#[tokio::test]
+async fn backups_are_per_user_and_replace() {
+    let s = store();
+    assert!(s.get_backup("alice").await.unwrap().is_none());
+    s.set_backup("alice", b"blob-1".to_vec()).await.unwrap();
+    s.set_backup("bob", b"bob-blob".to_vec()).await.unwrap();
+    assert_eq!(s.get_backup("alice").await.unwrap(), Some(b"blob-1".to_vec()));
+    s.set_backup("alice", b"blob-2".to_vec()).await.unwrap();
+    assert_eq!(s.get_backup("alice").await.unwrap(), Some(b"blob-2".to_vec()));
+    assert_eq!(s.get_backup("bob").await.unwrap(), Some(b"bob-blob".to_vec()));
+}

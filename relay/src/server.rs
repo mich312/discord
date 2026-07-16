@@ -754,6 +754,67 @@ async fn handle_request(
             Some(ServerMsg::Ok { rid, seq: None })
         }
 
+        ClientMsg::HistoryAppend { rid, group, hid, ts, expires_at, payload } => {
+            if let Err(e) = require_member(app, &group, user).await {
+                return err(rid, e);
+            }
+            let payload = match decode_b64(&payload) {
+                Ok(b) => b,
+                Err(e) => return err(rid, e),
+            };
+            match app.store.append_history(&group, &hid, ts, expires_at, payload).await {
+                Ok(seq) => Some(ServerMsg::Ok { rid, seq: Some(seq) }),
+                Err(e) => err(rid, e),
+            }
+        }
+
+        ClientMsg::HistoryFetch { rid, group, hid, after } => {
+            if let Err(e) = require_member(app, &group, user).await {
+                return err(rid, e);
+            }
+            match app.store.history_after(&group, &hid, after, now_unix()).await {
+                Ok(entries) => Some(ServerMsg::History {
+                    rid,
+                    hid,
+                    entries: entries
+                        .into_iter()
+                        .map(|e| crate::proto::HistoryEntryOut {
+                            seq: e.seq,
+                            ts: e.ts,
+                            payload: B64.encode(&e.payload),
+                        })
+                        .collect(),
+                }),
+                Err(e) => err(rid, e),
+            }
+        }
+
+        ClientMsg::HistoryPrune { rid, group, hid, before_ts } => {
+            if let Err(e) = require_admin(app, &group, user).await {
+                return err(rid, e);
+            }
+            match app.store.prune_history(&group, &hid, before_ts).await {
+                Ok(()) => Some(ServerMsg::Ok { rid, seq: None }),
+                Err(e) => err(rid, e),
+            }
+        }
+
+        ClientMsg::BackupSet { rid, payload } => {
+            let payload = match decode_b64(&payload) {
+                Ok(b) => b,
+                Err(e) => return err(rid, e),
+            };
+            match app.store.set_backup(user, payload).await {
+                Ok(()) => Some(ServerMsg::Ok { rid, seq: None }),
+                Err(e) => err(rid, e),
+            }
+        }
+
+        ClientMsg::BackupGet { rid } => match app.store.get_backup(user).await {
+            Ok(payload) => Some(ServerMsg::Backup { rid, payload: payload.map(|b| B64.encode(b)) }),
+            Err(e) => err(rid, e),
+        },
+
         ClientMsg::VaultSet { rid, kind, salt, verifier, wrapped, credential } => {
             if kind != "password" && kind != "passkey" {
                 return err(rid, "kind must be password or passkey");

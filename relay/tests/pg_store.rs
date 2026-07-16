@@ -180,3 +180,41 @@ async fn invites_enforce_expiry_uses_and_atomic_counting() {
     rec.group = unique("missing-group");
     assert!(s.create_invite(&orphan, rec).await.is_err());
 }
+
+#[tokio::test]
+async fn history_log_orders_expires_and_prunes() {
+    let s = require_store!();
+    let group = unique("g");
+    s.create_group(&group, "alice").await.unwrap();
+
+    assert_eq!(s.append_history(&group, "h1", 10, None, b"one".to_vec()).await.unwrap(), 1);
+    assert_eq!(s.append_history(&group, "h1", 20, Some(50), b"two".to_vec()).await.unwrap(), 2);
+    assert_eq!(s.append_history(&group, "h2", 30, None, b"other".to_vec()).await.unwrap(), 1);
+    assert!(s.append_history(&unique("missing"), "h1", 0, None, b"x".to_vec()).await.is_err());
+
+    let all = s.history_after(&group, "h1", 0, 40).await.unwrap();
+    assert_eq!(all.len(), 2);
+    assert_eq!(all[0].payload, b"one".to_vec());
+    assert_eq!(s.history_after(&group, "h1", 1, 40).await.unwrap().len(), 1);
+
+    // Expired entries are deleted on read; seqs keep counting afterwards.
+    assert_eq!(s.history_after(&group, "h1", 0, 60).await.unwrap().len(), 1);
+    assert_eq!(s.append_history(&group, "h1", 70, None, b"three".to_vec()).await.unwrap(), 3);
+
+    s.prune_history(&group, "h1", 70).await.unwrap();
+    let left = s.history_after(&group, "h1", 0, 0).await.unwrap();
+    assert_eq!(left.len(), 1);
+    assert_eq!(left[0].payload, b"three".to_vec());
+    assert_eq!(s.history_after(&group, "h2", 0, 0).await.unwrap().len(), 1, "other log untouched");
+}
+
+#[tokio::test]
+async fn backups_replace_per_user() {
+    let s = require_store!();
+    let user = unique("alice");
+    s.register_user(&user, b"k").await.unwrap();
+    assert!(s.get_backup(&user).await.unwrap().is_none());
+    s.set_backup(&user, b"blob-1".to_vec()).await.unwrap();
+    s.set_backup(&user, b"blob-2".to_vec()).await.unwrap();
+    assert_eq!(s.get_backup(&user).await.unwrap(), Some(b"blob-2".to_vec()));
+}

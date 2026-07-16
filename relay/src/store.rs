@@ -80,6 +80,19 @@ pub struct StoredWelcome {
     pub payload: Vec<u8>,
 }
 
+/// One entry in a channel history log. The relay sees an opaque log id
+/// (`hid` — it cannot tell which channel it is) and AES-GCM ciphertext
+/// under a key that only ever travels inside the group's MLS messages.
+/// `ts`/`expires_at` are client-declared: they order entries and drive
+/// server-side retention, nothing more.
+#[derive(Debug, Clone)]
+pub struct HistoryEntry {
+    pub seq: u64,
+    pub ts: u64,
+    pub expires_at: Option<u64>,
+    pub payload: Vec<u8>,
+}
+
 #[async_trait]
 pub trait Store: Send + Sync {
     /// Pin `pubkey` for `user` if unknown, else return the pinned key.
@@ -117,6 +130,32 @@ pub trait Store: Send + Sync {
     async fn store_welcome(&self, to: &str, welcome: StoredWelcome) -> Result<(), StoreError>;
     /// Remove and return all Welcomes queued for `to`.
     async fn take_welcomes(&self, to: &str) -> Result<Vec<StoredWelcome>, StoreError>;
+
+    // --- channel history logs ---
+    /// Append to the history log `hid` of `group`; returns the assigned
+    /// seq (1-based, per (group, hid)).
+    async fn append_history(
+        &self,
+        group: &str,
+        hid: &str,
+        ts: u64,
+        expires_at: Option<u64>,
+        payload: Vec<u8>,
+    ) -> Result<u64, StoreError>;
+    /// Entries after `after`, excluding ones expired at `now`.
+    async fn history_after(
+        &self,
+        group: &str,
+        hid: &str,
+        after: u64,
+        now: u64,
+    ) -> Result<Vec<HistoryEntry>, StoreError>;
+    /// Drop entries with ts < `before_ts` (retention shrank / history off).
+    async fn prune_history(&self, group: &str, hid: &str, before_ts: u64) -> Result<(), StoreError>;
+
+    // --- encrypted circles backups ---
+    async fn set_backup(&self, user: &str, payload: Vec<u8>) -> Result<(), StoreError>;
+    async fn get_backup(&self, user: &str) -> Result<Option<Vec<u8>>, StoreError>;
 
     // --- account vaults ---
     async fn set_vault(&self, user: &str, vault: VaultRecord) -> Result<(), StoreError>;
@@ -156,6 +195,7 @@ struct MemoryInner {
     /// user -> endpoint -> subscription json
     push_subs: HashMap<String, HashMap<String, String>>,
     vaults: HashMap<String, VaultRecord>,
+    backups: HashMap<String, Vec<u8>>,
 }
 
 #[derive(Default)]
@@ -164,6 +204,17 @@ struct GroupData {
     /// (user, role)
     members: Vec<(String, String)>,
     log: Vec<StoredMessage>,
+    /// hid -> history log
+    history: HashMap<String, HistoryLog>,
+}
+
+/// Seqs come from a counter that survives expiry/prune deletions: deriving
+/// them from the surviving max would re-issue numbers and make client
+/// cursors silently skip entries.
+#[derive(Default)]
+struct HistoryLog {
+    last_seq: u64,
+    entries: Vec<HistoryEntry>,
 }
 
 #[derive(Default)]
@@ -279,6 +330,58 @@ impl Store for MemoryStore {
             inner.groups.iter().map(|(g, d)| (g.clone(), d.created_by.clone())).collect();
         groups.sort();
         Ok(groups)
+    }
+
+    async fn append_history(
+        &self,
+        group: &str,
+        hid: &str,
+        ts: u64,
+        expires_at: Option<u64>,
+        payload: Vec<u8>,
+    ) -> Result<u64, StoreError> {
+        let mut inner = self.inner.lock().unwrap();
+        let data = inner.groups.get_mut(group).ok_or(StoreError::NoSuchGroup)?;
+        let log = data.history.entry(hid.to_string()).or_default();
+        log.last_seq += 1;
+        let seq = log.last_seq;
+        log.entries.push(HistoryEntry { seq, ts, expires_at, payload });
+        Ok(seq)
+    }
+
+    async fn history_after(
+        &self,
+        group: &str,
+        hid: &str,
+        after: u64,
+        now: u64,
+    ) -> Result<Vec<HistoryEntry>, StoreError> {
+        let mut inner = self.inner.lock().unwrap();
+        let data = inner.groups.get_mut(group).ok_or(StoreError::NoSuchGroup)?;
+        let Some(log) = data.history.get_mut(hid) else { return Ok(Vec::new()) };
+        // Expired ciphertext has no readers left to serve — drop it now.
+        log.entries.retain(|e| !e.expires_at.is_some_and(|t| now > t));
+        Ok(log.entries.iter().filter(|e| e.seq > after).cloned().collect())
+    }
+
+    async fn prune_history(&self, group: &str, hid: &str, before_ts: u64) -> Result<(), StoreError> {
+        let mut inner = self.inner.lock().unwrap();
+        let data = inner.groups.get_mut(group).ok_or(StoreError::NoSuchGroup)?;
+        if let Some(log) = data.history.get_mut(hid) {
+            log.entries.retain(|e| e.ts >= before_ts);
+        }
+        Ok(())
+    }
+
+    async fn set_backup(&self, user: &str, payload: Vec<u8>) -> Result<(), StoreError> {
+        let mut inner = self.inner.lock().unwrap();
+        inner.backups.insert(user.to_string(), payload);
+        Ok(())
+    }
+
+    async fn get_backup(&self, user: &str) -> Result<Option<Vec<u8>>, StoreError> {
+        let inner = self.inner.lock().unwrap();
+        Ok(inner.backups.get(user).cloned())
     }
 
     async fn set_vault(&self, user: &str, vault: VaultRecord) -> Result<(), StoreError> {

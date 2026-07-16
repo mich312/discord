@@ -5,14 +5,29 @@
 // Message content is a JSON envelope INSIDE the MLS plaintext, so channel
 // structure and server names are invisible to the relay:
 //   {k:'chat', ch, text}          — a chat message in channel `ch`
-//   {k:'meta', name, channels}    — server metadata; rebroadcast after every
+//   {k:'meta', name, channels,
+//    chanMeta}                    — server metadata; rebroadcast after every
 //                                   member add because joiners have no
-//                                   scrollback to learn it from
+//                                   scrollback to learn it from. chanMeta
+//                                   carries per-channel topic/retention and —
+//                                   when history is on — the channel history
+//                                   key, so joining IS how the key is shared.
 //   {k:'chan', ch}                — a channel was created
+//   {k:'chanset', ch, meta}       — a channel's settings changed (topic,
+//                                   auto-delete, history on/off + its key)
 //   {k:'file', ch, file}          — an attachment: {name,size,mime,blob,key};
 //                                   blob id points at relay disk, the AES key
 //                                   travels only inside this encrypted envelope
 import { b64, Relay } from './relay.js';
+import {
+  generateHistoryId,
+  generateHistoryKey,
+  messageFingerprint,
+  openBackup,
+  openHistoryEntry,
+  sealBackup,
+  sealHistoryEntry,
+} from './history.js';
 import { VoiceManager } from './voice.js';
 import {
   derivePrfSecret,
@@ -181,11 +196,25 @@ export class Controller {
         this.dispatch({ type: 'admin', globalAdmin: this.globalAdmin });
         // Re-subscribe everything from where we left off, then top up
         // the KeyPackage store so others can add us while we're away.
+        // Restored records (from the encrypted backup) have no MLS state
+        // to decrypt with — they stay read-only until a re-add arrives.
         for (const record of this.servers.values()) {
+          if (record.restored) {
+            this.refreshRoles(record.id);
+            continue;
+          }
           await this.relay
             .request({ t: 'subscribe', group: record.id, after: record.lastSeq })
             .catch((e) => this.toast(`subscribe ${record.id}: ${e.message}`));
           this.refreshRoles(record.id);
+        }
+        // A fresh sign-in has an identity but no circles: pull the
+        // encrypted backup (if one was parked) and restore what this
+        // account knew — names, channels, and channel history keys.
+        if (this.servers.size === 0) {
+          await this.restoreFromBackup().catch((e) =>
+            console.warn(`backup restore: ${e.message}`)
+          );
         }
         const payloads = [];
         for (let i = 0; i < KP_TOPUP; i++) {
@@ -204,8 +233,17 @@ export class Controller {
           console.warn(`ice_info: ${e.message}`);
         }
         for (const record of this.servers.values()) {
-          this.voice.probe(record.id);
+          if (!record.restored) this.voice.probe(record.id);
         }
+        // Catch up channel history logs: fills any gap between what this
+        // device saw live and what senders parked (deduplicated), and is
+        // what populates a just-restored device.
+        for (const record of this.servers.values()) {
+          this.backfillHistory(record).catch((e) =>
+            console.warn(`history backfill ${record.id}: ${e.message}`)
+          );
+        }
+        this.scheduleBackup();
         this.checkVault();
         // Refresh the push subscription silently if permission was already
         // granted (endpoints rotate; VAPID keys may too).
@@ -259,22 +297,35 @@ export class Controller {
       welcome: b64.dec(msg.payload),
     });
     await this.persistState(state);
+    // A backup-restored record may already exist for this circle — being
+    // re-added upgrades it to a live one; keep everything it knew.
+    const prior = this.servers.get(group);
     const record = {
       id: group,
-      name: group, // placeholder until the meta rebroadcast lands
-      channels: ['general'],
-      voiceChannels: ['lounge'],
+      name: prior?.name ?? group, // placeholder until the meta rebroadcast lands
+      channels: prior?.channels ?? ['general'],
+      voiceChannels: prior?.voiceChannels ?? ['lounge'],
+      chanMeta: prior?.chanMeta ?? {},
+      hcursor: prior?.hcursor ?? {},
+      verified: prior?.verified,
       members,
       epoch,
       lastSeq: msg.after,
-      joinedAt: Date.now(),
+      joinedAt: prior?.joinedAt ?? Date.now(),
     };
     this.servers.set(group, record);
     await this.db.serverPut(record);
-    await this.addSystemMessage(group, `you joined — history before this point does not exist for you`);
+    await this.addSystemMessage(
+      group,
+      prior?.restored
+        ? `you were re-added — this device can send again`
+        : `you joined — history before this point does not exist for you`
+    );
     this.dispatch({ type: 'servers', servers: this.snapshotServers() });
     await this.relay.request({ t: 'subscribe', group, after: msg.after });
     this.refreshRoles(group);
+    this.backfillHistory(record).catch((e) => console.warn(`history: ${e.message}`));
+    this.scheduleBackup();
   }
 
   async onGroupMessage(msg) {
@@ -305,13 +356,15 @@ export class Controller {
             `${event.sender} joined via invite link — unverified (epoch ${event.epoch})`
           );
           // Link joiners have no scrollback; whoever owns invites for this
-          // group rebroadcasts the metadata they missed.
+          // group rebroadcasts the metadata they missed (including channel
+          // history keys — sharing them with the roster is their design).
           if (record.invites?.length) {
             await this.sendContent(record.id, {
               k: 'meta',
               name: record.name,
               channels: record.channels,
               voiceChannels: record.voiceChannels ?? ['lounge'],
+              chanMeta: record.chanMeta ?? {},
             });
           }
         } else {
@@ -363,6 +416,35 @@ export class Controller {
           for (const ch of content.voiceChannels) if (!rooms.includes(ch)) rooms.push(ch);
           record.voiceChannels = rooms;
         }
+        // Gap-fill channel settings (a joiner has none): explicit changes
+        // arrive as their own `chanset` events, so never clobber here.
+        if (content.chanMeta) {
+          const mine = record.chanMeta ?? {};
+          for (const [ch, meta] of Object.entries(content.chanMeta)) {
+            mine[ch] = { ...meta, ...(mine[ch] ?? {}) };
+          }
+          record.chanMeta = mine;
+          this.backfillHistory(record).catch((e) => console.warn(`history: ${e.message}`));
+        }
+        break;
+      }
+      case 'chanset': {
+        // A channel's settings changed: topic, auto-delete, or history
+        // (the history key itself rides in `meta.hkey` — inside MLS, so
+        // the relay never sees it). The sender's copy is authoritative.
+        // Same advisory admin gate as `chan`: ignore senders we know are
+        // not admins, fail open while roles are still syncing.
+        if (record.roles?.[sender] && record.roles[sender] !== 'admin') break;
+        if (!record.channels.includes(content.ch)) record.channels.push(content.ch);
+        record.chanMeta = { ...(record.chanMeta ?? {}), [content.ch]: content.meta ?? {} };
+        await this.addSystemMessage(
+          record.id,
+          `#${content.ch} settings changed by ${sender}${describeChanMeta(content.meta)}`,
+          content.ch
+        );
+        await this.applyRetention(record, content.ch);
+        this.backfillHistory(record).catch((e) => console.warn(`history: ${e.message}`));
+        this.scheduleBackup();
         break;
       }
       case 'file': {
@@ -385,6 +467,7 @@ export class Controller {
         if (!record.channels.includes(content.ch)) {
           record.channels.push(content.ch);
           await this.addSystemMessage(record.id, `#${content.ch} created by ${sender}`, content.ch);
+          this.scheduleBackup();
         }
         break;
       }
@@ -431,6 +514,7 @@ export class Controller {
     this.servers.set(id, record);
     await this.db.serverPut(record);
     this.dispatch({ type: 'servers', servers: this.snapshotServers() });
+    this.scheduleBackup();
     return id;
   }
 
@@ -442,6 +526,78 @@ export class Controller {
     await this.sendContent(serverId, { k: 'chan', ch });
     await this.db.serverPut(record);
     this.dispatch({ type: 'servers', servers: this.snapshotServers() });
+    this.scheduleBackup();
+  }
+
+  /** Change a channel's settings: topic, auto-delete (retention, seconds),
+      and whether the channel keeps encrypted history for joiners. The UI
+      gates this to admins; inside the group it is a visible, announced
+      change like channel creation — MLS can't enforce roles, so the
+      roster's own eyes are the enforcement. */
+  async setChannelSettings(serverId, channel, { topic, retention, history }) {
+    const record = this.servers.get(serverId);
+    const prev = record.chanMeta?.[channel] ?? {};
+    const meta = { ...prev };
+
+    if (topic !== undefined) {
+      if (topic) meta.topic = topic;
+      else delete meta.topic;
+    }
+    if (retention !== undefined) {
+      if (retention) meta.retention = retention;
+      else delete meta.retention;
+    }
+    if (history !== undefined) {
+      if (history && !meta.hid) {
+        // Turning history on mints the channel's key. From here on, every
+        // message is also sealed under it and parked on the relay; anyone
+        // who joins gets the key with the metadata and can read back.
+        meta.hid = generateHistoryId();
+        meta.hkey = generateHistoryKey();
+      } else if (!history && meta.hid) {
+        // Off: stop writing, drop the key, and ask the relay to delete the
+        // ciphertext (server-enforced deletion — honest-weak, but the key
+        // is gone from future meta shares either way).
+        this.relay
+          .request({ t: 'history_prune', group: serverId, hid: meta.hid, before_ts: Number.MAX_SAFE_INTEGER })
+          .catch((e) => console.warn(`history wipe: ${e.message}`));
+        delete meta.hid;
+        delete meta.hkey;
+      }
+    }
+
+    record.chanMeta = { ...(record.chanMeta ?? {}), [channel]: meta };
+    await this.sendContent(serverId, { k: 'chanset', ch: channel, meta });
+    await this.addSystemMessage(
+      serverId,
+      `#${channel} settings changed by you${describeChanMeta(meta)}`,
+      channel
+    );
+    // Retention shrank (or appeared): prune the relay log now — new
+    // entries carry their own expiry, this covers the ones that predate
+    // the change.
+    if (meta.hid && meta.retention && meta.retention !== prev.retention) {
+      this.relay
+        .request({
+          t: 'history_prune',
+          group: serverId,
+          hid: meta.hid,
+          before_ts: Math.floor(Date.now() / 1000) - meta.retention,
+        })
+        .catch((e) => console.warn(`history prune: ${e.message}`));
+    }
+    await this.applyRetention(record, channel);
+    await this.db.serverPut(record);
+    this.dispatch({ type: 'servers', servers: this.snapshotServers() });
+    this.dispatch({ type: 'refreshMessages' });
+    this.scheduleBackup();
+  }
+
+  /** Local half of auto-delete: drop this device's copies past retention. */
+  async applyRetention(record, channel) {
+    const retention = record.chanMeta?.[channel]?.retention;
+    if (!retention) return;
+    await this.db.msgsPrune(record.id, channel, Date.now() - retention * 1000);
   }
 
   /** Create a named voice room. Like text rooms, the name travels inside the
@@ -455,11 +611,106 @@ export class Controller {
     await this.sendContent(serverId, { k: 'vchan', ch });
     await this.db.serverPut(record);
     this.dispatch({ type: 'servers', servers: this.snapshotServers() });
+    this.scheduleBackup();
   }
 
   async sendChat(serverId, channel, text) {
     await this.sendContent(serverId, { k: 'chat', ch: channel, text });
-    await this.storeMessage({ server: serverId, channel, sender: this.me, text, ts: Date.now() });
+    const message = { server: serverId, channel, sender: this.me, text, ts: Date.now() };
+    await this.storeMessage(message);
+    this.appendHistory(serverId, channel, message);
+  }
+
+  /** Sender-side write into the channel's encrypted relay history log —
+      only if this channel keeps history. Best-effort: the MLS message is
+      the message; the log is a convenience copy. */
+  appendHistory(serverId, channel, message) {
+    const meta = this.servers.get(serverId)?.chanMeta?.[channel];
+    if (!meta?.hkey || !meta?.hid) return;
+    const tsSecs = Math.floor(message.ts / 1000);
+    const entry = {
+      sender: message.sender,
+      ts: message.ts,
+      ...(message.file ? { file: message.file } : { text: message.text }),
+    };
+    sealHistoryEntry(meta.hkey, entry)
+      .then((payload) =>
+        this.relay.request({
+          t: 'history_append',
+          group: serverId,
+          hid: meta.hid,
+          ts: tsSecs,
+          expires_at: meta.retention ? tsSecs + meta.retention : null,
+          payload,
+        })
+      )
+      .catch((e) => console.warn(`history append: ${e.message}`));
+  }
+
+  /** Pull new entries from every kept-history channel of `record`, decrypt
+      them with the channel keys, and store the ones this device doesn't
+      already have (deduplicated by content against live-received MLS
+      copies). This is what fills a joiner's or restored device's past. */
+  async backfillHistory(record) {
+    const chanMeta = record.chanMeta ?? {};
+    let restoredTotal = 0;
+    for (const [channel, meta] of Object.entries(chanMeta)) {
+      if (!meta?.hkey || !meta?.hid) continue;
+      const cursor = record.hcursor?.[meta.hid] ?? 0;
+      let reply;
+      try {
+        reply = await this.relay.request({
+          t: 'history_fetch',
+          group: record.id,
+          hid: meta.hid,
+          after: cursor,
+        });
+      } catch (e) {
+        console.warn(`history fetch #${channel}: ${e.message}`);
+        continue;
+      }
+      if (!reply.entries?.length) continue;
+      const existing = await this.db.msgsFor(record.id, channel);
+      const seen = new Set(existing.filter((m) => !m.system).map(messageFingerprint));
+      const cutoff = meta.retention ? Date.now() - meta.retention * 1000 : 0;
+      let added = 0;
+      let maxSeq = cursor;
+      for (const e of reply.entries) {
+        maxSeq = Math.max(maxSeq, e.seq);
+        let entry;
+        try {
+          entry = await openHistoryEntry(meta.hkey, e.payload);
+        } catch {
+          continue; // key rotated or blob damaged — skip, don't wedge
+        }
+        // Whitelist fields: an entry is authored by whoever holds the room
+        // key, so it must never override where it lands (server/channel)
+        // or dress itself up as a system line.
+        const message = {
+          server: record.id,
+          channel,
+          sender: String(entry.sender ?? ''),
+          ts: Number(entry.ts) || 0,
+          ...(entry.file ? { file: entry.file } : { text: String(entry.text ?? '') }),
+          fromHistory: true,
+        };
+        if (message.ts < cutoff || seen.has(messageFingerprint(message))) continue;
+        seen.add(messageFingerprint(message));
+        await this.db.msgAdd(message);
+        added += 1;
+      }
+      record.hcursor = { ...(record.hcursor ?? {}), [meta.hid]: maxSeq };
+      if (added > 0) {
+        restoredTotal += added;
+        await this.addSystemMessage(
+          record.id,
+          `${added} earlier message${added === 1 ? '' : 's'} restored from encrypted history — sealed by the channel key, senders not individually verified`,
+          channel
+        );
+      }
+    }
+    await this.db.serverPut(record);
+    if (restoredTotal > 0) this.dispatch({ type: 'refreshMessages' });
   }
 
   async addMember(serverId, user) {
@@ -491,13 +742,14 @@ export class Controller {
     record.members = members;
     record.epoch = epoch;
     await this.addSystemMessage(serverId, `${user} added (epoch ${epoch}) — unverified until you check their safety number`);
-    // Joiners have no scrollback: rebroadcast name + channels so their
-    // placeholder record fills in.
+    // Joiners have no scrollback: rebroadcast name + channels (and channel
+    // settings, incl. history keys) so their placeholder record fills in.
     await this.sendContent(serverId, {
       k: 'meta',
       name: record.name,
       channels: record.channels,
       voiceChannels: record.voiceChannels ?? ['lounge'],
+      chanMeta: record.chanMeta ?? {},
     });
     await this.db.serverPut(record);
     this.dispatch({ type: 'servers', servers: this.snapshotServers() });
@@ -514,6 +766,9 @@ export class Controller {
     try {
       const reply = await this.relay.request({ t: 'members', group: serverId });
       record.roles = Object.fromEntries(reply.members.map((m) => [m.user, m.role]));
+      // A restored record has no MLS view of the roster; the relay's ACL
+      // is the best available approximation until a re-add arrives.
+      if (record.restored) record.members = reply.members.map((m) => m.user);
       await this.db.serverPut(record);
       this.dispatch({ type: 'servers', servers: this.snapshotServers() });
     } catch (e) {
@@ -537,6 +792,79 @@ export class Controller {
       Metadata only — the relay cannot read names or messages. */
   adminList() {
     return this.relay.request({ t: 'admin_list' });
+  }
+
+  // === circles backup =====================================================
+  //
+  // What survives a device change is what the vault carries: the identity.
+  // MLS ratchets deliberately don't. This backup parks the *shape* of your
+  // circles (names, channels, settings) plus each channel's history key —
+  // encrypted under a key derived from the identity bytes, so any device
+  // that can sign in can open it and the relay never can. Combined with
+  // the history logs, signing in on a new device brings your messages
+  // back without touching forward secrecy of no-history channels.
+
+  /** Debounced: many mutations arrive in bursts (joins, meta floods). */
+  scheduleBackup() {
+    clearTimeout(this.backupTimer);
+    this.backupTimer = setTimeout(() => {
+      this.uploadBackup().catch((e) => console.warn(`backup upload: ${e.message}`));
+    }, 3000);
+  }
+
+  async uploadBackup() {
+    if (!this.relay?.ready || !this.servers.size) return;
+    const identity = this.identityBytes();
+    const servers = [...this.servers.values()]
+      .filter((r) => !r.restored) // a restored stub is itself from a backup
+      .map((r) => ({
+        id: r.id,
+        name: r.name,
+        channels: r.channels,
+        voiceChannels: r.voiceChannels ?? ['lounge'],
+        chanMeta: r.chanMeta ?? {},
+      }));
+    if (!servers.length) return;
+    const payload = await sealBackup(identity, { v: 1, servers });
+    await this.relay.request({ t: 'backup_set', payload });
+  }
+
+  /** Fresh sign-in path: no local circles, but maybe a parked backup.
+      Restored circles are readable (saved history decrypts with the
+      backed-up channel keys) but read-only until someone re-adds this
+      device — the MLS ratchets are gone by design. */
+  async restoreFromBackup() {
+    const reply = await this.relay.request({ t: 'backup_get' });
+    if (!reply.payload) return;
+    const backup = await openBackup(this.identityBytes(), reply.payload);
+    if (backup.v !== 1) throw new Error('unsupported backup version');
+    for (const s of backup.servers ?? []) {
+      if (this.servers.has(s.id)) continue;
+      const record = {
+        id: s.id,
+        name: s.name,
+        channels: s.channels?.length ? s.channels : ['general'],
+        voiceChannels: s.voiceChannels ?? ['lounge'],
+        chanMeta: s.chanMeta ?? {},
+        members: [],
+        epoch: 0,
+        lastSeq: 0,
+        joinedAt: Date.now(),
+        restored: true,
+      };
+      this.servers.set(s.id, record);
+      await this.db.serverPut(record);
+      await this.addSystemMessage(
+        s.id,
+        `restored from your encrypted backup — saved history is readable, but ask to be re-added before you can send`
+      );
+      this.refreshRoles(s.id);
+      await this.backfillHistory(record).catch((e) => console.warn(`history: ${e.message}`));
+    }
+    if (backup.servers?.length) {
+      this.dispatch({ type: 'servers', servers: this.snapshotServers() });
+      this.toast('circles restored from your encrypted backup');
+    }
   }
 
   // === account vaults =====================================================
@@ -693,7 +1021,9 @@ export class Controller {
       key: b64.enc(key),
     };
     await this.sendContent(serverId, { k: 'file', ch: channel, file });
-    await this.storeMessage({ server: serverId, channel, sender: this.me, file, ts: Date.now() });
+    const message = { server: serverId, channel, sender: this.me, file, ts: Date.now() };
+    await this.storeMessage(message);
+    this.appendHistory(serverId, channel, message);
   }
 
   async fetchFile(file) {
@@ -811,7 +1141,10 @@ export class Controller {
     const reply = await this.relay.request({ t: 'redeem_invite', invite: id }).catch((e) => {
       throw new Error(`invite not usable: ${e.message}`);
     });
-    if (this.servers.has(reply.group)) return; // already a member
+    // Already a live member -> nothing to do. A restored (read-only) stub
+    // is NOT membership — the invite link is exactly how it comes back to
+    // life, so fall through and external-commit.
+    if (this.servers.get(reply.group) && !this.servers.get(reply.group).restored) return;
     const groupInfo = await decryptBlob(b64url.dec(key), b64.dec(reply.payload));
     const { group, commit, epoch, members, state } = await this.crypto('joinByExternalCommit', {
       groupInfo,
@@ -820,24 +1153,32 @@ export class Controller {
     // Publishing our external commit is what makes the join real for
     // everyone else; its seq is where our log begins.
     const sent = await this.relay.request({ t: 'send', group, epoch, payload: b64.enc(commit) });
+    // Merge over a restored stub the same way onWelcome does.
+    const prior = this.servers.get(group);
     const record = {
       id: group,
-      name: group, // placeholder until a member rebroadcasts meta
-      channels: ['general'],
+      name: prior?.name ?? group, // placeholder until a member rebroadcasts meta
+      channels: prior?.channels ?? ['general'],
+      voiceChannels: prior?.voiceChannels,
+      chanMeta: prior?.chanMeta ?? {},
+      hcursor: prior?.hcursor ?? {},
+      verified: prior?.verified,
       members,
       epoch,
       lastSeq: sent.seq,
-      joinedAt: Date.now(),
+      joinedAt: prior?.joinedAt ?? Date.now(),
     };
     this.servers.set(group, record);
     await this.db.serverPut(record);
     await this.addSystemMessage(
       group,
-      `you joined via invite link — history before this point does not exist for you`
+      `you joined via invite link — only channels that keep history have a past here`
     );
     this.dispatch({ type: 'servers', servers: this.snapshotServers() });
     await this.relay.request({ t: 'subscribe', group, after: sent.seq });
     this.refreshRoles(group);
+    this.backfillHistory(record).catch((e) => console.warn(`history: ${e.message}`));
+    this.scheduleBackup();
   }
 
   // === helpers ============================================================
@@ -887,10 +1228,39 @@ export class Controller {
   }
 
   async loadMessages(serverId, channel) {
-    return this.db.msgsFor(serverId, channel);
+    // Auto-delete is enforced at read time (and on setting changes) —
+    // there is no background process in a browser tab to rely on.
+    const record = this.servers.get(serverId);
+    if (record) await this.applyRetention(record, channel);
+    const messages = await this.db.msgsFor(serverId, channel);
+    // Backfilled history lands after live messages in insertion order;
+    // present by time.
+    return messages.sort((a, b) => a.ts - b.ts);
   }
 
   toast(text) {
     this.dispatch({ type: 'toast', text });
   }
+}
+
+/** Human-readable summary of a channel's settings for system messages. */
+function describeChanMeta(meta = {}) {
+  const parts = [];
+  parts.push(meta.hid ? 'history: kept for joiners' : 'history: this-device-only');
+  if (meta.retention) parts.push(`auto-delete: ${describeRetention(meta.retention)}`);
+  if (meta.topic) parts.push(`topic: “${meta.topic}”`);
+  return ` (${parts.join(', ')})`;
+}
+
+export function describeRetention(seconds) {
+  if (!seconds) return 'off';
+  if (seconds % 86400 === 0) {
+    const d = seconds / 86400;
+    return d === 1 ? '1 day' : `${d} days`;
+  }
+  if (seconds % 3600 === 0) {
+    const h = seconds / 3600;
+    return h === 1 ? '1 hour' : `${h} hours`;
+  }
+  return `${seconds}s`;
 }

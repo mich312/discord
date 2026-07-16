@@ -1,5 +1,13 @@
 import React, { useState } from 'react';
-import { LinkGlyph, Key, ShieldCheck, Copy, Download, X, Check } from './icons.jsx';
+import { LinkGlyph, Key, ShieldCheck, Copy, Download, X, Check, Gear } from './icons.jsx';
+
+const RETENTION_CHOICES = [
+  { value: 0, label: 'keep until deleted by hand' },
+  { value: 3600, label: 'after 1 hour' },
+  { value: 86400, label: 'after 1 day' },
+  { value: 7 * 86400, label: 'after 1 week' },
+  { value: 30 * 86400, label: 'after 30 days' },
+];
 
 export default function Modal({
   modal,
@@ -8,11 +16,17 @@ export default function Modal({
   onSecurePasskey,
   onSecurePassword,
   onSecureFile,
+  onChannelSettings,
   identityKey,
 }) {
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
+  // Channel settings drafts (seeded from the modal payload when open).
+  const meta = modal.type === 'channel' ? modal.meta ?? {} : {};
+  const [topic, setTopic] = useState(meta.topic ?? '');
+  const [history, setHistory] = useState(!!meta.hid);
+  const [retention, setRetention] = useState(meta.retention ?? 0);
 
   async function attempt(fn) {
     setBusy(true);
@@ -45,6 +59,7 @@ export default function Modal({
     safety: { glyph: <ShieldCheck />, title: `Safety number — ${modal.peer ?? ''}` },
     identity: { glyph: <Key />, title: 'Identity key' },
     admin: { glyph: <ShieldCheck />, title: 'Relay admin overview' },
+    channel: { glyph: <Gear />, title: `#${modal.channel ?? ''} settings` },
   };
   const head = heads[modal.type];
 
@@ -189,6 +204,72 @@ export default function Modal({
               ))}
             </ul>
           </>
+        )}
+        {modal.type === 'channel' && (
+          <form
+            onSubmit={(e) => {
+              e.preventDefault();
+              attempt(async () => {
+                await onChannelSettings(modal.server, modal.channel, {
+                  topic: topic.trim(),
+                  retention: Number(retention) || 0,
+                  history,
+                });
+                onClose();
+              });
+            }}
+          >
+            <label className="field">
+              <span>topic — shown at the top of the room</span>
+              <input
+                type="text"
+                value={topic}
+                onChange={(e) => setTopic(e.target.value)}
+                placeholder="what this room is for"
+                data-testid="channel-topic"
+              />
+            </label>
+            <label className="field checkbox">
+              <input
+                type="checkbox"
+                checked={history}
+                onChange={(e) => setHistory(e.target.checked)}
+                data-testid="channel-history"
+              />
+              <span>keep history for future joiners</span>
+            </label>
+            <p className="fineprint muted">
+              On: messages are also sealed under a room key that travels inside the
+              encryption to whoever is in the roster — new members and your own next
+              device can read back. The relay still sees only ciphertext, but this
+              deliberately gives up forward secrecy for this room: anyone admitted
+              later can read what the key unlocks. Off: messages exist only on the
+              devices that were present.
+            </p>
+            <label className="field">
+              <span>auto-delete messages</span>
+              <select
+                value={retention}
+                onChange={(e) => setRetention(e.target.value)}
+                data-testid="channel-retention"
+              >
+                {RETENTION_CHOICES.map((c) => (
+                  <option key={c.value} value={c.value}>
+                    {c.label}
+                  </option>
+                ))}
+              </select>
+            </label>
+            <p className="fineprint muted">
+              Auto-delete removes this room's messages from this device and the
+              relay's history log. Other devices honor it when they next open the
+              room — it is a shared setting, not a cryptographic guarantee.
+            </p>
+            <button className="button primary wide" disabled={busy} data-testid="channel-save">
+              {busy ? 'saving…' : 'save settings'}
+            </button>
+            {error && <p className="error">{error}</p>}
+          </form>
         )}
         {modal.type === 'identity' && (
           <>
