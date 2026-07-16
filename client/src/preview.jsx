@@ -81,6 +81,7 @@ const voice = {
 const noop = () => {};
 const mockController = {
   pendingInvite: view === 'invited' ? { id: 'x' } : null,
+  registerPolicy: async () => ({ invite_required: false }),
   createIdentity: async () => new Uint8Array(32),
   completeOnboarding: noop,
   restoreIdentity: noop,
@@ -109,11 +110,12 @@ function PreviewShell({ empty = false, banner = false, modal = null, palette = f
   const [active, setActive] = useState({ server: empty ? null : 'srv-race', channel: 'general' });
   const [openModal, setOpenModal] = useState(modal);
   const [paletteOpen, setPaletteOpen] = useState(palette);
+  const [drawer, setDrawer] = useState(null); // narrow screens: null | 'nav' | 'roster'
   const list = empty ? [] : servers;
   const activeServer = list.find((s) => s.id === active.server) ?? null;
 
   return (
-    <div className="app-shell">
+    <div className="app-shell" data-drawer={drawer ?? undefined}>
       <Masthead
         server={activeServer}
         connection="online"
@@ -124,6 +126,8 @@ function PreviewShell({ empty = false, banner = false, modal = null, palette = f
           document.documentElement.dataset.theme =
             document.documentElement.dataset.theme === 'paper' ? 'carbon' : 'paper';
         }}
+        onMenu={() => setDrawer((d) => (d === 'nav' ? null : 'nav'))}
+        onRoster={() => setDrawer((d) => (d === 'roster' ? null : 'roster'))}
       />
       {banner && (
         <div className="secure-banner" data-testid="secure-banner">
@@ -135,14 +139,26 @@ function PreviewShell({ empty = false, banner = false, modal = null, palette = f
         </div>
       )}
       <div className="app">
+        {drawer && <div className="drawer-backdrop" onClick={() => setDrawer(null)} />}
         <nav className="sidebar">
-          <Rail servers={list} active={active.server} onSelect={(id) => setActive({ server: id, channel: 'general' })} onCreate={noop} />
+          <Rail
+            servers={list}
+            active={active.server}
+            onSelect={(id) => {
+              setActive({ server: id, channel: 'general' });
+              setDrawer(null);
+            }}
+            onCreate={noop}
+          />
           {activeServer && (
             <Channels
               server={activeServer}
               activeChannel={active.channel}
               me={me}
-              onSelect={(ch) => setActive({ ...active, channel: ch })}
+              onSelect={(ch) => {
+                setActive({ ...active, channel: ch });
+                setDrawer(null);
+              }}
               onCreate={noop}
               voice={voice}
               onVoiceJoin={noop}

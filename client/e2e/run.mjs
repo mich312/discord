@@ -505,6 +505,33 @@ try {
     }
   }
 
+  console.log('22. mobile layout: drawers navigate, roster opens, messages flow');
+  // Same page, phone-sized viewport — the sidebar and roster become drawers.
+  await alice.setViewportSize({ width: 390, height: 844 });
+  await alice.waitForSelector('[data-testid=menu-toggle]', { state: 'visible' });
+  // The static panels are off-canvas until summoned.
+  if (await alice.locator('[data-testid=channel-general]').isVisible()) {
+    throw new Error('mobile: sidebar should be hidden until the menu opens it');
+  }
+  await alice.click('[data-testid=menu-toggle]');
+  await alice.click('[data-testid=channel-logistics]');
+  // Navigation closes the drawer and lands in the room (alice pre-dates the
+  // room, so its history is on her device).
+  await alice.waitForSelector('[data-testid=drawer-backdrop]', { state: 'detached' });
+  await alice.waitForSelector('text=trailer leaves at 6am', { timeout: 10000 });
+  // The roster drawer opens from the masthead; the backdrop dismisses it.
+  await alice.click('[data-testid=roster-toggle]');
+  await alice.waitForSelector('[data-testid=member-list]', { state: 'visible' });
+  // Tap the exposed strip left of the drawer (its center sits under it).
+  await alice.click('[data-testid=drawer-backdrop]', { position: { x: 20, y: 200 } });
+  await alice.waitForSelector('[data-testid=drawer-backdrop]', { state: 'detached' });
+  // Chat still round-trips at phone size.
+  await alice.fill('[data-testid=composer]', 'checking in from the phone');
+  await alice.press('[data-testid=composer]', 'Enter');
+  await charlie.click('[data-testid=channel-logistics]');
+  await charlie.waitForSelector('text=checking in from the phone', { timeout: 10000 });
+  await alice.setViewportSize({ width: 1280, height: 720 });
+
   console.log('\nPASS: full client journey — onboarding, E2EE chat, channels,');
   console.log('      IndexedDB persistence, recovery, invite-link external-commit');
   console.log('      join with unverified badge, localStorage identity survival,');
@@ -512,7 +539,8 @@ try {
   console.log('      numbers, service-worker registration, E2EE-signaled mesh');
   console.log('      voice, multi-room voice + active-speaker meter, direct 1:1');
   console.log('      calls, deferred invite onboarding, password vault sign-in,');
-  console.log('      and passkey (WebAuthn PRF) vault sign-in');
+  console.log('      passkey (WebAuthn PRF) vault sign-in, and the mobile');
+  console.log('      drawer layout');
   await browser.close();
 } catch (e) {
   failed = true;

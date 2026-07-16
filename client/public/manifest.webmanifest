@@ -1,0 +1,16 @@
+{
+  "name": "quorum — sealed rooms",
+  "short_name": "quorum",
+  "description": "Small, persistent, invite-only groups — end-to-end encrypted with MLS. The server stores ciphertext it can never read.",
+  "start_url": "/",
+  "scope": "/",
+  "display": "standalone",
+  "orientation": "any",
+  "background_color": "#0e0e0f",
+  "theme_color": "#0e0e0f",
+  "icons": [
+    { "src": "/icons/icon-192.png", "sizes": "192x192", "type": "image/png" },
+    { "src": "/icons/icon-512.png", "sizes": "512x512", "type": "image/png" },
+    { "src": "/icons/maskable-512.png", "sizes": "512x512", "type": "image/png", "purpose": "maskable" }
+  ]
+}

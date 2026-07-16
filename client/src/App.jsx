@@ -95,10 +95,19 @@ export default function App() {
   const [state, dispatch] = useReducer(reducer, initial);
   const [theme, setTheme] = useState(loadTheme);
   const [paletteOpen, setPaletteOpen] = useState(false);
+  // Narrow-screen drawers: the sidebar and roster slide over the messages
+  // pane instead of flanking it. null | 'nav' | 'roster'; CSS ignores this
+  // entirely on wide screens, where both panels are static.
+  const [drawer, setDrawer] = useState(null);
   const controllerRef = useRef(null);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
+    // Keep the browser/OS chrome (Android address bar, iOS standalone
+    // status bar) in step with the app surface.
+    document
+      .querySelector('meta[name="theme-color"]')
+      ?.setAttribute('content', theme === 'paper' ? '#e6e4dd' : '#0e0e0f');
     try {
       localStorage.setItem('quorum-theme', theme);
     } catch {
@@ -127,17 +136,25 @@ export default function App() {
     });
   }, []);
 
-  // ⌘K / Ctrl+K opens the palette anywhere inside the app.
+  // ⌘K / Ctrl+K opens the palette anywhere inside the app; Escape closes
+  // an open drawer.
   useEffect(() => {
     function onKey(e) {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault();
         setPaletteOpen((v) => !v);
       }
+      if (e.key === 'Escape') setDrawer(null);
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
   }, []);
+
+  // Anything that opens above the workspace (modal, palette) takes over
+  // from a drawer — never stack the two.
+  useEffect(() => {
+    if (state.modal || paletteOpen) setDrawer(null);
+  }, [state.modal, paletteOpen]);
 
   // Load history whenever the active channel changes.
   const { server, channel } = state.active;
@@ -251,7 +268,7 @@ export default function App() {
   ];
 
   return (
-    <div className="app-shell">
+    <div className="app-shell" data-drawer={drawer ?? undefined}>
       <Masthead
         server={activeServer}
         connection={state.connection}
@@ -260,6 +277,8 @@ export default function App() {
         onInvite={openInvite}
         onPalette={() => setPaletteOpen(true)}
         onTheme={() => setTheme((t) => (t === 'paper' ? 'carbon' : 'paper'))}
+        onMenu={() => setDrawer((d) => (d === 'nav' ? null : 'nav'))}
+        onRoster={() => setDrawer((d) => (d === 'roster' ? null : 'roster'))}
       />
       {unsecured && (
         <div className="secure-banner" data-testid="secure-banner">
@@ -274,6 +293,13 @@ export default function App() {
         </div>
       )}
       <div className="app">
+        {drawer && (
+          <div
+            className="drawer-backdrop"
+            data-testid="drawer-backdrop"
+            onClick={() => setDrawer(null)}
+          />
+        )}
         <nav className="sidebar">
           <Rail
             servers={state.servers}
@@ -281,10 +307,12 @@ export default function App() {
             onSelect={(id) => {
               const s = state.servers.find((x) => x.id === id);
               dispatch({ type: 'select', server: id, channel: s.channels[0] });
+              setDrawer(null);
             }}
             onCreate={async (name) => {
               const id = await controllerRef.current.createServer(name);
               dispatch({ type: 'select', server: id, channel: 'general' });
+              setDrawer(null);
             }}
           />
           {activeServer && (
@@ -292,7 +320,10 @@ export default function App() {
               server={activeServer}
               activeChannel={channel}
               me={state.me}
-              onSelect={(ch) => dispatch({ type: 'select', server, channel: ch })}
+              onSelect={(ch) => {
+                dispatch({ type: 'select', server, channel: ch });
+                setDrawer(null);
+              }}
               onCreate={(ch) => controllerRef.current.createChannel(server, ch)}
               onVoiceCreate={(ch) => controllerRef.current.createVoiceChannel(server, ch)}
               voice={state.voice}
@@ -342,11 +373,12 @@ export default function App() {
               server={activeServer}
               me={state.me}
               canManage={canManage}
-              onCall={(peer) =>
+              onCall={(peer) => {
+                setDrawer(null);
                 controllerRef.current.voice
                   .callUser(server, peer)
-                  .catch((e) => dispatch({ type: 'toast', text: `call: ${e.message}` }))
-              }
+                  .catch((e) => dispatch({ type: 'toast', text: `call: ${e.message}` }));
+              }}
               onAdd={(user) =>
                 controllerRef.current
                   .addMember(server, user)

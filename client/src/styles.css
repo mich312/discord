@@ -90,12 +90,21 @@
 * { box-sizing: border-box; margin: 0; }
 
 html, body, #root { height: 100%; }
+/* Mobile browsers: track the *visible* viewport so the composer is never
+   hidden behind the collapsing address bar. */
+@supports (height: 100dvh) {
+  html, body, #root { height: 100dvh; }
+}
+
+html { -webkit-text-size-adjust: 100%; text-size-adjust: 100%; }
 
 body {
   background: var(--well);
   color: var(--ink);
   font: var(--text-base) / 1.5 var(--sans);
   -webkit-font-smoothing: antialiased;
+  -webkit-tap-highlight-color: transparent;
+  overscroll-behavior: none; /* no pull-to-refresh mid-conversation */
 }
 
 ::selection { background: var(--accent); color: var(--on-accent); }
@@ -245,8 +254,20 @@ kbd {
 .field input:focus, .field textarea:focus { border-color: var(--ink-dim); outline: none; }
 
 /* -------------------------------------------------------------- app shell -- */
-.app-shell { display: flex; flex-direction: column; height: 100%; }
+.app-shell {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  /* installed-PWA mode draws under the notch/home bar (viewport-fit=cover) */
+  padding-top: env(safe-area-inset-top, 0px);
+  padding-left: env(safe-area-inset-left, 0px);
+  padding-right: env(safe-area-inset-right, 0px);
+}
 .app { flex: 1; min-height: 0; display: flex; }
+
+/* Drawer toggles live in the masthead but only exist on narrow screens. */
+.menu-btn, .roster-btn { display: none; }
+.drawer-backdrop { display: none; }
 
 .centered {
   height: 100%;
@@ -767,7 +788,10 @@ kbd {
 .attachment-file .size { color: var(--ink-mute); }
 
 /* composer */
-.composer-dock { padding: 0 18px 10px; flex-shrink: 0; }
+.composer-dock {
+  padding: 0 18px calc(10px + env(safe-area-inset-bottom, 0px));
+  flex-shrink: 0;
+}
 .composer {
   display: flex;
   align-items: center;
@@ -940,6 +964,7 @@ kbd {
   width: 440px;
   max-width: calc(100vw - 32px);
   max-height: calc(100vh - 48px);
+  max-height: calc(100dvh - 48px);
   overflow-y: auto;
   background: var(--panel);
   border: 1px solid var(--hairline-strong);
@@ -1194,3 +1219,131 @@ kbd {
 
 /* ------------------------------------------------------------------ mark -- */
 .seal-avatar { flex-shrink: 0; display: block; }
+
+/* ------------------------------------------------------------------ touch -- */
+/* Devices without hover can't reveal hover-gated affordances — surface the
+   ones that matter and drop the ones that are pure hover decoration. */
+@media (hover: none) {
+  .role-toggle { visibility: visible; }
+  .msg-line { padding-right: 0; }
+  .msg-line time { display: none; }
+}
+
+/* ----------------------------------------------------------------- mobile -- */
+/* One column: the conversation owns the screen; circles/rooms and the
+   roster become edge drawers driven by [data-drawer] on the shell. The
+   register's grammar (rules, mono labels, sharp geometry) is unchanged —
+   only the floor plan moves. */
+@media (max-width: 820px) {
+  /* masthead: menu · glyph · title ··· palette · theme · dot · roster */
+  .masthead { gap: 10px; padding: 0 8px; }
+  .menu-btn, .roster-btn { display: inline-flex; }
+  .masthead-brand { width: auto; gap: 0; }
+  .masthead-brand .wordmark { display: none; }
+  .masthead-context { gap: 8px; flex: 1; min-width: 0; }
+  .epoch-chip { display: none; }
+  .masthead-actions { gap: 2px; }
+  .masthead-actions .button { display: none; } /* invite lives in the palette */
+  .palette-hint { border: none; padding: 4px 6px; }
+  .palette-hint span, .palette-hint kbd { display: none; }
+  .conn-chip { padding: 4px 2px; }
+  .conn-label { display: none; }
+
+  .secure-banner { flex-wrap: wrap; gap: 8px; padding: 7px 12px; }
+
+  /* sidebar -> left drawer, roster -> right drawer */
+  .sidebar, .members {
+    position: fixed;
+    top: 0;
+    bottom: 0;
+    height: 100%;
+    width: min(85vw, 320px);
+    z-index: 45;
+    transition: transform var(--slow) var(--ease), visibility var(--slow);
+    visibility: hidden;
+    padding-top: env(safe-area-inset-top, 0px);
+  }
+  @supports (height: 100dvh) {
+    .sidebar, .members { height: 100dvh; }
+  }
+  .sidebar {
+    left: 0;
+    transform: translateX(-100%);
+    border-right: 1px solid var(--hairline-strong);
+    padding-left: env(safe-area-inset-left, 0px);
+  }
+  .members {
+    right: 0;
+    transform: translateX(100%);
+    border-left: 1px solid var(--hairline-strong);
+    padding-right: env(safe-area-inset-right, 0px);
+    padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+  }
+  [data-drawer='nav'] .sidebar,
+  [data-drawer='roster'] .members {
+    transform: none;
+    visibility: visible;
+    box-shadow: var(--overlay-shadow);
+  }
+  .drawer-backdrop {
+    display: block;
+    position: fixed;
+    inset: 0;
+    z-index: 44;
+    background: var(--backdrop);
+    animation: fade var(--fast) var(--ease);
+  }
+  .sidebar .self-card { padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px)); }
+
+  /* conversation takes the full width */
+  .pane-head { padding: 0 12px; }
+  .sealed-note { display: none; }
+  .scroll { padding: 4px 12px 12px; }
+  .watermark { max-width: none; }
+  .attachment-img { max-width: 100%; }
+  .composer-dock { padding-left: 10px; padding-right: 10px; }
+  .composer-note { align-items: flex-start; }
+  .composer-note svg { margin-top: 2px; }
+
+  /* comfortable touch targets */
+  .icon-btn { width: 36px; height: 36px; }
+  .circle-row { padding: 8px; }
+  .channel { padding: 8px; }
+  .member { padding: 8px 6px; }
+  .voice-join { padding: 5px 12px; }
+  .role-toggle { padding: 4px 6px; }
+
+  /* 16px inputs: anything smaller makes iOS zoom the page on focus */
+  .composer input[type='text'],
+  .field input, .field textarea,
+  .rail-form input, .channel-input, .add-member input,
+  .palette-input {
+    font-size: 16px;
+  }
+
+  /* overlays: use the whole screen politely */
+  .modal-backdrop {
+    align-items: flex-start;
+    padding: max(20px, env(safe-area-inset-top, 0px)) 12px
+      calc(16px + env(safe-area-inset-bottom, 0px));
+  }
+  .card { width: 100%; padding: 20px 18px; }
+  .dialog-head { margin: -20px -18px 16px; padding: 12px 18px; }
+  .palette-backdrop { padding: max(20px, env(safe-area-inset-top, 0px)) 12px 0; }
+  .toast {
+    max-width: calc(100vw - 24px);
+    width: max-content;
+    bottom: calc(16px + env(safe-area-inset-bottom, 0px));
+  }
+  .call-panel {
+    left: 12px;
+    right: 12px;
+    bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+    max-width: none;
+    flex-wrap: wrap;
+  }
+
+  /* onboarding: single column already (860px rule); tighten the frame */
+  .gate-form { padding: 20px 16px calc(20px + env(safe-area-inset-bottom, 0px)); }
+  .gate-form .card { width: 100%; padding: 4px; }
+}
