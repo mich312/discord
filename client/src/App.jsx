@@ -27,6 +27,7 @@ const initial = {
   voice: { active: null, connections: {}, presence: {} },
   vault: { kind: undefined, securedLocal: true }, // kind: undefined=unknown, null=none
   globalAdmin: false, // relay-side flag (RELAY_ADMINS)
+  messagesRev: 0, // bumped when stored messages changed outside the live path (backfill, prune)
 };
 
 function reducer(state, action) {
@@ -75,6 +76,8 @@ function reducer(state, action) {
       return { ...state, vault: { kind: action.kind, securedLocal: action.securedLocal } };
     case 'admin':
       return { ...state, globalAdmin: action.globalAdmin };
+    case 'refreshMessages':
+      return { ...state, messagesRev: state.messagesRev + 1 };
     default:
       return state;
   }
@@ -156,14 +159,15 @@ export default function App() {
     if (state.modal || paletteOpen) setDrawer(null);
   }, [state.modal, paletteOpen]);
 
-  // Load history whenever the active channel changes.
+  // Load history whenever the active channel changes — or when stored
+  // messages changed underneath us (history backfill, auto-delete prune).
   const { server, channel } = state.active;
   useEffect(() => {
     if (!server || !channel) return;
     controllerRef.current
       .loadMessages(server, channel)
       .then((messages) => dispatch({ type: 'messages', messages }));
-  }, [server, channel]);
+  }, [server, channel, state.messagesRev]);
 
   // Auto-dismiss toasts.
   useEffect(() => {
@@ -320,10 +324,22 @@ export default function App() {
               server={activeServer}
               activeChannel={channel}
               me={state.me}
+              canManage={canManage && !activeServer.restored}
               onSelect={(ch) => {
                 dispatch({ type: 'select', server, channel: ch });
                 setDrawer(null);
               }}
+              onSettings={(ch) =>
+                dispatch({
+                  type: 'modal',
+                  modal: {
+                    type: 'channel',
+                    server,
+                    channel: ch,
+                    meta: activeServer.chanMeta?.[ch] ?? {},
+                  },
+                })
+              }
               onCreate={(ch) => controllerRef.current.createChannel(server, ch)}
               onVoiceCreate={(ch) => controllerRef.current.createVoiceChannel(server, ch)}
               voice={state.voice}
@@ -468,6 +484,9 @@ export default function App() {
               await controllerRef.current.markSecuredLocal();
               dispatch({ type: 'toast', text: 'key file downloaded — store it safely' });
             }}
+            onChannelSettings={(srv, ch, settings) =>
+              controllerRef.current.setChannelSettings(srv, ch, settings)
+            }
             identityKey={controllerRef.current?.identityKeyString()}
           />
         )}

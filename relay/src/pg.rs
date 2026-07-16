@@ -2,7 +2,10 @@
 //! client-declared epoch stored alongside — exactly the shape in the build
 //! plan. Uses runtime queries (no compile-time DB dependency).
 
-use crate::store::{InviteRecord, RegisterOutcome, Store, StoreError, StoredMessage, StoredWelcome, VaultRecord};
+use crate::store::{
+    HistoryEntry, InviteRecord, RegisterOutcome, Store, StoreError, StoredMessage, StoredWelcome,
+    VaultRecord,
+};
 use async_trait::async_trait;
 use sqlx::{postgres::PgPoolOptions, PgPool, Row};
 
@@ -100,6 +103,28 @@ impl PgStore {
                 subscription text NOT NULL,
                 created_at timestamptz NOT NULL DEFAULT now(),
                 PRIMARY KEY (user_id, endpoint)
+            );
+            CREATE TABLE IF NOT EXISTS history (
+                group_id text NOT NULL REFERENCES groups(group_id),
+                hid text NOT NULL,
+                seq bigint NOT NULL,
+                ts bigint NOT NULL,
+                expires_at bigint,
+                payload bytea NOT NULL,
+                PRIMARY KEY (group_id, hid, seq)
+            );
+            -- Seqs outlive expiry/prune deletions (see append_history):
+            -- re-issuing numbers would make client cursors skip entries.
+            CREATE TABLE IF NOT EXISTS history_counters (
+                group_id text NOT NULL,
+                hid text NOT NULL,
+                last_seq bigint NOT NULL DEFAULT 0,
+                PRIMARY KEY (group_id, hid)
+            );
+            CREATE TABLE IF NOT EXISTS backups (
+                user_id text PRIMARY KEY REFERENCES users(user_id),
+                payload bytea NOT NULL,
+                updated_at timestamptz NOT NULL DEFAULT now()
             );
             CREATE TABLE IF NOT EXISTS invites (
                 invite_id text PRIMARY KEY,
@@ -307,6 +332,131 @@ impl Store for PgStore {
             .await
             .map_err(backend)?;
         Ok(rows.into_iter().map(|r| (r.get("group_id"), r.get("created_by"))).collect())
+    }
+
+    async fn append_history(
+        &self,
+        group: &str,
+        hid: &str,
+        ts: u64,
+        expires_at: Option<u64>,
+        payload: Vec<u8>,
+    ) -> Result<u64, StoreError> {
+        let mut tx = self.pool.begin().await.map_err(backend)?;
+        let exists = sqlx::query("SELECT 1 FROM groups WHERE group_id = $1")
+            .bind(group)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(backend)?;
+        if exists.is_none() {
+            return Err(StoreError::NoSuchGroup);
+        }
+        // The counter upsert is atomic (the conflicting row is locked), so
+        // concurrent appends serialize here and each gets a unique seq.
+        let row = sqlx::query(
+            "INSERT INTO history_counters (group_id, hid, last_seq) VALUES ($1, $2, 1)
+             ON CONFLICT (group_id, hid)
+             DO UPDATE SET last_seq = history_counters.last_seq + 1
+             RETURNING last_seq",
+        )
+        .bind(group)
+        .bind(hid)
+        .fetch_one(&mut *tx)
+        .await
+        .map_err(backend)?;
+        let seq: i64 = row.get("last_seq");
+        sqlx::query(
+            "INSERT INTO history (group_id, hid, seq, ts, expires_at, payload)
+             VALUES ($1, $2, $3, $4, $5, $6)",
+        )
+        .bind(group)
+        .bind(hid)
+        .bind(seq)
+        .bind(ts as i64)
+        .bind(expires_at.map(|t| t as i64))
+        .bind(payload)
+        .execute(&mut *tx)
+        .await
+        .map_err(backend)?;
+        tx.commit().await.map_err(backend)?;
+        Ok(seq as u64)
+    }
+
+    async fn history_after(
+        &self,
+        group: &str,
+        hid: &str,
+        after: u64,
+        now: u64,
+    ) -> Result<Vec<HistoryEntry>, StoreError> {
+        let exists = sqlx::query("SELECT 1 FROM groups WHERE group_id = $1")
+            .bind(group)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(backend)?;
+        if exists.is_none() {
+            return Err(StoreError::NoSuchGroup);
+        }
+        // Expired ciphertext has no readers left to serve — drop it now.
+        sqlx::query("DELETE FROM history WHERE group_id = $1 AND hid = $2 AND expires_at < $3")
+            .bind(group)
+            .bind(hid)
+            .bind(now as i64)
+            .execute(&self.pool)
+            .await
+            .map_err(backend)?;
+        let rows = sqlx::query(
+            "SELECT seq, ts, expires_at, payload FROM history
+             WHERE group_id = $1 AND hid = $2 AND seq > $3 ORDER BY seq",
+        )
+        .bind(group)
+        .bind(hid)
+        .bind(after as i64)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(backend)?;
+        Ok(rows
+            .into_iter()
+            .map(|r| HistoryEntry {
+                seq: r.get::<i64, _>("seq") as u64,
+                ts: r.get::<i64, _>("ts") as u64,
+                expires_at: r.get::<Option<i64>, _>("expires_at").map(|t| t as u64),
+                payload: r.get("payload"),
+            })
+            .collect())
+    }
+
+    async fn prune_history(&self, group: &str, hid: &str, before_ts: u64) -> Result<(), StoreError> {
+        sqlx::query("DELETE FROM history WHERE group_id = $1 AND hid = $2 AND ts < $3")
+            .bind(group)
+            .bind(hid)
+            .bind(before_ts as i64)
+            .execute(&self.pool)
+            .await
+            .map_err(backend)?;
+        Ok(())
+    }
+
+    async fn set_backup(&self, user: &str, payload: Vec<u8>) -> Result<(), StoreError> {
+        sqlx::query(
+            "INSERT INTO backups (user_id, payload) VALUES ($1, $2)
+             ON CONFLICT (user_id) DO UPDATE SET payload = $2, updated_at = now()",
+        )
+        .bind(user)
+        .bind(payload)
+        .execute(&self.pool)
+        .await
+        .map_err(backend)?;
+        Ok(())
+    }
+
+    async fn get_backup(&self, user: &str) -> Result<Option<Vec<u8>>, StoreError> {
+        let row = sqlx::query("SELECT payload FROM backups WHERE user_id = $1")
+            .bind(user)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(backend)?;
+        Ok(row.map(|r| r.get("payload")))
     }
 
     async fn set_vault(&self, user: &str, vault: VaultRecord) -> Result<(), StoreError> {

@@ -156,6 +156,20 @@ export const X = (p) => (
   </Svg>
 );
 
+export const Gear = (p) => (
+  <Svg {...p}>
+    <circle cx="8" cy="8" r="2.2" />
+    <path d="M8 1.8v1.8M8 12.4v1.8M1.8 8h1.8M12.4 8h1.8M3.6 3.6l1.3 1.3M11.1 11.1l1.3 1.3M12.4 3.6l-1.3 1.3M4.9 11.1l-1.3 1.3" />
+  </Svg>
+);
+
+export const Clock = (p) => (
+  <Svg {...p}>
+    <circle cx="8" cy="8" r="5.5" />
+    <path d="M8 4.8V8l2.2 1.6" />
+  </Svg>
+);
+
 export const ArrowRight = (p) => (
   <Svg {...p}>
     <path d="M2.5 8h11M9.5 4l4 4-4 4" />

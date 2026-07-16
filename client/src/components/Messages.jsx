@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import Seal from './Seal.jsx';
-import { Lock, Paperclip } from './icons.jsx';
+import { describeRetention } from '../lib/controller.js';
+import { Lock, Paperclip, Clock } from './icons.jsx';
 
 function timeOf(ts) {
   return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -107,6 +108,8 @@ export default function Messages({ server, channel, me, messages, onSend, onSend
   const scroller = useRef(null);
   const folded = useMemo(() => fold(messages), [messages]);
   const members = server.members.length;
+  const meta = server.chanMeta?.[channel] ?? {};
+  const keepsHistory = !!meta.hid;
 
   useEffect(() => {
     scroller.current?.scrollTo(0, scroller.current.scrollHeight);
@@ -121,15 +124,36 @@ export default function Messages({ server, channel, me, messages, onSend, onSend
           </span>
           {channel}
         </span>
+        {meta.topic && (
+          <span className="room-topic" data-testid="channel-topic-display" title={meta.topic}>
+            {meta.topic}
+          </span>
+        )}
         <span className="sealed-note">
-          messages exist only on the devices in the roster
+          {keepsHistory
+            ? 'history kept for joiners — sealed by a room key the relay never sees'
+            : 'messages exist only on the devices in the roster'}
+          {meta.retention ? (
+            <span className="retention-note" title="auto-delete is on for this room">
+              {' '}· <Clock size={11} /> auto-deletes {describeRetention(meta.retention)} after sending
+            </span>
+          ) : null}
         </span>
       </header>
       <div className="scroll" ref={scroller} data-testid="message-scroll">
         <div className="watermark" data-testid="watermark">
           <span className="wm-tag">start of record — #{channel}</span>
-          Beginning of <strong>#{channel}</strong> as this device knows it. Earlier messages,
-          if any, were encrypted with keys this device never had.
+          {keepsHistory ? (
+            <>
+              Beginning of <strong>#{channel}</strong> as this device knows it. This room keeps
+              encrypted history, so what you see may include messages restored with the room key.
+            </>
+          ) : (
+            <>
+              Beginning of <strong>#{channel}</strong> as this device knows it. Earlier messages,
+              if any, were encrypted with keys this device never had.
+            </>
+          )}
         </div>
         {folded.map((item) => {
           if (item.kind === 'day') {
@@ -171,6 +195,14 @@ export default function Messages({ server, channel, me, messages, onSend, onSend
         })}
       </div>
       <div className="composer-dock">
+        {server.restored ? (
+          <div className="composer-note restored-note" data-testid="restored-note">
+            <Lock size={11} />
+            read-only: restored from your encrypted backup — ask a member to re-add{' '}
+            <strong>{me}</strong> (or use an invite link) to send again
+          </div>
+        ) : (
+        <>
         <form
           className="composer"
           onSubmit={(e) => {
@@ -206,6 +238,8 @@ export default function Messages({ server, channel, me, messages, onSend, onSend
           <Lock size={11} />
           end-to-end sealed for {members} member{members === 1 ? '' : 's'} — nothing readable leaves this device
         </div>
+        </>
+        )}
       </div>
     </main>
   );

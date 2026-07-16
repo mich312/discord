@@ -69,6 +69,34 @@ pub enum ClientMsg {
     /// presence (MLS-encrypted like everything else) — transient by
     /// nature, so replaying it on catch-up would only confuse clients.
     Ephemeral { rid: u64, group: String, payload: String },
+    /// Append an opaque blob to a channel history log. `hid` is a
+    /// client-chosen opaque id (the relay never learns which channel it
+    /// is); the payload is AES-GCM ciphertext under a key that travels
+    /// only inside the group's MLS messages. `ts` orders entries and
+    /// anchors retention; `expires_at` (unix secs) is honored server-side.
+    /// Members only.
+    HistoryAppend {
+        rid: u64,
+        group: String,
+        hid: String,
+        ts: u64,
+        expires_at: Option<u64>,
+        payload: String,
+    },
+    /// The history log for `hid` after seq `after`, expired entries
+    /// excluded. Members only.
+    HistoryFetch { rid: u64, group: String, hid: String, after: u64 },
+    /// Delete history entries with ts < `before_ts` (retention shrank, or
+    /// history was turned off). Group admins only. Server-enforced — i.e.
+    /// weak: a malicious relay can keep the ciphertext, it just can't
+    /// read it.
+    HistoryPrune { rid: u64, group: String, hid: String, before_ts: u64 },
+    /// Store/replace this user's client-side-encrypted circles backup
+    /// (group records + channel history keys, sealed under a key derived
+    /// from the identity key — the relay stores a blob it cannot read).
+    BackupSet { rid: u64, payload: String },
+    /// Retrieve the backup blob, if any.
+    BackupGet { rid: u64 },
     /// Store/replace this user's account vault (client-side-encrypted
     /// identity bundle + retrieval gate). Authenticated users only.
     VaultSet {
@@ -112,6 +140,8 @@ pub enum ServerMsg {
     /// feed straight into `RTCPeerConnection({ iceServers })`.
     IceInfo { rid: u64, servers: String },
     Eph { group: String, sender: String, payload: String },
+    History { rid: u64, hid: String, entries: Vec<HistoryEntryOut> },
+    Backup { rid: u64, #[serde(skip_serializing_if = "Option::is_none")] payload: Option<String> },
     VaultStatus { rid: u64, kind: Option<String> },
     /// WebAuthn ceremony payloads (JSON passthrough).
     Passkey { rid: u64, payload: String },
@@ -127,6 +157,13 @@ pub struct MemberEntry {
 pub struct GroupEntry {
     pub group: String,
     pub created_by: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct HistoryEntryOut {
+    pub seq: u64,
+    pub ts: u64,
+    pub payload: String,
 }
 
 pub const AUTH_CONTEXT: &[u8] = b"relay-auth-v1";

@@ -747,3 +747,83 @@ async fn global_admin_manages_any_group_and_lists_everything() {
     let reply = alice.request(json!({"t": "members", "group": "does-not-exist"})).await;
     assert_eq!(reply["t"], "error");
 }
+
+#[tokio::test]
+async fn history_log_gates_on_membership_and_prune_on_admin() {
+    let addr = spawn_relay().await;
+    let mut alice =
+        TestClient::connect(addr, ChatClient::new("alice").unwrap(), "alice").await.unwrap();
+    let mut bob = TestClient::connect(addr, ChatClient::new("bob").unwrap(), "bob").await.unwrap();
+    let mut mallory =
+        TestClient::connect(addr, ChatClient::new("mallory").unwrap(), "mallory").await.unwrap();
+
+    alice.request(json!({"t": "create_group", "group": "g1"})).await;
+    let reply = alice.request(json!({"t": "allow", "group": "g1", "user": "bob"})).await;
+    assert_eq!(reply["t"], "ok");
+
+    // Members append and fetch; the relay never interprets the payload.
+    let reply = alice
+        .request(json!({
+            "t": "history_append", "group": "g1", "hid": "h-opaque",
+            "ts": 100, "expires_at": null, "payload": B64.encode(b"ciphertext-1"),
+        }))
+        .await;
+    assert_eq!(reply["t"], "ok", "member append: {reply}");
+    assert_eq!(reply["seq"], 1);
+
+    let reply = bob
+        .request(json!({"t": "history_fetch", "group": "g1", "hid": "h-opaque", "after": 0}))
+        .await;
+    assert_eq!(reply["t"], "history");
+    assert_eq!(reply["entries"].as_array().unwrap().len(), 1);
+    assert_eq!(reply["entries"][0]["payload"], B64.encode(b"ciphertext-1"));
+
+    // Non-members get nothing, in either direction.
+    let reply = mallory
+        .request(json!({
+            "t": "history_append", "group": "g1", "hid": "h-opaque",
+            "ts": 100, "expires_at": null, "payload": B64.encode(b"evil"),
+        }))
+        .await;
+    assert_eq!(reply["t"], "error", "non-member append must fail");
+    let reply = mallory
+        .request(json!({"t": "history_fetch", "group": "g1", "hid": "h-opaque", "after": 0}))
+        .await;
+    assert_eq!(reply["t"], "error", "non-member fetch must fail");
+
+    // Prune is the admin's (retention) lever — plain members are refused.
+    let reply = bob
+        .request(json!({"t": "history_prune", "group": "g1", "hid": "h-opaque", "before_ts": 200}))
+        .await;
+    assert_eq!(reply["t"], "error", "plain member prune must fail");
+    let reply = alice
+        .request(json!({"t": "history_prune", "group": "g1", "hid": "h-opaque", "before_ts": 200}))
+        .await;
+    assert_eq!(reply["t"], "ok");
+    let reply = alice
+        .request(json!({"t": "history_fetch", "group": "g1", "hid": "h-opaque", "after": 0}))
+        .await;
+    assert_eq!(reply["entries"].as_array().unwrap().len(), 0, "pruned");
+}
+
+#[tokio::test]
+async fn backup_blob_roundtrips_per_user() {
+    let addr = spawn_relay().await;
+    let mut alice =
+        TestClient::connect(addr, ChatClient::new("alice").unwrap(), "alice").await.unwrap();
+    let mut bob = TestClient::connect(addr, ChatClient::new("bob").unwrap(), "bob").await.unwrap();
+
+    // Empty until set; then each user sees only their own blob.
+    let reply = alice.request(json!({"t": "backup_get"})).await;
+    assert_eq!(reply["t"], "backup");
+    assert!(reply.get("payload").is_none() || reply["payload"].is_null());
+
+    let reply = alice
+        .request(json!({"t": "backup_set", "payload": B64.encode(b"alice-circles")}))
+        .await;
+    assert_eq!(reply["t"], "ok");
+    let reply = alice.request(json!({"t": "backup_get"})).await;
+    assert_eq!(reply["payload"], B64.encode(b"alice-circles"));
+    let reply = bob.request(json!({"t": "backup_get"})).await;
+    assert!(reply.get("payload").is_none() || reply["payload"].is_null(), "backups are per-user");
+}

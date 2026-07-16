@@ -8,8 +8,10 @@ skeleton, Signal's social model.** End-to-end encrypted with
 This is not a public server you stumble into. E2EE forbids scrollback for
 new members, so any positioning that depends on lurking-then-joining is
 structurally impossible. The differentiator (encryption) is invisible;
-the costs (no history for joiners, no server-side search, no content
-moderation) are visible — and the UI says so instead of hiding it.
+the costs (no history for joiners by default, no server-side search, no
+content moderation) are visible — and the UI says so instead of hiding
+it. Channels can *opt in* to kept history via a shared room key — a
+deliberate, clearly-labeled forward-secrecy trade, not a loophole.
 
 The full design rationale lives in **[docs/BUILD_PLAN.md](docs/BUILD_PLAN.md)**;
 phases 1–7 of it are implemented. The plan's honest-assessment and
@@ -55,7 +57,33 @@ threat-model sections still apply verbatim.
   anywhere), or the wrap half of Argon2id(password) — the auth half is
   all the server ever checks. Invite-link joiners onboard in seconds and
   are nagged to secure the account afterwards. Signing in restores who
-  you are, never old messages — those keys lived on the old device.
+  you are and (via the circles backup) what you knew — live group keys
+  still lived on the old device, so sending needs a re-add.
+- **Channel settings** (admins, per channel) — a topic shown at the top
+  of the room, auto-delete, and kept history. Settings travel inside the
+  encryption like channel names; changes are announced in the channel.
+- **Kept history (opt-in, per channel)** — off by default: messages exist
+  only on devices that were present. Switched on, each message is *also*
+  sealed under a per-channel **room key** (AES-GCM) and parked on the
+  relay beneath an opaque log id. The room key travels only inside MLS
+  metadata, so being in the roster — joining — is exactly how you get it;
+  new members and your own next device read the channel's past. Honest
+  costs, shown in the UI: forward secrecy for that channel's content is
+  deliberately given up (anyone admitted later can read what the key
+  unlocks), and restored entries are authenticated by the room key, not
+  per-sender signatures.
+- **Auto-delete** — per-channel retention (1 hour to 30 days). Entries in
+  the relay's history log carry an expiry the server enforces; devices
+  prune their local copies when they open the room. A shared setting
+  honored by clients, not a cryptographic guarantee — and it usefully
+  bounds what a kept-history room key can ever unlock.
+- **Circles backup / new-device restore** — the *shape* of your circles
+  (names, channels, settings, room keys) is parked on the relay encrypted
+  under a key derived from your identity bundle — the same bytes the
+  account vault already round-trips, so any device that can sign in can
+  open it and the relay never can. Sign in somewhere new: your circles
+  reappear read-only, kept-history channels are readable immediately, and
+  a re-add (or invite link) makes them live again.
 
 ## Architecture
 
@@ -69,9 +97,11 @@ threat-model sections still apply verbatim.
 The relay is a **delivery service and ordered log**, nothing more: it
 authenticates connections (challenge-response against each user's pinned
 MLS identity key — no passwords), stores ciphertext keyed by
-`(group_id, epoch, seq)`, hosts pre-published KeyPackages and invite
-blobs, enforces per-group ordering, and fans out. It cannot read
-messages, membership, channel names, invite blobs, or call signaling.
+`(group_id, epoch, seq)`, hosts pre-published KeyPackages, invite
+blobs, per-channel history logs (opaque ids, AES-GCM ciphertext), and
+identity-encrypted circles backups, enforces per-group ordering, and
+fans out. It cannot read messages, membership, channel names, invite
+blobs, history entries, backups, or call signaling.
 It *can* observe metadata — who talks to whom, when, how often — and the
 docs say so plainly rather than overclaiming.
 
