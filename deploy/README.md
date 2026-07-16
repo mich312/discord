@@ -167,6 +167,22 @@ nothing else to do.
 Certificates and the ACME account live in the `caddy_data` volume, so they
 survive restarts and you don't re-hit Let's Encrypt rate limits.
 
+## Resetting the database
+
+The relay recreates its tables on boot, so a reset just means emptying Postgres
+and restarting the relay. `deploy/reset-db.sh` does it in place — it works
+regardless of how you deployed and leaves your TLS certificate untouched:
+
+```sh
+sudo ./deploy/reset-db.sh          # wipe the database (keep attachments)
+sudo ./deploy/reset-db.sh --all    # also delete stored attachments (blobs)
+sudo ./deploy/reset-db.sh --help   # all options
+```
+
+It erases accounts, pinned identity keys, messages, groups, invites, and push
+subscriptions. Existing browser clients keep their local keys, so have users
+re-onboard for a truly clean slate.
+
 ## Troubleshooting
 
 - **Cert not issued / ACME failing** — DNS isn't pointing at this VM yet, or
