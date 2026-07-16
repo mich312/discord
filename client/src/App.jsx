@@ -12,6 +12,8 @@ import Channels from './components/Channels.jsx';
 import Messages from './components/Messages.jsx';
 import Members from './components/Members.jsx';
 import CallPanel from './components/CallPanel.jsx';
+import CallStage from './components/CallStage.jsx';
+import { callChatChannel } from './lib/controller.js';
 import Settings from './components/Settings.jsx';
 import Seal from './components/Seal.jsx';
 import { Key, Bell, ShieldCheck, LinkGlyph, Sun, QuorumGlyph, Gear } from './components/icons.jsx';
@@ -110,6 +112,12 @@ export default function App() {
   // pane instead of flanking it. null | 'nav' | 'roster'; CSS ignores this
   // entirely on wide screens, where both panels are static.
   const [drawer, setDrawer] = useState(null);
+  // The call stage takes over the main pane while set: bubbles for everyone
+  // in the call, the shared screen, and the call's own chat thread (the
+  // active channel becomes `voice:<room>` so the message machinery follows).
+  const [stage, setStage] = useState(false);
+  // Where to land when the stage closes — the text channel we came from.
+  const stageReturn = useRef(null);
   const controllerRef = useRef(null);
 
   useEffect(() => {
@@ -188,6 +196,35 @@ export default function App() {
     () => state.servers.find((s) => s.id === server) ?? null,
     [state.servers, server]
   );
+
+  // Open the stage for whatever call the VoiceManager is in right now.
+  // Read it off the controller, not React state — this runs right after a
+  // join resolves, before the published state has rendered.
+  const openStage = () => {
+    const v = controllerRef.current?.voice?.active;
+    if (!v) return;
+    if (!stage) stageReturn.current = state.active;
+    dispatch({ type: 'select', server: v.server, channel: callChatChannel(v.channel) });
+    setStage(true);
+    setDrawer(null);
+  };
+
+  const closeStage = () => {
+    setStage(false);
+    const back = stageReturn.current;
+    stageReturn.current = null;
+    if (back?.server && state.servers.some((s) => s.id === back.server)) {
+      dispatch({ type: 'select', server: back.server, channel: back.channel });
+    } else if (activeServer) {
+      dispatch({ type: 'select', server: activeServer.id, channel: activeServer.channels[0] });
+    }
+  };
+
+  // The call ended (hang-up, peer left, connection lost) — the stage has
+  // nothing to show; land back where the user was.
+  useEffect(() => {
+    if (stage && !state.voice.active) closeStage();
+  }, [stage, state.voice.active]);
 
   // Web Crypto (crypto.subtle) is only exposed in a secure context. Served
   // over plain HTTP off localhost it is undefined, so every identity,
@@ -321,6 +358,7 @@ export default function App() {
             onSelect={(id) => {
               const s = state.servers.find((x) => x.id === id);
               dispatch({ type: 'select', server: id, channel: s.channels[0] });
+              setStage(false); // navigating away swaps the stage for the rooms
               setDrawer(null);
             }}
             onCreate={async (name) => {
@@ -337,6 +375,7 @@ export default function App() {
               canManage={canManage && !activeServer.restored}
               onSelect={(ch) => {
                 dispatch({ type: 'select', server, channel: ch });
+                setStage(false); // picking a text room dismisses the stage
                 setDrawer(null);
               }}
               onSettings={(ch) =>
@@ -362,9 +401,11 @@ export default function App() {
               onVoiceJoin={(ch) =>
                 controllerRef.current.voice
                   .join(server, ch)
+                  .then(() => openStage())
                   .catch((e) => dispatch({ type: 'toast', text: `voice: ${e.message}` }))
               }
               onVoiceLeave={() => controllerRef.current.voice.leave()}
+              onOpenStage={openStage}
             />
           )}
           <div className="self-card">
@@ -384,7 +425,28 @@ export default function App() {
             </button>
           </div>
         </nav>
-        {activeServer ? (
+        {activeServer && stage && state.voice.active ? (
+          <CallStage
+            voice={state.voice}
+            manager={controllerRef.current.voice}
+            me={state.me}
+            messages={state.messages}
+            canSend={!activeServer.restored}
+            onSend={(text) =>
+              controllerRef.current
+                .sendChat(server, channel, text)
+                .catch((e) => dispatch({ type: 'toast', text: e.message }))
+            }
+            onShare={() =>
+              controllerRef.current.voice
+                .startShare()
+                .catch((e) => dispatch({ type: 'toast', text: `screen share: ${e.message}` }))
+            }
+            onStopShare={() => controllerRef.current.voice.stopShare()}
+            onLeave={() => controllerRef.current.voice.leave()}
+            onClose={closeStage}
+          />
+        ) : activeServer ? (
           <>
             <Messages
               key={`${server}/${channel}`}
@@ -412,6 +474,7 @@ export default function App() {
                 setDrawer(null);
                 controllerRef.current.voice
                   .callUser(server, peer)
+                  .then(() => openStage())
                   .catch((e) => dispatch({ type: 'toast', text: `call: ${e.message}` }));
               }}
               onAdd={(user) =>
@@ -470,14 +533,17 @@ export default function App() {
         <CallPanel
           voice={state.voice}
           me={state.me}
+          stageOpen={stage}
           onAccept={() =>
             controllerRef.current.voice
               .acceptRing()
+              .then(() => openStage())
               .catch((e) => dispatch({ type: 'toast', text: `call: ${e.message}` }))
           }
           onDecline={() => controllerRef.current.voice.declineRing()}
           onCancel={() => controllerRef.current.voice.cancelCall()}
           onHangup={() => controllerRef.current.voice.leave()}
+          onOpen={openStage}
         />
         {state.toast && <div className="toast">{state.toast}</div>}
         {state.modal?.type === 'settings' && (
@@ -537,7 +603,10 @@ export default function App() {
             servers={state.servers}
             active={server}
             actions={paletteActions}
-            onNavigate={(srv, ch) => dispatch({ type: 'select', server: srv, channel: ch })}
+            onNavigate={(srv, ch) => {
+              dispatch({ type: 'select', server: srv, channel: ch });
+              setStage(false);
+            }}
             onClose={() => setPaletteOpen(false)}
           />
         )}

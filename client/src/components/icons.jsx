@@ -163,6 +163,13 @@ export const X = (p) => (
   </Svg>
 );
 
+export const Screen = (p) => (
+  <Svg {...p}>
+    <rect x="1.8" y="2.8" width="12.4" height="8.4" rx="1" />
+    <path d="M5.6 13.6h4.8M8 11.2v2.4" />
+  </Svg>
+);
+
 export const Clock = (p) => (
   <Svg {...p}>
     <circle cx="8" cy="8" r="5.5" />

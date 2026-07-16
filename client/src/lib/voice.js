@@ -1,16 +1,23 @@
-// Audio-only mesh voice channels. Every signal (presence + SDP + ICE)
-// travels as an MLS-encrypted ephemeral: the relay fans it out but can't
-// read it, and — because MLS authenticates every message — the DTLS
-// fingerprints inside the SDP arrive over an authenticated channel. That
-// is the fingerprint verification: a relay that swapped SDP would fail
-// MLS authentication.
+// Mesh voice channels (audio + optional screen share). Every signal
+// (presence + SDP + ICE) travels as an MLS-encrypted ephemeral: the relay
+// fans it out but can't read it, and — because MLS authenticates every
+// message — the DTLS fingerprints inside the SDP arrive over an
+// authenticated channel. That is the fingerprint verification: a relay
+// that swapped SDP would fail MLS authentication.
 //
 // Envelope shapes (inside MLS plaintext):
-//   {k:'voice', ch, action:'join'|'here'|'leave'|'probe'}
+//   {k:'voice', ch, action:'join'|'here'|'leave'|'probe'|'share'|'unshare',
+//    sharing?}                                  — 'here' carries sharing:true
+//                                                 when the sender has a live
+//                                                 screen share going
 //   {k:'rtc', ch, to, type:'offer'|'answer'|'candidate', sdp?, cand?}
 //
 // Mesh rule: for each pair, the lexicographically smaller name makes the
-// offer — no glare. Audio-only keeps mesh viable to ~6–8 participants.
+// initial offer — no glare. Later renegotiation (screen share start/stop)
+// can come from either side; collisions resolve with the same ordering:
+// the smaller name's offer wins, the larger name rolls back and answers.
+// Audio-only keeps mesh viable to ~6–8 participants; screen video is one
+// extra sender track per sharer.
 
 import { frameRms, levelFromRms, nextSpeaking } from './meter.js';
 
@@ -33,6 +40,12 @@ export class VoiceManager {
     this.peers = new Map(); // name -> {pc, audio}
     // (server, channel) -> Set of names, maintained passively for everyone
     this.presence = new Map();
+    // Screen sharing: my outgoing capture, who else is sharing (name ->
+    // presence key, learned from share/here envelopes), and the remote
+    // display streams as their video tracks arrive.
+    this.share = null; // {stream, track}
+    this.shares = new Map(); // name -> key(server, channel)
+    this.remoteScreens = new Map(); // name -> MediaStream
     // Active-speaker metering (local + each remote), all client-side.
     this.levels = {}; // name -> 0..1 instantaneous loudness (read by the meter UI)
     this.speaking = new Set(); // names currently over the speaking threshold
@@ -56,9 +69,20 @@ export class VoiceManager {
   }
 
   publish() {
+    const activeKey = this.active ? this.key(this.active.server, this.active.channel) : null;
     const state = {
       active: this.active ? { server: this.active.server, channel: this.active.channel } : null,
       listenOnly: this.active ? !!this.listenOnly : false,
+      // Who has a live screen share in my current room (me included), and
+      // whose display stream has actually arrived (a share announcement
+      // lands before the renegotiated video track does).
+      sharing: activeKey
+        ? [
+            ...(this.share ? [this.me] : []),
+            ...[...this.shares.entries()].filter(([, k]) => k === activeKey).map(([n]) => n),
+          ].sort()
+        : [],
+      screens: [...this.remoteScreens.keys()].sort(),
       connections: Object.fromEntries(
         [...this.peers.entries()].map(([name, p]) => [name, p.pc.connectionState])
       ),
@@ -274,6 +298,12 @@ export class VoiceManager {
     this.peers.clear();
     this.stopMeter();
     stream.getTracks().forEach((t) => t.stop());
+    // Leaving implies unshare — the capture must not outlive the call.
+    if (this.share) {
+      this.share.stream.getTracks().forEach((t) => t.stop());
+      this.share = null;
+    }
+    this.remoteScreens.clear();
     this.audioCtx?.close?.().catch?.(() => {});
     this.audioCtx = null;
     this.track(server, channel, this.me, false);
@@ -297,7 +327,94 @@ export class VoiceManager {
     this.teardownPeer(peer);
     this.peers.delete(name);
     this.removeMeter(name);
+    this.remoteScreens.delete(name);
     this.publish();
+  }
+
+  // === screen sharing =====================================================
+  // The display capture is one extra video track on every existing peer
+  // connection, added (and removed) via renegotiation. The media itself is
+  // P2P DTLS-SRTP like the audio — the relay never carries a frame.
+
+  /** The screen stream for `name`, if one is live: my own capture for me,
+      the received remote stream for anyone else. */
+  screenStreamFor(name) {
+    if (name === this.me) return this.share?.stream ?? null;
+    return this.remoteScreens.get(name) ?? null;
+  }
+
+  async startShare() {
+    if (!this.active || this.share) return;
+    if (!navigator.mediaDevices?.getDisplayMedia) {
+      throw new Error('screen sharing is not available in this browser');
+    }
+    const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
+    const track = stream.getVideoTracks()[0];
+    if (!track) {
+      stream.getTracks().forEach((t) => t.stop());
+      throw new Error('no video track in the captured screen');
+    }
+    // The browser's own "stop sharing" bar ends the track out from under us.
+    track.addEventListener('ended', () => {
+      this.stopShare().catch(() => {});
+    });
+    this.share = { stream, track };
+    const { server, channel } = this.active;
+    for (const [name, peer] of this.peers) {
+      try {
+        peer.shareSender = peer.pc.addTrack(track, stream);
+        await this.renegotiate(server, name, peer);
+      } catch {
+        /* a dying leg misses the share; its reconnect path re-adds it */
+      }
+    }
+    await this.send(server, { k: 'voice', ch: channel, action: 'share' });
+    this.publish();
+  }
+
+  async stopShare() {
+    const share = this.share;
+    if (!share) return;
+    this.share = null;
+    share.stream.getTracks().forEach((t) => t.stop());
+    if (this.active) {
+      const { server, channel } = this.active;
+      for (const [name, peer] of this.peers) {
+        if (!peer.shareSender) continue;
+        try {
+          peer.pc.removeTrack(peer.shareSender);
+        } catch {
+          /* connection already closed */
+        }
+        peer.shareSender = null;
+        await this.renegotiate(server, name, peer);
+      }
+      await this.send(server, { k: 'voice', ch: channel, action: 'unshare' }).catch(() => {});
+    }
+    this.publish();
+  }
+
+  /** Re-offer to one peer after a track change. Collisions (both sides
+      renegotiating at once) resolve like the initial mesh rule: the smaller
+      name's offer wins; see the offer handler in handleSignal. */
+  async renegotiate(server, name, peer) {
+    try {
+      peer.makingOffer = true;
+      const offer = await peer.pc.createOffer();
+      // An offer arrived while we were building ours and the peer applied
+      // it — ours is stale; the answer path re-syncs the tracks.
+      if (peer.pc.signalingState !== 'stable') return;
+      await peer.pc.setLocalDescription(offer);
+      await this.send(server, {
+        k: 'rtc',
+        ch: this.active.channel,
+        to: name,
+        type: 'offer',
+        sdp: offer.sdp,
+      });
+    } finally {
+      peer.makingOffer = false;
+    }
   }
 
   /** Ask who's in voice (on connect/reconnect) — participants answer 'here'. */
@@ -370,6 +487,9 @@ export class VoiceManager {
         if (!allowed.has(name)) set.delete(name);
       }
     }
+    for (const [name, key] of [...this.shares]) {
+      if (key.startsWith(`${server}\n`) && !allowed.has(name)) this.shares.delete(name);
+    }
     this.publish();
   }
 
@@ -377,6 +497,12 @@ export class VoiceManager {
     return (
       this.active && this.active.server === server && this.active.channel === channel
     );
+  }
+
+  /** Presence reply; carries the share flag so late joiners learn who is
+      already presenting without waiting for the video track to negotiate. */
+  hereEnvelope(channel) {
+    return { k: 'voice', ch: channel, action: 'here', ...(this.share ? { sharing: true } : {}) };
   }
 
   async handleEnvelope(server, sender, content) {
@@ -424,17 +550,28 @@ export class VoiceManager {
         case 'join':
         case 'here': {
           this.track(server, content.ch, sender, true);
+          if (content.sharing) this.shares.set(sender, this.key(server, content.ch));
           if (this.inChannel(server, content.ch)) {
             if (content.action === 'join') {
               // Tell the newcomer we're here (they can't know otherwise).
-              await this.send(server, { k: 'voice', ch: content.ch, action: 'here' });
+              await this.send(server, this.hereEnvelope(content.ch));
             }
             await this.ensurePeer(server, sender);
           }
           break;
         }
+        case 'share': {
+          this.shares.set(sender, this.key(server, content.ch));
+          break;
+        }
+        case 'unshare': {
+          this.shares.delete(sender);
+          this.remoteScreens.delete(sender);
+          break;
+        }
         case 'leave': {
           this.track(server, content.ch, sender, false);
+          this.shares.delete(sender);
           this.dropPeer(sender);
           // A direct call ends when the *other party* leaves that same room —
           // not when some unrelated member leaves another voice room, which
@@ -451,7 +588,7 @@ export class VoiceManager {
         }
         case 'probe': {
           if (this.active && this.active.server === server) {
-            await this.send(server, { k: 'voice', ch: this.active.channel, action: 'here' });
+            await this.send(server, this.hereEnvelope(this.active.channel));
           }
           break;
         }
@@ -487,8 +624,11 @@ export class VoiceManager {
 
   createPeer(server, name) {
     const pc = new RTCPeerConnection({ iceServers: this.iceServers });
-    const peer = { pc, audio: null, pendingCandidates: [] };
+    const peer = { pc, audio: null, pendingCandidates: [], makingOffer: false, shareSender: null };
     for (const t of this.active.stream.getTracks()) pc.addTrack(t, this.active.stream);
+    // Mid-share joiner: their very first negotiation already carries the
+    // screen track, no follow-up renegotiation needed.
+    if (this.share) peer.shareSender = pc.addTrack(this.share.track, this.share.stream);
     pc.onicecandidate = ({ candidate }) => {
       if (!candidate || !this.active) return;
       this.send(server, {
@@ -499,7 +639,23 @@ export class VoiceManager {
         cand: candidate.toJSON(),
       }).catch(() => {});
     };
-    pc.ontrack = ({ streams }) => {
+    pc.ontrack = ({ track, streams }) => {
+      if (track.kind === 'video') {
+        // The peer's screen. It rides its own MediaStream, distinct from the
+        // audio one, so the stage can hand it straight to a <video>.
+        const stream = streams[0];
+        this.remoteScreens.set(name, stream);
+        const gone = () => {
+          if (this.remoteScreens.get(name) === stream && !stream.getVideoTracks().some((t) => t.readyState === 'live')) {
+            this.remoteScreens.delete(name);
+            this.publish();
+          }
+        };
+        stream.onremovetrack = gone;
+        track.onended = gone;
+        this.publish();
+        return;
+      }
       const audio = new Audio();
       audio.srcObject = streams[0];
       audio.autoplay = true;
@@ -548,6 +704,17 @@ export class VoiceManager {
 
     switch (content.type) {
       case 'offer': {
+        // Renegotiation glare: both sides offered at once (e.g. two screen
+        // shares starting together). Deterministic winner, same ordering as
+        // the initial mesh rule: the smaller name's offer stands, the larger
+        // name rolls back its own and answers instead.
+        const collision = peer.makingOffer || peer.pc.signalingState !== 'stable';
+        if (collision) {
+          const politeLoser = this.me > sender;
+          if (!politeLoser) break; // their offer loses; ours is in flight
+          // setRemoteDescription(offer) implicitly rolls back our pending
+          // local offer; our track change re-offers once this settles.
+        }
         await peer.pc.setRemoteDescription({ type: 'offer', sdp: content.sdp });
         for (const c of peer.pendingCandidates.splice(0)) await peer.pc.addIceCandidate(c);
         const answer = await peer.pc.createAnswer();
@@ -562,6 +729,9 @@ export class VoiceManager {
         break;
       }
       case 'answer': {
+        // A stale answer can trail a rolled-back offer; only apply one we
+        // are actually waiting for.
+        if (peer.pc.signalingState !== 'have-local-offer') break;
         await peer.pc.setRemoteDescription({ type: 'answer', sdp: content.sdp });
         for (const c of peer.pendingCandidates.splice(0)) await peer.pc.addIceCandidate(c);
         break;

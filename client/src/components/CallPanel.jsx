@@ -1,13 +1,14 @@
 import React from 'react';
 import Seal from './Seal.jsx';
 import VoiceMeter from './VoiceMeter.jsx';
-import { Phone, X } from './icons.jsx';
+import { Phone, Screen, X } from './icons.jsx';
 
 // The direct-call surface: an incoming ring to answer, an outgoing ring we're
 // placing, or the live 1:1 call itself. A direct call is an ad-hoc voice room
 // inside the circle's MLS group, so the media is E2EE exactly like a room
-// call — this panel is just the ringing/answer chrome around it.
-export default function CallPanel({ voice, me, onAccept, onDecline, onCancel, onHangup }) {
+// call — this panel is just the ringing/answer chrome around it. While the
+// call stage is open it owns the connected chrome, so only rings show here.
+export default function CallPanel({ voice, me, stageOpen, onAccept, onDecline, onCancel, onHangup, onOpen }) {
   // Incoming ring takes priority — someone is waiting on an answer.
   if (voice.ring) {
     return (
@@ -51,7 +52,7 @@ export default function CallPanel({ voice, me, onAccept, onDecline, onCancel, on
 
   // A connected direct call (active room is a DM). Show the peer with a live
   // waveform and speaking glow, plus a hang-up.
-  if (voice.direct && voice.active) {
+  if (voice.direct && voice.active && !stageOpen) {
     const key = `${voice.active.server}/${voice.active.channel}`;
     const participants = voice.presence[key] ?? [voice.direct, me];
     return (
@@ -72,6 +73,9 @@ export default function CallPanel({ voice, me, onAccept, onDecline, onCancel, on
             </li>
           ))}
         </ul>
+        <button className="call-btn" data-testid="call-open-stage" title="open the call view" onClick={onOpen}>
+          <Screen size={14} /> open
+        </button>
         <button className="call-btn decline" data-testid="call-hangup" onClick={onHangup}>
           <X size={14} /> hang up
         </button>

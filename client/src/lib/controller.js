@@ -4,7 +4,11 @@
 //
 // Message content is a JSON envelope INSIDE the MLS plaintext, so channel
 // structure and server names are invisible to the relay:
-//   {k:'chat', ch, text}          — a chat message in channel `ch`
+//   {k:'chat', ch, text}          — a chat message in channel `ch`. A `ch`
+//                                   of the form `voice:<room>` is a call's
+//                                   conversation thread: same crypto, same
+//                                   storage, but it belongs to the voice
+//                                   room's stage, never the rooms sidebar
 //   {k:'meta', name, channels,
 //    chanMeta}                    — server metadata; rebroadcast after every
 //                                   member add because joiners have no
@@ -396,7 +400,9 @@ export class Controller {
     }
     switch (content.k) {
       case 'chat': {
-        if (!record.channels.includes(content.ch)) record.channels.push(content.ch);
+        if (!isCallChat(content.ch) && !record.channels.includes(content.ch)) {
+          record.channels.push(content.ch);
+        }
         await this.storeMessage({
           server: record.id,
           channel: content.ch,
@@ -448,7 +454,9 @@ export class Controller {
         break;
       }
       case 'file': {
-        if (!record.channels.includes(content.ch)) record.channels.push(content.ch);
+        if (!isCallChat(content.ch) && !record.channels.includes(content.ch)) {
+          record.channels.push(content.ch);
+        }
         await this.storeMessage({
           server: record.id,
           channel: content.ch,
@@ -1368,6 +1376,16 @@ export class Controller {
   toast(text) {
     this.dispatch({ type: 'toast', text });
   }
+}
+
+/** A call's conversation thread lives under `voice:<room>` — real E2EE chat
+    storage, but stage-scoped: it must never surface as a text room. */
+export function isCallChat(channel) {
+  return typeof channel === 'string' && channel.startsWith('voice:');
+}
+
+export function callChatChannel(room) {
+  return `voice:${room}`;
 }
 
 /** Human-readable summary of a channel's settings for system messages. */

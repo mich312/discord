@@ -5,7 +5,7 @@
 //   /preview.html?view=app&theme=paper
 //   /preview.html?view=onboarding | invited | empty | banner
 //   /preview.html?view=modal-safety | modal-invite | modal-secure | modal-identity
-//   /preview.html?view=palette
+//   /preview.html?view=palette | call | call-share
 import React, { useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles.css';
@@ -17,6 +17,7 @@ import Messages from './components/Messages.jsx';
 import Members from './components/Members.jsx';
 import Modal from './components/Modal.jsx';
 import Onboarding from './components/Onboarding.jsx';
+import CallStage from './components/CallStage.jsx';
 import Seal from './components/Seal.jsx';
 import { Key, Bell, ShieldCheck, QuorumGlyph } from './components/icons.jsx';
 
@@ -78,6 +79,54 @@ const voice = {
   presence: { 'srv-race/lounge': ['alice', 'bob', 'dana'] },
 };
 
+// Stage previews: everyone in the lounge, dana mid-sentence, and (for
+// view=call-share) bob presenting a synthetic screen drawn on a canvas.
+const stageVoice = (sharing) => ({
+  ...voice,
+  connections: { bob: 'connected', dana: 'connected' },
+  speaking: ['dana'],
+  sharing,
+  screens: sharing.filter((n) => n !== 'alice'),
+});
+
+const callMessages = [
+  { sender: 'bob', text: 'sharing the stint plan now', ts: now - 3 * 60e3 },
+  { sender: 'alice', text: 'seeing it — lap 14 box works', ts: now - 2 * 60e3 },
+  { sender: 'dana', text: 'agreed, weather radar says rain by lap 20', ts: now - 60e3 },
+];
+
+// A live MediaStream without any capture permission: draw a fake "shared
+// screen" on a canvas and stream that. Only used by the gallery.
+let fakeScreen = null;
+function fakeScreenStream() {
+  if (fakeScreen) return fakeScreen;
+  const canvas = document.createElement('canvas');
+  canvas.width = 1280;
+  canvas.height = 720;
+  const ctx = canvas.getContext('2d');
+  const draw = () => {
+    ctx.fillStyle = '#101014';
+    ctx.fillRect(0, 0, 1280, 720);
+    ctx.fillStyle = '#2c2c34';
+    ctx.fillRect(60, 60, 1160, 80);
+    ctx.fillStyle = '#9aa0aa';
+    ctx.font = '32px monospace';
+    ctx.fillText('stint-plan.pdf — bob’s screen', 84, 112);
+    for (let i = 0; i < 8; i++) {
+      ctx.fillStyle = i % 2 ? '#1a1a20' : '#202028';
+      ctx.fillRect(60, 180 + i * 60, 1160, 48);
+    }
+    requestAnimationFrame(draw);
+  };
+  draw();
+  fakeScreen = canvas.captureStream(10);
+  return fakeScreen;
+}
+
+const mockVoiceManager = {
+  screenStreamFor: (name) => (name === 'bob' ? fakeScreenStream() : null),
+};
+
 const noop = () => {};
 const mockController = {
   pendingInvite: view === 'invited' ? { id: 'x' } : null,
@@ -105,7 +154,7 @@ const modals = {
   },
 };
 
-function PreviewShell({ empty = false, banner = false, modal = null, palette = false }) {
+function PreviewShell({ empty = false, banner = false, modal = null, palette = false, stage = null }) {
   const me = 'alice';
   const [active, setActive] = useState({ server: empty ? null : 'srv-race', channel: 'general' });
   const [openModal, setOpenModal] = useState(modal);
@@ -175,7 +224,20 @@ function PreviewShell({ empty = false, banner = false, modal = null, palette = f
             <button className="icon-btn" title="alerts"><Bell size={14} /></button>
           </div>
         </nav>
-        {activeServer ? (
+        {activeServer && stage ? (
+          <CallStage
+            voice={stage}
+            manager={mockVoiceManager}
+            me={me}
+            messages={callMessages}
+            canSend
+            onSend={noop}
+            onShare={noop}
+            onStopShare={noop}
+            onLeave={noop}
+            onClose={noop}
+          />
+        ) : activeServer ? (
           <>
             <Messages
               server={activeServer}
@@ -237,6 +299,8 @@ function pick() {
   if (view === 'empty') return <PreviewShell empty />;
   if (view === 'banner') return <PreviewShell banner />;
   if (view === 'palette') return <PreviewShell palette />;
+  if (view === 'call') return <PreviewShell stage={stageVoice([])} />;
+  if (view === 'call-share') return <PreviewShell stage={stageVoice(['bob'])} />;
   if (modals[view]) return <PreviewShell modal={modals[view]} />;
   return <PreviewShell />;
 }

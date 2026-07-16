@@ -472,16 +472,125 @@ try {
     .catch(() => {
       throw new Error('charlie: direct call to alice never connected');
     });
+  // The call stage auto-opens on both ends and shows a bubble per party.
+  await alice.waitForSelector('[data-testid=call-stage]', { timeout: 10000 });
+  await charlie.waitForSelector('[data-testid=call-stage]', { timeout: 10000 });
+  await alice.waitForSelector('[data-testid=stage-bubble-charlie]', { timeout: 10000 });
+  await charlie.waitForSelector('[data-testid=stage-bubble-alice]', { timeout: 10000 });
+  // Closing the stage falls back to the floating panel; its open button
+  // brings the stage back.
+  await alice.click('[data-testid=stage-close]');
   await alice.waitForSelector('[data-testid=call-connected]', { timeout: 10000 });
-  await charlie.waitForSelector('[data-testid=call-connected]', { timeout: 10000 });
+  await alice.click('[data-testid=call-open-stage]');
+  await alice.waitForSelector('[data-testid=call-stage]', { timeout: 10000 });
 
   console.log('18c. hanging up ends the direct call for both sides');
-  await alice.click('[data-testid=call-hangup]');
-  // charlie's leg auto-ends the moment his only peer (alice) hangs up.
+  await alice.click('[data-testid=stage-leave]');
+  // charlie's leg auto-ends the moment his only peer (alice) hangs up, and
+  // his stage closes with it.
   await charlie.waitForFunction(
-    () => !document.querySelector('[data-testid=call-connected]') && !window.__voice?.active,
+    () => !document.querySelector('[data-testid=call-stage]') && !window.__voice?.active,
     { timeout: 15000 }
   );
+  await alice.waitForFunction(
+    () => !document.querySelector('[data-testid=call-stage]') && !window.__voice?.active,
+    { timeout: 15000 }
+  );
+
+  console.log('18d. call stage: a room call gets bubbles and its own chat thread');
+  await alice.click('[data-testid=voice-join-lounge]');
+  await alice.waitForSelector('[data-testid=call-stage]', { timeout: 15000 });
+  await dave.click('[data-testid=voice-join-lounge]');
+  await dave.waitForSelector('[data-testid=call-stage]', { timeout: 15000 });
+  await alice.waitForSelector('[data-testid=stage-bubble-dave]', { timeout: 15000 });
+  await dave.waitForSelector('[data-testid=stage-bubble-alice]', { timeout: 15000 });
+  await alice.waitForFunction(() => window.__voice?.connections?.dave === 'connected', {
+    timeout: 20000,
+  });
+  // The call's conversation rides the same MLS envelopes, scoped to the room.
+  await alice.fill('[data-testid=stage-composer]', 'pit window opens lap 12');
+  await alice.press('[data-testid=stage-composer]', 'Enter');
+  await dave.waitForFunction(
+    () =>
+      document
+        .querySelector('[data-testid=stage-chat-scroll]')
+        ?.textContent.includes('pit window opens lap 12'),
+    { timeout: 15000 }
+  );
+  await dave.fill('[data-testid=stage-composer]', 'copy that, fuel is set');
+  await dave.press('[data-testid=stage-composer]', 'Enter');
+  await alice.waitForFunction(
+    () =>
+      document
+        .querySelector('[data-testid=stage-chat-scroll]')
+        ?.textContent.includes('copy that, fuel is set'),
+    { timeout: 15000 }
+  );
+  // The call thread must never surface as a text room in the sidebar.
+  const leakedRoom = await alice.evaluate(() =>
+    [...document.querySelectorAll('.rooms .channel')].some((el) =>
+      el.textContent.includes('voice:')
+    )
+  );
+  if (leakedRoom) throw new Error('call chat leaked into the text rooms list');
+
+  console.log('18e. screen share: renegotiated video reaches the other side');
+  // Headless has no desktop to capture — hand getDisplayMedia a canvas
+  // stream. Everything after the capture (addTrack, renegotiation, remote
+  // ontrack, stage video) is the real pipeline under test.
+  await alice.evaluate(() => {
+    const canvas = document.createElement('canvas');
+    canvas.width = 640;
+    canvas.height = 360;
+    const ctx = canvas.getContext('2d');
+    let n = 0;
+    setInterval(() => {
+      ctx.fillStyle = ['#c33', '#3c3', '#33c'][n++ % 3];
+      ctx.fillRect(0, 0, 640, 360);
+    }, 200);
+    navigator.mediaDevices.getDisplayMedia = async () => canvas.captureStream(5);
+  });
+  await alice.click('[data-testid=share-start]');
+  await alice.waitForSelector('[data-testid=share-stop]', { timeout: 10000 });
+  await alice.waitForSelector('[data-testid=stage-screen-video-alice]', { timeout: 10000 });
+  // dave learns of the share via the announcement, then the track lands.
+  await dave.waitForFunction(() => (window.__voice?.sharing ?? []).includes('alice'), {
+    timeout: 15000,
+  });
+  await dave.waitForFunction(() => (window.__voice?.screens ?? []).includes('alice'), {
+    timeout: 20000,
+  });
+  await dave.waitForSelector('[data-testid=bubble-sharing-alice]', { timeout: 10000 });
+  await dave.waitForFunction(
+    () => {
+      const v = document.querySelector('[data-testid=stage-screen-video-alice]');
+      return v && v.videoWidth > 0;
+    },
+    { timeout: 20000 }
+  );
+
+  console.log('18f. stopping the share clears it everywhere');
+  await alice.click('[data-testid=share-stop]');
+  await alice.waitForSelector('[data-testid=share-start]', { timeout: 10000 });
+  await dave.waitForFunction(
+    () =>
+      !(window.__voice?.sharing ?? []).includes('alice') &&
+      !(window.__voice?.screens ?? []).includes('alice'),
+    { timeout: 15000 }
+  );
+
+  console.log('18g. the stage closes back to text and reopens from the voice list');
+  await alice.click('[data-testid=stage-close]');
+  await alice.waitForSelector('[data-testid=composer]', { timeout: 10000 });
+  const stillInCall = await alice.evaluate(() => window.__voice?.active?.channel === 'lounge');
+  if (!stillInCall) throw new Error('closing the stage must not leave the call');
+  await alice.click('[data-testid=voice-open-lounge]');
+  await alice.waitForSelector('[data-testid=call-stage]', { timeout: 10000 });
+  await alice.click('[data-testid=stage-leave]');
+  await alice.waitForFunction(() => !window.__voice?.active, { timeout: 10000 });
+  await alice.waitForSelector('[data-testid=composer]', { timeout: 10000 });
+  await dave.click('[data-testid=stage-leave]');
+  await dave.waitForFunction(() => !window.__voice?.active, { timeout: 10000 });
 
   console.log('19. charlie secures the deferred account with a password');
   await charlie.click('[data-testid=secure-now]');
@@ -606,9 +715,10 @@ try {
   console.log('      plain key export/import, encrypted attachments, safety');
   console.log('      numbers, service-worker registration, E2EE-signaled mesh');
   console.log('      voice, multi-room voice + active-speaker meter, direct 1:1');
-  console.log('      calls, deferred invite onboarding, password vault sign-in,');
-  console.log('      passkey (WebAuthn PRF) vault sign-in, and the mobile');
-  console.log('      drawer layout');
+  console.log('      calls, the call stage (bubbles, in-call chat, renegotiated');
+  console.log('      screen share), deferred invite onboarding, password vault');
+  console.log('      sign-in, passkey (WebAuthn PRF) vault sign-in, and the');
+  console.log('      mobile drawer layout');
   await browser.close();
 } catch (e) {
   failed = true;
