@@ -120,10 +120,13 @@ relay).
 | `TRUST_PROXY` | unset | `1` = key the rate limits on the first `X-Forwarded-For` hop instead of the socket peer — set it ONLY behind a proxy that overwrites the header (the `deploy/` Caddy setups do) |
 | `RP_ID` / `RP_ORIGIN` | `localhost` / `http://localhost:9601` | WebAuthn relying party — must match the origin users load the client from |
 
-For real deployments: terminate TLS in front of the relay (`wss://`),
-serve the client over HTTPS with the CSP/SRI hardening from plan §5.1,
-and run your own STUN/TURN if members sit behind hard NATs (TURN relays
-ciphertext only). **[`deploy/`](deploy/)** has a ready-to-run Caddy setup
+For real deployments: terminate TLS in front of the relay (`wss://`) and
+run your own STUN/TURN if members sit behind hard NATs (TURN relays
+ciphertext only). The relay itself serves the plan-§5.1 hardening on
+every response — a strict CSP (`script-src 'self' 'wasm-unsafe-eval'`,
+no inline or eval'd JS), nosniff, frame denial, and a minimal
+Permissions-Policy — and the client build stamps SRI hashes onto its
+entry assets. The Caddy setup adds HSTS on top. **[`deploy/`](deploy/)** has a ready-to-run Caddy setup
 that auto-provisions Let's Encrypt certificates — see
 [`deploy/README.md`](deploy/README.md) for a step-by-step Hetzner VM walkthrough.
 
@@ -174,6 +177,8 @@ joins, identity recovery, encrypted attachments, safety numbers, and
   enumeration sweeps are rate-limited per client IP (10 credential
   attempts/min, 30 probes/min, 60 new connections/min — per relay
   process, in memory).
-- **Browser code delivery is the weak point** (plan §5.1) — SRI, strict
-  CSP, and reproducible builds mitigate broad silent attacks, not
-  targeted ones. State it, don't hide it.
+- **Browser code delivery is the weak point** (plan §5.1) — the strict
+  CSP and SRI now ship by default and mitigate broad silent attacks, not
+  targeted ones; SRI can't cover the worker/wasm (no tag to carry it),
+  and reproducible builds with published hashes remain open. State it,
+  don't hide it.

@@ -9,7 +9,7 @@ pub mod store;
 
 use axum::body::Bytes;
 use axum::extract::{ConnectInfo, DefaultBodyLimit, Path, Request, State, WebSocketUpgrade};
-use axum::http::{header, Method, StatusCode};
+use axum::http::{header, HeaderName, HeaderValue, Method, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::any;
@@ -19,6 +19,23 @@ use std::net::SocketAddr;
 use std::sync::Arc;
 use tower_http::cors::CorsLayer;
 use tower_http::services::ServeDir;
+use tower_http::set_header::SetResponseHeaderLayer;
+
+/// Plan §5.1: the browser bundle carries the crypto, so code delivery is
+/// the weak point. A strict CSP narrows what a slipped-in script can do.
+/// Notes on the exceptions:
+/// - `wasm-unsafe-eval`: the crypto core IS WebAssembly (compiled in the
+///   worker; no JS eval of any kind is allowed).
+/// - `blob:`/`data:` images + `blob:` media: decrypted attachments render
+///   from object URLs; the favicon is a data: SVG.
+/// - `style-src 'unsafe-inline'`: React style attributes. CSS injection
+///   is not in the threat model script injection is.
+/// The same header rides on every response (worker.js and sw.js get their
+/// own CSP from their response headers, so the worker is covered too).
+const CSP: &str = "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; \
+    worker-src 'self'; connect-src 'self'; img-src 'self' blob: data:; \
+    media-src blob:; style-src 'self' 'unsafe-inline'; object-src 'none'; \
+    base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
 
 pub fn router(app: Arc<App>) -> Router {
     let mut router = Router::new()
@@ -55,6 +72,31 @@ pub fn router(app: Arc<App>) -> Router {
     router
         .layer(DefaultBodyLimit::max(blobs::MAX_BLOB_BYTES + 1024))
         .layer(CorsLayer::permissive())
+        // Security headers on everything the relay serves — including the
+        // client, the worker, and the service worker in single-container
+        // mode. Caddy proxies these through untouched, so every deploy
+        // shape gets them. Harmless on JSON/blob responses.
+        .layer(SetResponseHeaderLayer::if_not_present(
+            header::CONTENT_SECURITY_POLICY,
+            HeaderValue::from_static(CSP),
+        ))
+        .layer(SetResponseHeaderLayer::if_not_present(
+            header::X_CONTENT_TYPE_OPTIONS,
+            HeaderValue::from_static("nosniff"),
+        ))
+        .layer(SetResponseHeaderLayer::if_not_present(
+            header::REFERRER_POLICY,
+            HeaderValue::from_static("no-referrer"),
+        ))
+        .layer(SetResponseHeaderLayer::if_not_present(
+            header::X_FRAME_OPTIONS,
+            HeaderValue::from_static("DENY"),
+        ))
+        // Voice channels need the microphone; nothing needs the rest.
+        .layer(SetResponseHeaderLayer::if_not_present(
+            HeaderName::from_static("permissions-policy"),
+            HeaderValue::from_static("camera=(), geolocation=(), microphone=(self), payment=(), usb=()"),
+        ))
         .with_state(app)
 }
 

@@ -11,6 +11,11 @@
 {$CADDY_DOMAIN} {
 	encode zstd gzip
 
+	# Browsers should refuse plain-http for this host from now on. (CSP and
+	# the other security headers come from the relay itself and are proxied
+	# through.)
+	header Strict-Transport-Security "max-age=31536000; includeSubDomains"
+
 	# Relay + client + blobs + accounts + /ws all live on one port.
 	reverse_proxy quorum:80
 
