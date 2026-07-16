@@ -49,6 +49,12 @@ pub struct VaultRecord {
     pub credential: Option<String>,
 }
 
+/// The two membership roles. Admins manage the (weak, server-side) ACL:
+/// allowing members, invites, and role changes. The group's creator starts
+/// as its admin.
+pub const ROLE_ADMIN: &str = "admin";
+pub const ROLE_MEMBER: &str = "member";
+
 #[derive(Debug, Clone, PartialEq)]
 pub enum RegisterOutcome {
     /// User was unknown; this pubkey is now pinned.
@@ -83,10 +89,19 @@ pub trait Store: Send + Sync {
     async fn publish_key_packages(&self, user: &str, payloads: Vec<Vec<u8>>) -> Result<(), StoreError>;
     /// Consume (remove and return) one KeyPackage for `user`.
     async fn take_key_package(&self, user: &str) -> Result<Option<Vec<u8>>, StoreError>;
+    /// Create the group; the creator becomes its first admin.
     async fn create_group(&self, group: &str, creator: &str) -> Result<(), StoreError>;
+    /// Add `user` as a plain member; keeps the existing role if already in.
     async fn allow_member(&self, group: &str, user: &str) -> Result<(), StoreError>;
     async fn is_member(&self, group: &str, user: &str) -> Result<bool, StoreError>;
-    async fn group_members(&self, group: &str) -> Result<Vec<String>, StoreError>;
+    /// `user`'s role in `group`, or None if not a member.
+    async fn member_role(&self, group: &str, user: &str) -> Result<Option<String>, StoreError>;
+    async fn set_member_role(&self, group: &str, user: &str, role: &str) -> Result<(), StoreError>;
+    /// All members as (user, role) pairs.
+    async fn group_members(&self, group: &str) -> Result<Vec<(String, String)>, StoreError>;
+    async fn list_users(&self) -> Result<Vec<String>, StoreError>;
+    /// All groups as (group_id, created_by) pairs.
+    async fn list_groups(&self) -> Result<Vec<(String, String)>, StoreError>;
     /// Append to the group's ordered log; returns the assigned seq (1-based).
     async fn append_message(
         &self,
@@ -139,7 +154,9 @@ struct MemoryInner {
 
 #[derive(Default)]
 struct GroupData {
-    members: Vec<String>,
+    created_by: String,
+    /// (user, role)
+    members: Vec<(String, String)>,
     log: Vec<StoredMessage>,
 }
 
@@ -186,7 +203,11 @@ impl Store for MemoryStore {
         }
         inner.groups.insert(
             group.to_string(),
-            GroupData { members: vec![creator.to_string()], log: Vec::new() },
+            GroupData {
+                created_by: creator.to_string(),
+                members: vec![(creator.to_string(), ROLE_ADMIN.to_string())],
+                log: Vec::new(),
+            },
         );
         Ok(())
     }
@@ -194,8 +215,8 @@ impl Store for MemoryStore {
     async fn allow_member(&self, group: &str, user: &str) -> Result<(), StoreError> {
         let mut inner = self.inner.lock().unwrap();
         let data = inner.groups.get_mut(group).ok_or(StoreError::NoSuchGroup)?;
-        if !data.members.iter().any(|m| m == user) {
-            data.members.push(user.to_string());
+        if !data.members.iter().any(|(m, _)| m == user) {
+            data.members.push((user.to_string(), ROLE_MEMBER.to_string()));
         }
         Ok(())
     }
@@ -205,13 +226,48 @@ impl Store for MemoryStore {
         Ok(inner
             .groups
             .get(group)
-            .is_some_and(|d| d.members.iter().any(|m| m == user)))
+            .is_some_and(|d| d.members.iter().any(|(m, _)| m == user)))
     }
 
-    async fn group_members(&self, group: &str) -> Result<Vec<String>, StoreError> {
+    async fn member_role(&self, group: &str, user: &str) -> Result<Option<String>, StoreError> {
+        let inner = self.inner.lock().unwrap();
+        Ok(inner
+            .groups
+            .get(group)
+            .and_then(|d| d.members.iter().find(|(m, _)| m == user).map(|(_, r)| r.clone())))
+    }
+
+    async fn set_member_role(&self, group: &str, user: &str, role: &str) -> Result<(), StoreError> {
+        let mut inner = self.inner.lock().unwrap();
+        let data = inner.groups.get_mut(group).ok_or(StoreError::NoSuchGroup)?;
+        match data.members.iter_mut().find(|(m, _)| m == user) {
+            Some((_, r)) => {
+                *r = role.to_string();
+                Ok(())
+            }
+            None => Err(StoreError::Backend(format!("{user} is not a member of {group}"))),
+        }
+    }
+
+    async fn group_members(&self, group: &str) -> Result<Vec<(String, String)>, StoreError> {
         let inner = self.inner.lock().unwrap();
         let data = inner.groups.get(group).ok_or(StoreError::NoSuchGroup)?;
         Ok(data.members.clone())
+    }
+
+    async fn list_users(&self) -> Result<Vec<String>, StoreError> {
+        let inner = self.inner.lock().unwrap();
+        let mut users: Vec<String> = inner.users.keys().cloned().collect();
+        users.sort();
+        Ok(users)
+    }
+
+    async fn list_groups(&self) -> Result<Vec<(String, String)>, StoreError> {
+        let inner = self.inner.lock().unwrap();
+        let mut groups: Vec<(String, String)> =
+            inner.groups.iter().map(|(g, d)| (g.clone(), d.created_by.clone())).collect();
+        groups.sort();
+        Ok(groups)
     }
 
     async fn set_vault(&self, user: &str, vault: VaultRecord) -> Result<(), StoreError> {

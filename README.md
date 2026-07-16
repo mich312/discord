@@ -112,6 +112,12 @@ relay).
 | `BLOB_DIR` | `./blobs` | encrypted attachment storage on disk |
 | `VAPID_PRIVATE_KEY` | unset | base64url P-256 scalar; unset = ephemeral (push subscriptions die on restart) |
 | `RP_ID` / `RP_ORIGIN` | `localhost` / `http://localhost:9601` | WebAuthn relying party — must match the origin users load the client from |
+| `RELAY_ADMINS` | unset | comma-separated handles treated as global admins: they can manage any group's ACL/roles and list all users/groups — metadata only, they cannot read messages |
+
+Membership roles: whoever creates a group is its admin; admins add
+members, manage invites, and promote/demote via the roster. This gates
+the relay's (deliberately weak) ACL — the cryptographic boundary stays
+MLS membership.
 
 For real deployments: terminate TLS in front of the relay (`wss://`),
 serve the client over HTTPS with the CSP/SRI hardening from plan §5.1,

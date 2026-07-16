@@ -49,8 +49,24 @@ impl PgStore {
             CREATE TABLE IF NOT EXISTS group_members (
                 group_id text NOT NULL REFERENCES groups(group_id),
                 user_id text NOT NULL,
+                role text NOT NULL DEFAULT 'member',
                 PRIMARY KEY (group_id, user_id)
             );
+            -- Pre-role deployments: add the column once and grandfather each
+            -- group's creator in as its admin. Guarded so a later demotion
+            -- isn't undone on the next boot.
+            DO $$
+            BEGIN
+                IF NOT EXISTS (
+                    SELECT 1 FROM information_schema.columns
+                    WHERE table_name = 'group_members' AND column_name = 'role'
+                ) THEN
+                    ALTER TABLE group_members ADD COLUMN role text NOT NULL DEFAULT 'member';
+                    UPDATE group_members gm SET role = 'admin'
+                    FROM groups g
+                    WHERE gm.group_id = g.group_id AND gm.user_id = g.created_by;
+                END IF;
+            END $$;
             CREATE TABLE IF NOT EXISTS messages (
                 group_id text NOT NULL REFERENCES groups(group_id),
                 seq bigint NOT NULL,
@@ -177,7 +193,7 @@ impl Store for PgStore {
         if inserted.rows_affected() == 0 {
             return Err(StoreError::GroupExists);
         }
-        sqlx::query("INSERT INTO group_members (group_id, user_id) VALUES ($1, $2)")
+        sqlx::query("INSERT INTO group_members (group_id, user_id, role) VALUES ($1, $2, 'admin')")
             .bind(group)
             .bind(creator)
             .execute(&self.pool)
@@ -196,7 +212,7 @@ impl Store for PgStore {
             return Err(StoreError::NoSuchGroup);
         }
         sqlx::query(
-            "INSERT INTO group_members (group_id, user_id) VALUES ($1, $2)
+            "INSERT INTO group_members (group_id, user_id, role) VALUES ($1, $2, 'member')
              ON CONFLICT DO NOTHING",
         )
         .bind(group)
@@ -217,7 +233,41 @@ impl Store for PgStore {
         Ok(row.is_some())
     }
 
-    async fn group_members(&self, group: &str) -> Result<Vec<String>, StoreError> {
+    async fn member_role(&self, group: &str, user: &str) -> Result<Option<String>, StoreError> {
+        let row = sqlx::query("SELECT role FROM group_members WHERE group_id = $1 AND user_id = $2")
+            .bind(group)
+            .bind(user)
+            .fetch_optional(&self.pool)
+            .await
+            .map_err(backend)?;
+        Ok(row.map(|r| r.get("role")))
+    }
+
+    async fn set_member_role(&self, group: &str, user: &str, role: &str) -> Result<(), StoreError> {
+        let updated = sqlx::query(
+            "UPDATE group_members SET role = $3 WHERE group_id = $1 AND user_id = $2",
+        )
+        .bind(group)
+        .bind(user)
+        .bind(role)
+        .execute(&self.pool)
+        .await
+        .map_err(backend)?;
+        if updated.rows_affected() == 0 {
+            let exists = sqlx::query("SELECT 1 FROM groups WHERE group_id = $1")
+                .bind(group)
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(backend)?;
+            return Err(match exists {
+                None => StoreError::NoSuchGroup,
+                Some(_) => StoreError::Backend(format!("{user} is not a member of {group}")),
+            });
+        }
+        Ok(())
+    }
+
+    async fn group_members(&self, group: &str) -> Result<Vec<(String, String)>, StoreError> {
         let exists = sqlx::query("SELECT 1 FROM groups WHERE group_id = $1")
             .bind(group)
             .fetch_optional(&self.pool)
@@ -226,12 +276,28 @@ impl Store for PgStore {
         if exists.is_none() {
             return Err(StoreError::NoSuchGroup);
         }
-        let rows = sqlx::query("SELECT user_id FROM group_members WHERE group_id = $1 ORDER BY user_id")
+        let rows = sqlx::query("SELECT user_id, role FROM group_members WHERE group_id = $1 ORDER BY user_id")
             .bind(group)
             .fetch_all(&self.pool)
             .await
             .map_err(backend)?;
+        Ok(rows.into_iter().map(|r| (r.get("user_id"), r.get("role"))).collect())
+    }
+
+    async fn list_users(&self) -> Result<Vec<String>, StoreError> {
+        let rows = sqlx::query("SELECT user_id FROM users ORDER BY user_id")
+            .fetch_all(&self.pool)
+            .await
+            .map_err(backend)?;
         Ok(rows.into_iter().map(|r| r.get("user_id")).collect())
+    }
+
+    async fn list_groups(&self) -> Result<Vec<(String, String)>, StoreError> {
+        let rows = sqlx::query("SELECT group_id, created_by FROM groups ORDER BY group_id")
+            .fetch_all(&self.pool)
+            .await
+            .map_err(backend)?;
+        Ok(rows.into_iter().map(|r| (r.get("group_id"), r.get("created_by"))).collect())
     }
 
     async fn set_vault(&self, user: &str, vault: VaultRecord) -> Result<(), StoreError> {

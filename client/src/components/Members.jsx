@@ -5,8 +5,11 @@ import { Check } from './icons.jsx';
 // The roster is the security boundary: it is, exactly, who can read this
 // circle. Adding someone happens here, not in a settings page, because it
 // is a cryptographic act — a new epoch — not an administrative one.
-export default function Members({ server, me, onAdd, onMember }) {
+// Roles are relay-side and weaker: admins manage the ACL (adding members,
+// invites, promotions), but they gain no read access anyone else lacks.
+export default function Members({ server, me, canManage, onAdd, onMember, onSetRole }) {
   const [name, setName] = useState('');
+  const roles = server.roles ?? {};
 
   return (
     <aside className="members">
@@ -29,6 +32,11 @@ export default function Members({ server, me, onAdd, onMember }) {
               {m}
             </button>
             <span className="tag">
+              {roles[m] === 'admin' && (
+                <span className="badge-admin" title="manages membership and invites for this circle">
+                  admin
+                </span>
+              )}
               {m === me ? (
                 <span className="badge-you">you</span>
               ) : (server.verified ?? []).includes(m) ? (
@@ -40,27 +48,41 @@ export default function Members({ server, me, onAdd, onMember }) {
                   via link
                 </span>
               ) : null}
+              {canManage && m !== me && roles[m] && (
+                <button
+                  className="ghost role-toggle"
+                  data-testid={`role-toggle-${m}`}
+                  title={roles[m] === 'admin' ? 'demote to member' : 'promote to admin'}
+                  onClick={() => onSetRole(m, roles[m] === 'admin' ? 'member' : 'admin')}
+                >
+                  {roles[m] === 'admin' ? '− admin' : '+ admin'}
+                </button>
+              )}
             </span>
           </li>
         ))}
       </ul>
-      <form
-        className="add-member"
-        onSubmit={(e) => {
-          e.preventDefault();
-          const user = name.trim().toLowerCase();
-          if (!user) return;
-          setName('');
-          onAdd(user);
-        }}
-      >
-        <input
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder="add by handle…"
-          data-testid="add-member-input"
-        />
-      </form>
+      {canManage ? (
+        <form
+          className="add-member"
+          onSubmit={(e) => {
+            e.preventDefault();
+            const user = name.trim().toLowerCase();
+            if (!user) return;
+            setName('');
+            onAdd(user);
+          }}
+        >
+          <input
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="add by handle…"
+            data-testid="add-member-input"
+          />
+        </form>
+      ) : (
+        <p className="fineprint muted">Only admins of this circle can add members.</p>
+      )}
       <p className="fineprint muted">
         Adding someone rotates the group keys (new epoch). They will see nothing sent
         before their join.

@@ -44,6 +44,7 @@ export default function Modal({
     secure: { glyph: <ShieldCheck />, title: 'Secure your account' },
     safety: { glyph: <ShieldCheck />, title: `Safety number — ${modal.peer ?? ''}` },
     identity: { glyph: <Key />, title: 'Identity key' },
+    admin: { glyph: <ShieldCheck />, title: 'Relay admin overview' },
   };
   const head = heads[modal.type];
 
@@ -157,6 +158,36 @@ export default function Modal({
               Verification is stored on this device only; it is your judgement, not the
               server's.
             </p>
+          </>
+        )}
+        {modal.type === 'admin' && (
+          <>
+            <p className="muted">
+              Everything the relay knows: registered handles and groups. Names,
+              channels, and messages stay end-to-end encrypted — no admin can
+              read them.
+            </p>
+            <div className="section-label">
+              <span className="overline">users</span>
+              <span className="member-count">{modal.users.length}</span>
+            </div>
+            <ul className="member-list" data-testid="admin-users">
+              {modal.users.map((u) => (
+                <li key={u} className="member"><span className="member-name">{u}</span></li>
+              ))}
+            </ul>
+            <div className="section-label">
+              <span className="overline">groups</span>
+              <span className="member-count">{modal.groups.length}</span>
+            </div>
+            <ul className="member-list" data-testid="admin-groups">
+              {modal.groups.map((g) => (
+                <li key={g.group} className="member">
+                  <span className="member-name">{g.group}</span>
+                  <span className="tag muted">created by {g.created_by}</span>
+                </li>
+              ))}
+            </ul>
           </>
         )}
         {modal.type === 'identity' && (
