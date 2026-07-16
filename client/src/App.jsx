@@ -156,6 +156,30 @@ export default function App() {
     [state.servers, server]
   );
 
+  // Web Crypto (crypto.subtle) is only exposed in a secure context. Served
+  // over plain HTTP off localhost it is undefined, so every identity,
+  // recovery, and vault operation throws a cryptic "undefined is not an
+  // object (evaluating 'crypto.subtle…')". Surface the real requirement.
+  if (!window.isSecureContext || !window.crypto?.subtle) {
+    return (
+      <div className="centered">
+        <div className="card" data-testid="insecure-context">
+          <h1>Needs a secure connection</h1>
+          <p className="muted lede">
+            quorum generates and unlocks your keys with the browser's Web Crypto
+            API, which browsers only expose over a secure connection. This page
+            is being served over plain <strong>http://</strong>.
+          </p>
+          <p className="muted">
+            Serve it over <strong>https://</strong> (terminate TLS in front of
+            the relay), or use <strong>http://localhost</strong> for local
+            testing.
+          </p>
+        </div>
+      </div>
+    );
+  }
+
   if (state.phase === 'loading') {
     return <div className="centered muted">loading…</div>;
   }
