@@ -2,8 +2,9 @@
 import { createServer } from 'node:http';
 import { readFile } from 'node:fs/promises';
 import { join, normalize, extname } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const dist = new URL('../dist', import.meta.url).pathname;
+const dist = fileURLToPath(new URL('../dist', import.meta.url));
 const port = Number(process.env.HTTP_PORT ?? 9700);
 
 const MIME = {

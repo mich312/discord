@@ -5,13 +5,14 @@
 // without it the relay uses its in-memory store.
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 
 const HTTP = 9600;
 const RELAY = 9601;
-const dir = new URL('.', import.meta.url).pathname;
+const dir = fileURLToPath(new URL('.', import.meta.url));
 
-const relayBin = new URL('../target/debug/relay', import.meta.url).pathname;
+const relayBin = fileURLToPath(new URL('../target/debug/relay', import.meta.url));
 if (!existsSync(relayBin)) {
   console.error(`relay binary not found at ${relayBin} — run: cargo build -p relay`);
   process.exit(1);

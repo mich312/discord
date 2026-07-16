@@ -10,14 +10,15 @@
 // Run after: npm run build, cargo build -p relay.
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 
 const HTTP = 9700;
 const RELAY = 9701;
-const dir = new URL('.', import.meta.url).pathname;
+const dir = fileURLToPath(new URL('.', import.meta.url));
 const base = `http://127.0.0.1:${HTTP}/?relay=${encodeURIComponent(`ws://127.0.0.1:${RELAY}/ws`)}`;
 
-const relayBin = new URL('../../target/debug/relay', import.meta.url).pathname;
+const relayBin = fileURLToPath(new URL('../../target/debug/relay', import.meta.url));
 if (!existsSync(relayBin)) {
   console.error('relay binary missing — run: cargo build -p relay');
   process.exit(1);
@@ -166,7 +167,11 @@ try {
   await fresh.fill('[data-testid=restore-code]', bobRecovery.code);
   await fresh.click('[data-testid=signin-submit]');
   // Identity is back (same pinned key -> relay accepts as bob)…
-  await fresh.waitForSelector('text=bob', { timeout: 15000 });
+  // (match the visible self-name, not the SVG seal's <title>bob</title>.)
+  await fresh.waitForFunction(
+    () => document.querySelector('[data-testid=self-name]')?.textContent === 'bob',
+    { timeout: 15000 }
+  );
   // …but groups are intentionally gone (their keys died with the "device").
   await fresh.waitForSelector('.empty-state', { timeout: 5000 });
 
