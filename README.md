@@ -39,6 +39,11 @@ threat-model sections still apply verbatim.
 - **Web Push** — offline members get an encrypted nudge (group id only —
   content never exists server-side). Requires `VAPID_PRIVATE_KEY` in
   production.
+- **Invite-only registration** — the platform itself is gated, not just
+  the groups: the relay refuses to pin an unknown handle unless the
+  connection presents a currently-usable invite id (the one from the
+  `?j=<id>#k=<key>` link). The very first user bootstraps a fresh relay
+  without one; set `OPEN_REGISTRATION=1` to turn the gate off for dev.
 - **Accounts (passkeys / password)** — sign in from a new device without
   moving key files. The identity bundle is parked on the relay *encrypted
   client-side*: under a passkey's PRF output (nothing brute-forceable
@@ -111,6 +116,8 @@ relay).
 | `DATABASE_URL` | unset | Postgres; unset = in-memory (nothing survives restart) |
 | `BLOB_DIR` | `./blobs` | encrypted attachment storage on disk |
 | `VAPID_PRIVATE_KEY` | unset | base64url P-256 scalar; unset = ephemeral (push subscriptions die on restart) |
+| `OPEN_REGISTRATION` | unset | unset/`0` = invite-only: unknown handles register only with a usable invite id (the first user on an empty relay is exempt); `1`/`true` = anyone can register |
+| `TRUST_PROXY` | unset | `1` = key the rate limits on the first `X-Forwarded-For` hop instead of the socket peer — set it ONLY behind a proxy that overwrites the header (the `deploy/` Caddy setups do) |
 | `TURN_URLS` / `TURN_SECRET` | unset | voice TURN via coturn's REST API — the relay mints a short-lived credential per user (no shared password to clients). `TURN_TTL` (default 3600) sets its lifetime |
 | `ICE_SERVERS` | public STUN | verbatim JSON array of RTCIceServer objects; an alternative to `TURN_*` (static creds). Unset = public STUN, which only traverses cone NATs |
 | `RP_ID` / `RP_ORIGIN` | `localhost` / `http://localhost:9601` | WebAuthn relying party — must match the origin users load the client from |
@@ -121,10 +128,13 @@ members, manage invites, and promote/demote via the roster. This gates
 the relay's (deliberately weak) ACL — the cryptographic boundary stays
 MLS membership.
 
-For real deployments: terminate TLS in front of the relay (`wss://`),
-serve the client over HTTPS with the CSP/SRI hardening from plan §5.1,
-and run your own STUN/TURN if members sit behind hard NATs (TURN relays
-ciphertext only). **[`deploy/`](deploy/)** has a ready-to-run Caddy setup
+For real deployments: terminate TLS in front of the relay (`wss://`) and
+run your own STUN/TURN if members sit behind hard NATs (TURN relays
+ciphertext only). The relay itself serves the plan-§5.1 hardening on
+every response — a strict CSP (`script-src 'self' 'wasm-unsafe-eval'`,
+no inline or eval'd JS), nosniff, frame denial, and a minimal
+Permissions-Policy — and the client build stamps SRI hashes onto its
+entry assets. The Caddy setup adds HSTS on top. **[`deploy/`](deploy/)** has a ready-to-run Caddy setup
 that auto-provisions Let's Encrypt certificates — see
 [`deploy/README.md`](deploy/README.md) for a step-by-step Hetzner VM walkthrough.
 
@@ -171,7 +181,12 @@ joins, identity recovery, encrypted attachments, safety numbers, and
 - **Password vaults can be brute-forced by the server** — only for weak
   passwords, and only offline against the encrypted bundle (Argon2id,
   19 MiB/t=2). Passkey vaults have no such surface. The sign-in params
-  endpoint also confirms whether a username exists.
-- **Browser code delivery is the weak point** (plan §5.1) — SRI, strict
-  CSP, and reproducible builds mitigate broad silent attacks, not
-  targeted ones. State it, don't hide it.
+  endpoint also confirms whether a username exists; online guessing and
+  enumeration sweeps are rate-limited per client IP (10 credential
+  attempts/min, 30 probes/min, 60 new connections/min — per relay
+  process, in memory).
+- **Browser code delivery is the weak point** (plan §5.1) — the strict
+  CSP and SRI now ship by default and mitigate broad silent attacks, not
+  targeted ones; SRI can't cover the worker/wasm (no tag to carry it),
+  and reproducible builds with published hashes remain open. State it,
+  don't hide it.

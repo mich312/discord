@@ -124,7 +124,7 @@ async fn offline_members_receive_web_push() {
 
     // Relay.
     let blobs = BlobStore::new(tempfile::tempdir().unwrap().keep()).unwrap();
-    let app = App::with_parts(Box::new(MemoryStore::default()), blobs, PushService::from_env());
+    let app = App::with_parts(Box::new(MemoryStore::default()), blobs, PushService::from_env(), true);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     tokio::spawn(async move { axum::serve(listener, relay::router(app)).await.unwrap() });

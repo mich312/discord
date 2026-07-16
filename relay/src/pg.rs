@@ -155,6 +155,14 @@ impl Store for PgStore {
         Ok(row.map(|r| r.get("pubkey")))
     }
 
+    async fn user_count(&self) -> Result<u64, StoreError> {
+        let row = sqlx::query("SELECT count(*) AS n FROM users")
+            .fetch_one(&self.pool)
+            .await
+            .map_err(backend)?;
+        Ok(row.get::<i64, _>("n") as u64)
+    }
+
     async fn publish_key_packages(&self, user: &str, payloads: Vec<Vec<u8>>) -> Result<(), StoreError> {
         for payload in payloads {
             sqlx::query("INSERT INTO key_packages (user_id, payload) VALUES ($1, $2)")
@@ -547,5 +555,20 @@ impl Store for PgStore {
         .map_err(backend)?
         .ok_or(StoreError::InviteInvalid)?;
         Ok((row.get("group_id"), row.get("payload")))
+    }
+
+    async fn invite_usable(&self, invite: &str, now: u64) -> Result<bool, StoreError> {
+        let row = sqlx::query(
+            "SELECT 1 FROM invites
+             WHERE invite_id = $1
+               AND (expires_at IS NULL OR expires_at >= $2)
+               AND (max_uses IS NULL OR uses < max_uses)",
+        )
+        .bind(invite)
+        .bind(now as i64)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(backend)?;
+        Ok(row.is_some())
     }
 }

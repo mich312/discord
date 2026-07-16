@@ -21,6 +21,8 @@ services:
       RP_ID: ${SERVER_IP}
       RP_ORIGIN: https://${SERVER_IP}
       VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
+      # Caddy overwrites X-Forwarded-For, so rate limits can key on it.
+      TRUST_PROXY: "1"
       # Voice ICE — see deploy/docker-compose.turn.yml for the coturn overlay.
       ICE_SERVERS: ${ICE_SERVERS:-}
       TURN_URLS: ${TURN_URLS:-}

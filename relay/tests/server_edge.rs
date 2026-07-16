@@ -27,6 +27,7 @@ fn make_app() -> Arc<App> {
         Box::new(MemoryStore::default()),
         BlobStore::new(tempfile::tempdir().unwrap().keep()).unwrap(),
         PushService::from_env(),
+        true,
     )
 }
 

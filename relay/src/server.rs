@@ -7,6 +7,7 @@ use crate::account::AccountService;
 use crate::blobs::BlobStore;
 use crate::proto::{ClientMsg, GroupEntry, MemberEntry, ServerMsg, AUTH_CONTEXT};
 use crate::push::PushService;
+use crate::ratelimit::RateLimiter;
 use crate::store::{
     InviteRecord, RegisterOutcome, Store, StoreError, StoredWelcome, ROLE_ADMIN, ROLE_MEMBER,
 };
@@ -26,6 +27,16 @@ pub struct App {
     pub blobs: BlobStore,
     pub push: PushService,
     pub accounts: AccountService,
+    /// When false (the production default), an unknown handle can only be
+    /// registered by presenting a usable invite id in the Hello — except
+    /// for the very first user, who bootstraps the deployment. Existing
+    /// (pinned) users are never affected.
+    pub open_registration: bool,
+    /// Per-client limits on the unauthenticated surface.
+    pub limits: Limits,
+    /// TRUST_PROXY=1: key rate limits on X-Forwarded-For (first hop)
+    /// instead of the socket peer. Only sane behind Caddy/nginx.
+    pub trust_proxy: bool,
     /// Global admins (RELAY_ADMINS, comma-separated user ids): treated as
     /// admin of every group and allowed to list all users/groups. Metadata
     /// power only — message content stays end-to-end encrypted.
@@ -33,6 +44,25 @@ pub struct App {
     /// Voice ICE configuration, rendered per client (TURN credentials are
     /// minted fresh and short-lived on each `ice_info`).
     pub ice: IceConfig,
+}
+
+pub struct Limits {
+    /// Credential attempts: password login, passkey challenge/login.
+    pub account: RateLimiter,
+    /// The sign-in params probe (username enumeration surface).
+    pub params: RateLimiter,
+    /// New WebSocket connections (auth handshake spam).
+    pub ws: RateLimiter,
+}
+
+impl Default for Limits {
+    fn default() -> Self {
+        Self {
+            account: RateLimiter::per_minute(10),
+            params: RateLimiter::per_minute(30),
+            ws: RateLimiter::per_minute(60),
+        }
+    }
 }
 
 /// Default ICE config when nothing is configured: one public STUN server.
@@ -130,15 +160,23 @@ pub struct Hub {
 }
 
 impl App {
-    /// Env-configured construction: BLOB_DIR (default ./blobs) and
-    /// VAPID_PRIVATE_KEY (ephemeral if unset).
+    /// Env-configured construction: BLOB_DIR (default ./blobs),
+    /// VAPID_PRIVATE_KEY (ephemeral if unset), and OPEN_REGISTRATION
+    /// (unset/0 = invite-only registration, the default).
     pub fn new(store: Box<dyn Store>) -> Arc<Self> {
         let dir = std::env::var("BLOB_DIR").unwrap_or_else(|_| "./blobs".into());
         let blobs = BlobStore::new(dir).expect("blob dir must be creatable");
-        Self::with_parts(store, blobs, PushService::from_env())
+        let open = std::env::var("OPEN_REGISTRATION")
+            .is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true"));
+        Self::with_parts(store, blobs, PushService::from_env(), open)
     }
 
-    pub fn with_parts(store: Box<dyn Store>, blobs: BlobStore, push: PushService) -> Arc<Self> {
+    pub fn with_parts(
+        store: Box<dyn Store>,
+        blobs: BlobStore,
+        push: PushService,
+        open_registration: bool,
+    ) -> Arc<Self> {
         let admins = std::env::var("RELAY_ADMINS")
             .unwrap_or_default()
             .split(',')
@@ -146,13 +184,14 @@ impl App {
             .filter(|s| !s.is_empty())
             .map(String::from)
             .collect();
-        Self::with_parts_and_admins(store, blobs, push, admins)
+        Self::with_parts_and_admins(store, blobs, push, open_registration, admins)
     }
 
     pub fn with_parts_and_admins(
         store: Box<dyn Store>,
         blobs: BlobStore,
         push: PushService,
+        open_registration: bool,
         admins: HashSet<String>,
     ) -> Arc<Self> {
         Arc::new(Self {
@@ -161,6 +200,10 @@ impl App {
             blobs,
             push,
             accounts: AccountService::from_env(),
+            open_registration,
+            limits: Limits::default(),
+            trust_proxy: std::env::var("TRUST_PROXY")
+                .is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true")),
             admins,
             ice: IceConfig::from_env(),
         })
@@ -209,8 +252,8 @@ async fn next_text(socket: &mut WebSocket) -> Option<String> {
 /// hello -> challenge -> auth. Returns the authenticated user name.
 async fn authenticate(socket: &mut WebSocket, app: &App) -> Option<String> {
     let hello = next_text(socket).await?;
-    let (user, claimed_key) = match serde_json::from_str::<ClientMsg>(&hello) {
-        Ok(ClientMsg::Hello { user, pubkey }) => (user, pubkey),
+    let (user, claimed_key, invite) = match serde_json::from_str::<ClientMsg>(&hello) {
+        Ok(ClientMsg::Hello { user, pubkey, invite }) => (user, pubkey, invite),
         _ => {
             let _ = send_json(socket, &ServerMsg::Error { rid: None, message: "expected hello".into() }).await;
             return None;
@@ -256,6 +299,17 @@ async fn authenticate(socket: &mut WebSocket, app: &App) -> Option<String> {
     }
 
     if pinned.is_none() {
+        if !registration_allowed(app, invite.as_deref()).await {
+            let _ = send_json(
+                socket,
+                &ServerMsg::Error {
+                    rid: None,
+                    message: "registration is invite-only: open an invite link to join".into(),
+                },
+            )
+            .await;
+            return None;
+        }
         match app.store.register_user(&user, &claimed_key).await {
             Ok(RegisterOutcome::Registered) => {}
             // Raced with another connection registering a different key:
@@ -271,6 +325,23 @@ async fn authenticate(socket: &mut WebSocket, app: &App) -> Option<String> {
     let ready = ServerMsg::Ready { user: user.clone(), global_admin: app.admins.contains(&user) };
     send_json(socket, &ready).await.ok()?;
     Some(user)
+}
+
+/// The invite gate for first-time registration. Open registration and the
+/// bootstrap user (empty relay) pass; everyone else needs an invite id
+/// that would currently redeem. The use itself is only spent when the
+/// joiner actually redeems after authenticating.
+pub async fn registration_allowed(app: &App, invite: Option<&str>) -> bool {
+    if app.open_registration {
+        return true;
+    }
+    if app.store.user_count().await.map(|n| n == 0).unwrap_or(false) {
+        return true;
+    }
+    match invite {
+        Some(id) => app.store.invite_usable(id, now_unix()).await.unwrap_or(false),
+        None => false,
+    }
 }
 
 fn verify_sig(pubkey: &[u8], message: &[u8], sig: &[u8]) -> bool {

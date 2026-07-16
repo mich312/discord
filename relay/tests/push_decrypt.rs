@@ -77,7 +77,7 @@ fn decrypt_push(
 
 async fn relay_addr() -> (SocketAddr, std::sync::Arc<App>) {
     let blobs = BlobStore::new(tempfile::tempdir().unwrap().keep()).unwrap();
-    let app = App::with_parts(Box::new(MemoryStore::default()), blobs, PushService::from_env());
+    let app = App::with_parts(Box::new(MemoryStore::default()), blobs, PushService::from_env(), true);
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
     {

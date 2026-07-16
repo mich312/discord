@@ -18,7 +18,9 @@ if (!existsSync(relayBin)) {
   process.exit(1);
 }
 const procs = [
-  spawn(relayBin, [], { stdio: 'inherit', env: { ...process.env, RELAY_PORT: RELAY } }),
+  // OPEN_REGISTRATION: both tabs register directly; the invite-only
+  // registration gate has its own relay-level tests.
+  spawn(relayBin, [], { stdio: 'inherit', env: { ...process.env, RELAY_PORT: RELAY, OPEN_REGISTRATION: '1' } }),
   spawn('node', ['serve.mjs'], { cwd: dir, stdio: 'inherit', env: { ...process.env, HTTP_PORT: HTTP } }),
 ];
 const cleanup = () => procs.forEach((p) => p.kill());

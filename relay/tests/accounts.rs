@@ -33,6 +33,7 @@ async fn password_vault_roundtrip() {
         Box::new(MemoryStore::default()),
         BlobStore::new(tempfile::tempdir().unwrap().keep()).unwrap(),
         PushService::from_env(),
+        true,
     );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -131,4 +132,94 @@ async fn password_vault_roundtrip() {
     )
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
+}
+
+#[tokio::test]
+async fn register_policy_reflects_gate_and_bootstrap() {
+    let gated = App::with_parts(
+        Box::new(MemoryStore::default()),
+        BlobStore::new(tempfile::tempdir().unwrap().keep()).unwrap(),
+        PushService::from_env(),
+        false,
+    );
+
+    // Empty relay: the next registration bootstraps, so no invite needed yet.
+    let (status, body) = http(
+        &gated,
+        Request::get("/register/policy").body(Body::empty()).unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    assert_eq!(body["invite_required"], json!(false));
+
+    // Once anyone is registered, fresh handles need an invite.
+    gated.store.register_user("alice", b"key").await.unwrap();
+    let (_, body) = http(
+        &gated,
+        Request::get("/register/policy").body(Body::empty()).unwrap(),
+    )
+    .await;
+    assert_eq!(body["invite_required"], json!(true));
+
+    // OPEN_REGISTRATION relays never require one.
+    let open = App::with_parts(
+        Box::new(MemoryStore::default()),
+        BlobStore::new(tempfile::tempdir().unwrap().keep()).unwrap(),
+        PushService::from_env(),
+        true,
+    );
+    open.store.register_user("alice", b"key").await.unwrap();
+    let (_, body) = http(
+        &open,
+        Request::get("/register/policy").body(Body::empty()).unwrap(),
+    )
+    .await;
+    assert_eq!(body["invite_required"], json!(false));
+}
+
+#[tokio::test]
+async fn credential_endpoints_are_rate_limited() {
+    let app = App::with_parts(
+        Box::new(MemoryStore::default()),
+        BlobStore::new(tempfile::tempdir().unwrap().keep()).unwrap(),
+        PushService::from_env(),
+        true,
+    );
+
+    // No ConnectInfo in oneshot tests: every request shares one bucket,
+    // which is exactly what a single-client hammering test wants.
+    let login = || {
+        Request::post("/account/alice/login")
+            .header("content-type", "application/json")
+            .body(Body::from(json!({"auth_key": B64.encode([0u8; 32])}).to_string()))
+            .unwrap()
+    };
+    let mut limited = false;
+    for _ in 0..10 {
+        let (status, _) = http(&app, login()).await;
+        if status == StatusCode::TOO_MANY_REQUESTS {
+            limited = true;
+            break;
+        }
+        // Not limited yet: must be a normal auth outcome, not an error.
+        assert_eq!(status, StatusCode::NOT_FOUND, "no vault exists for alice");
+    }
+    let (status, _) = http(&app, login()).await;
+    limited = limited || status == StatusCode::TOO_MANY_REQUESTS;
+    assert!(limited, "11th credential attempt in a burst must be throttled");
+
+    // The params probe has its own (higher) bucket — still capped.
+    let mut limited = false;
+    for _ in 0..31 {
+        let (status, _) = http(
+            &app,
+            Request::get("/account/alice/params").body(Body::empty()).unwrap(),
+        )
+        .await;
+        if status == StatusCode::TOO_MANY_REQUESTS {
+            limited = true;
+            break;
+        }
+    }
+    assert!(limited, "enumeration sweeps must hit the params limit");
 }

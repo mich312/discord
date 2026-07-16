@@ -9,7 +9,8 @@ services:
     ports:
       - "80:80"
     environment:
-      DATABASE_URL: postgres://quorum:quorum@db/quorum
+      # Override POSTGRES_PASSWORD for any deployment that isn't localhost.
+      DATABASE_URL: postgres://quorum:${POSTGRES_PASSWORD:-quorum}@db/quorum
       RP_ID: ${RP_ID:-localhost}
       RP_ORIGIN: ${RP_ORIGIN:-http://localhost}
       # Generate once and keep, or push subscriptions die on restart (the raw
@@ -18,6 +19,9 @@ services:
       #   openssl ecparam -genkey -name prime256v1 | openssl ec -no_public \
       #     -outform DER 2>/dev/null | tail -c +8 | head -c 32 | basenc --base64url | tr -d '='
       VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
+      # Invite-only registration is the default (first user bootstraps);
+      # set OPEN_REGISTRATION=1 to let anyone create an account.
+      OPEN_REGISTRATION: ${OPEN_REGISTRATION:-}
       # Voice ICE servers (JSON array of RTCIceServer). The default public STUN
       # only traverses cone NATs — supply your own TURN for calls to work
       # across restrictive networks (TURN relays ciphertext only). Example:
@@ -39,7 +43,7 @@ services:
     image: postgres:16
     environment:
       POSTGRES_USER: quorum
-      POSTGRES_PASSWORD: quorum
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-quorum}
       POSTGRES_DB: quorum
     volumes:
       - pgdata:/var/lib/postgresql/data

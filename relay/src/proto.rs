@@ -9,8 +9,16 @@ use serde::{Deserialize, Serialize};
 pub enum ClientMsg {
     /// First message on the socket. New users are registered on first
     /// successful challenge signature (trust-on-first-use); returning
-    /// users must sign with their pinned key.
-    Hello { user: String, pubkey: String },
+    /// users must sign with their pinned key. Unless the relay runs with
+    /// OPEN_REGISTRATION, first-time registration requires `invite` to be
+    /// a currently-usable invite id (the platform is invite-only; the
+    /// very first user bootstraps without one).
+    Hello {
+        user: String,
+        pubkey: String,
+        #[serde(default)]
+        invite: Option<String>,
+    },
     /// Signature over `b"relay-auth-v1" || nonce`.
     Auth { sig: String },
     /// Pre-publish KeyPackages so members can be added while offline.

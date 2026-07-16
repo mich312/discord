@@ -20,3 +20,6 @@ build/
 .DS_Store
 .idea/
 .vscode/
+
+# Relay runtime attachment storage (BLOB_DIR) — never commit blobs
+blobs/

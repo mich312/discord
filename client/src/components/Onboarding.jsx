@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { generateCode, wrapIdentity, unwrapIdentity } from '../lib/recovery.js';
 import { QuorumGlyph, Key, Download } from './icons.jsx';
 
@@ -60,7 +60,12 @@ export default function Onboarding({ controller }) {
   const [name, setName] = useState('');
   const [busy, setBusy] = useState(false);
   const [busyText, setBusyText] = useState(null);
-  const [error, setError] = useState(null);
+  // A relay handshake refusal (e.g. invite-only registration) lands the
+  // user back here with the reason attached to the controller.
+  const [error, setError] = useState(controller.authError ?? null);
+  // Whether fresh identities need an invite link on this relay. UI hint
+  // only — the relay enforces it during the handshake either way.
+  const [inviteRequired, setInviteRequired] = useState(false);
   const [recovery, setRecovery] = useState(null); // {code, url, filename}
   const [downloaded, setDownloaded] = useState(false);
   const [confirmed, setConfirmed] = useState(false);
@@ -70,6 +75,13 @@ export default function Onboarding({ controller }) {
   const [pastedKey, setPastedKey] = useState('');
 
   const validHandle = (h) => /^[a-z0-9_.-]{2,32}$/.test(h);
+
+  useEffect(() => {
+    controller.authError = null;
+    if (!invited) {
+      controller.registerPolicy().then((p) => setInviteRequired(!!p.invite_required));
+    }
+  }, []);
 
   async function run(label, fn) {
     setBusy(true);
@@ -237,6 +249,17 @@ export default function Onboarding({ controller }) {
           </button>
         </div>
         {mode === 'create' ? (
+          inviteRequired ? (
+            <div data-testid="invite-required">
+              <p className="muted lede">
+                This relay is <strong>invite-only</strong>. Accounts are created by opening
+                an invite link — ask a member of the circle you want to join to send you one.
+              </p>
+              <p className="fineprint muted">
+                Already have an account here? Use the sign in tab.
+              </p>
+            </div>
+          ) : (
           <form onSubmit={createIdentity}>
             <label className="field">
               <span>handle</span>
@@ -256,6 +279,7 @@ export default function Onboarding({ controller }) {
               the key file you’re about to save, plus any passkey/password you add later.
             </p>
           </form>
+          )
         ) : (
           <form onSubmit={signIn}>
             <label className="field">

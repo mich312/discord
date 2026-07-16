@@ -27,7 +27,15 @@ const localhostBase = `http://localhost:${HTTP}/?relay=${encodeURIComponent(`ws:
 const procs = [
   spawn(relayBin, [], {
     stdio: 'inherit',
-    env: { ...process.env, RELAY_PORT: RELAY, RP_ID: 'localhost', RP_ORIGIN: `http://localhost:${HTTP}` },
+    // OPEN_REGISTRATION: this journey creates several identities directly;
+    // the invite-only registration gate has its own relay-level tests.
+    env: {
+      ...process.env,
+      RELAY_PORT: RELAY,
+      RP_ID: 'localhost',
+      RP_ORIGIN: `http://localhost:${HTTP}`,
+      OPEN_REGISTRATION: '1',
+    },
   }),
   spawn('node', ['serve.mjs'], { cwd: dir, stdio: 'inherit', env: { ...process.env, HTTP_PORT: HTTP } }),
 ];

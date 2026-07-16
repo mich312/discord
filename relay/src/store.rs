@@ -86,6 +86,9 @@ pub trait Store: Send + Sync {
     async fn register_user(&self, user: &str, pubkey: &[u8]) -> Result<RegisterOutcome, StoreError>;
     /// The pinned pubkey for `user`, if registered.
     async fn get_user_pubkey(&self, user: &str) -> Result<Option<Vec<u8>>, StoreError>;
+    /// How many users are registered (0 = fresh relay: the next
+    /// registration is the bootstrap user and bypasses the invite gate).
+    async fn user_count(&self) -> Result<u64, StoreError>;
     async fn publish_key_packages(&self, user: &str, payloads: Vec<Vec<u8>>) -> Result<(), StoreError>;
     /// Consume (remove and return) one KeyPackage for `user`.
     async fn take_key_package(&self, user: &str) -> Result<Option<Vec<u8>>, StoreError>;
@@ -138,6 +141,9 @@ pub trait Store: Send + Sync {
     async fn revoke_invite(&self, invite: &str) -> Result<(), StoreError>;
     /// Validate expiry/uses at `now`, count a use, return (group, payload).
     async fn redeem_invite(&self, invite: &str, now: u64) -> Result<(String, Vec<u8>), StoreError>;
+    /// Would `invite` be redeemable at `now`? Does NOT count a use — the
+    /// registration gate checks this; the use is only spent on redeem.
+    async fn invite_usable(&self, invite: &str, now: u64) -> Result<bool, StoreError>;
 }
 
 #[derive(Default)]
@@ -181,6 +187,11 @@ impl Store for MemoryStore {
     async fn get_user_pubkey(&self, user: &str) -> Result<Option<Vec<u8>>, StoreError> {
         let inner = self.inner.lock().unwrap();
         Ok(inner.users.get(user).cloned())
+    }
+
+    async fn user_count(&self) -> Result<u64, StoreError> {
+        let inner = self.inner.lock().unwrap();
+        Ok(inner.users.len() as u64)
     }
 
     async fn publish_key_packages(&self, user: &str, payloads: Vec<Vec<u8>>) -> Result<(), StoreError> {
@@ -387,5 +398,13 @@ impl Store for MemoryStore {
         }
         record.uses += 1;
         Ok((record.group.clone(), record.payload.clone()))
+    }
+
+    async fn invite_usable(&self, invite: &str, now: u64) -> Result<bool, StoreError> {
+        let inner = self.inner.lock().unwrap();
+        Ok(inner.invites.get(invite).is_some_and(|record| {
+            !record.expires_at.is_some_and(|t| now > t)
+                && !record.max_uses.is_some_and(|m| record.uses >= m)
+        }))
     }
 }
