@@ -111,6 +111,7 @@ relay).
 | `DATABASE_URL` | unset | Postgres; unset = in-memory (nothing survives restart) |
 | `BLOB_DIR` | `./blobs` | encrypted attachment storage on disk |
 | `VAPID_PRIVATE_KEY` | unset | base64url P-256 scalar; unset = ephemeral (push subscriptions die on restart) |
+| `ICE_SERVERS` | public STUN | JSON array of RTCIceServer objects for voice; supply your own TURN for calls across restrictive NATs |
 | `RP_ID` / `RP_ORIGIN` | `localhost` / `http://localhost:9601` | WebAuthn relying party — must match the origin users load the client from |
 | `RELAY_ADMINS` | unset | comma-separated handles treated as global admins: they can manage any group's ACL/roles and list all users/groups — metadata only, they cannot read messages |
 

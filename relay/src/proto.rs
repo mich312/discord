@@ -80,6 +80,10 @@ pub enum ClientMsg {
     PushInfo { rid: u64 },
     /// Store a PushSubscription (its JSON serialization) for this user.
     PushSubscribe { rid: u64, subscription: String },
+    /// The ICE servers (STUN/TURN) to use for voice — operator-configured on
+    /// the relay so a self-hoster can point every client at their own TURN
+    /// without a client rebuild. Not secret; media itself stays P2P/E2EE.
+    IceInfo { rid: u64 },
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -96,6 +100,9 @@ pub enum ServerMsg {
     Welcome { from: String, group: String, after: u64, payload: String },
     Invite { rid: u64, group: String, payload: String },
     PushInfo { rid: u64, pubkey: String },
+    /// JSON passthrough: an array of RTCIceServer objects for the client to
+    /// feed straight into `RTCPeerConnection({ iceServers })`.
+    IceInfo { rid: u64, servers: String },
     Eph { group: String, sender: String, payload: String },
     VaultStatus { rid: u64, kind: Option<String> },
     /// WebAuthn ceremony payloads (JSON passthrough).

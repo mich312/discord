@@ -12,10 +12,17 @@ services:
       DATABASE_URL: postgres://quorum:quorum@db/quorum
       RP_ID: ${RP_ID:-localhost}
       RP_ORIGIN: ${RP_ORIGIN:-http://localhost}
-      # Generate once and keep, or push subscriptions die on restart:
+      # Generate once and keep, or push subscriptions die on restart (the raw
+      # 32-byte scalar is at DER offset 7 — count from the front, not
+      # `tail -c 32`, which trails the curve OID and yields a malformed key):
       #   openssl ecparam -genkey -name prime256v1 | openssl ec -no_public \
-      #     -outform DER 2>/dev/null | tail -c 32 | basenc --base64url | tr -d '='
+      #     -outform DER 2>/dev/null | tail -c +8 | head -c 32 | basenc --base64url | tr -d '='
       VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
+      # Voice ICE servers (JSON array of RTCIceServer). The default public STUN
+      # only traverses cone NATs — supply your own TURN for calls to work
+      # across restrictive networks (TURN relays ciphertext only). Example:
+      #   ICE_SERVERS='[{"urls":"turn:turn.example.org:3478","username":"u","credential":"p"}]'
+      ICE_SERVERS: ${ICE_SERVERS:-}
     volumes:
       - blobs:/data
     depends_on:

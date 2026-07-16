@@ -1,9 +1,10 @@
 // Copy the wasm-pack output into public/ so the worker can load it at
 // runtime (/pkg/crypto_core.js) in both dev and built modes.
 import { cpSync, existsSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
-const src = new URL('../../crypto-core/pkg', import.meta.url).pathname;
-const dst = new URL('../public/pkg', import.meta.url).pathname;
+const src = fileURLToPath(new URL('../../crypto-core/pkg', import.meta.url));
+const dst = fileURLToPath(new URL('../public/pkg', import.meta.url));
 if (!existsSync(src)) {
   console.error('crypto-core/pkg missing — run ../crypto-core/build-wasm.sh first');
   process.exit(1);

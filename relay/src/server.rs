@@ -30,6 +30,34 @@ pub struct App {
     /// admin of every group and allowed to list all users/groups. Metadata
     /// power only — message content stays end-to-end encrypted.
     pub admins: HashSet<String>,
+    /// JSON array of RTCIceServer objects handed to voice clients. Operator-
+    /// set via `ICE_SERVERS`; defaults to a public STUN (enough for cone NATs,
+    /// but self-hosters behind symmetric NATs must supply their own TURN).
+    pub ice_servers: String,
+}
+
+/// Default ICE config when `ICE_SERVERS` is unset: one public STUN server.
+pub const DEFAULT_ICE_SERVERS: &str = r#"[{"urls":"stun:stun.l.google.com:19302"}]"#;
+
+/// Validate `raw` as a JSON array (of RTCIceServer objects); fall back to the
+/// default on absent or malformed input rather than shipping voice a value the
+/// browser will reject. Kept pure (no env read) so it is unit-testable.
+pub fn parse_ice_servers(raw: Option<String>) -> String {
+    match raw {
+        Some(s) if !s.trim().is_empty() => match serde_json::from_str::<serde_json::Value>(&s) {
+            Ok(v) if v.is_array() => s,
+            _ => {
+                tracing::error!(
+                    "ICE_SERVERS is set but is not a JSON array of RTCIceServer objects; \
+                     using the default STUN server. Example: \
+                     ICE_SERVERS='[{{\"urls\":\"turn:turn.example.org:3478\",\
+                     \"username\":\"u\",\"credential\":\"p\"}}]'"
+                );
+                DEFAULT_ICE_SERVERS.to_string()
+            }
+        },
+        _ => DEFAULT_ICE_SERVERS.to_string(),
+    }
 }
 
 #[derive(Default)]
@@ -73,6 +101,7 @@ impl App {
             push,
             accounts: AccountService::from_env(),
             admins,
+            ice_servers: parse_ice_servers(std::env::var("ICE_SERVERS").ok()),
         })
     }
 
@@ -637,6 +666,10 @@ async fn handle_request(
             Some(ServerMsg::PushInfo { rid, pubkey: app.push.public_b64.clone() })
         }
 
+        ClientMsg::IceInfo { rid } => {
+            Some(ServerMsg::IceInfo { rid, servers: app.ice_servers.clone() })
+        }
+
         ClientMsg::PushSubscribe { rid, subscription } => {
             let endpoint = serde_json::from_str::<serde_json::Value>(&subscription)
                 .ok()
@@ -680,6 +713,39 @@ async fn require_admin(app: &App, group: &str, user: &str) -> Result<(), StoreEr
         Some(role) if role == ROLE_ADMIN => Ok(()),
         Some(_) => Err(StoreError::Backend(format!("admin of {group} required"))),
         None => Err(StoreError::Backend(format!("not a member of {group}"))),
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::{parse_ice_servers, DEFAULT_ICE_SERVERS};
+
+    #[test]
+    fn ice_servers_defaults_when_absent_or_blank() {
+        assert_eq!(parse_ice_servers(None), DEFAULT_ICE_SERVERS);
+        assert_eq!(parse_ice_servers(Some(String::new())), DEFAULT_ICE_SERVERS);
+        assert_eq!(parse_ice_servers(Some("   ".into())), DEFAULT_ICE_SERVERS);
+    }
+
+    #[test]
+    fn ice_servers_passes_through_a_valid_json_array() {
+        let custom =
+            r#"[{"urls":"turn:turn.example.org:3478","username":"u","credential":"p"}]"#;
+        assert_eq!(parse_ice_servers(Some(custom.to_string())), custom);
+        // An empty array is a valid (if useless) choice — respect it.
+        assert_eq!(parse_ice_servers(Some("[]".into())), "[]");
+    }
+
+    #[test]
+    fn ice_servers_rejects_non_arrays_and_garbage() {
+        // A JSON object (not an array) is the classic misconfiguration.
+        assert_eq!(
+            parse_ice_servers(Some(r#"{"urls":"stun:x"}"#.into())),
+            DEFAULT_ICE_SERVERS
+        );
+        // Non-JSON falls back rather than shipping the client something the
+        // browser will choke on.
+        assert_eq!(parse_ice_servers(Some("turn:turn.example.org".into())), DEFAULT_ICE_SERVERS);
     }
 }
 

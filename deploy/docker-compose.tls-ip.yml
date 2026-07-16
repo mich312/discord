@@ -21,6 +21,7 @@ services:
       RP_ID: ${SERVER_IP}
       RP_ORIGIN: https://${SERVER_IP}
       VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
+      ICE_SERVERS: ${ICE_SERVERS:-}
 
   caddy:
     image: caddy:2
