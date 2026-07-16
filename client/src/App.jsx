@@ -51,6 +51,13 @@ function reducer(state, action) {
       let active = state.active;
       if (!active.server && action.servers.length > 0) {
         active = { server: action.servers[0].id, channel: action.servers[0].channels[0] };
+      } else if (active.server) {
+        // If the active channel was renamed or deleted out from under us,
+        // fall back to the first remaining channel so the view isn't stranded.
+        const srv = action.servers.find((s) => s.id === active.server);
+        if (srv && active.channel && !srv.channels.includes(active.channel)) {
+          active = { ...active, channel: srv.channels[0] };
+        }
       }
       return { ...state, servers: action.servers, active };
     }
@@ -345,6 +352,12 @@ export default function App() {
               }
               onCreate={(ch) => controllerRef.current.createChannel(server, ch)}
               onVoiceCreate={(ch) => controllerRef.current.createVoiceChannel(server, ch)}
+              onVoiceSettings={(ch) =>
+                dispatch({
+                  type: 'modal',
+                  modal: { type: 'channel', voice: true, server, channel: ch, meta: {} },
+                })
+              }
               voice={state.voice}
               onVoiceJoin={(ch) =>
                 controllerRef.current.voice
@@ -505,6 +518,16 @@ export default function App() {
             }}
             onChannelSettings={(srv, ch, settings) =>
               controllerRef.current.setChannelSettings(srv, ch, settings)
+            }
+            onChannelRename={(srv, ch, to, isVoice) =>
+              isVoice
+                ? controllerRef.current.renameVoiceChannel(srv, ch, to)
+                : controllerRef.current.renameChannel(srv, ch, to)
+            }
+            onChannelDelete={(srv, ch, isVoice) =>
+              isVoice
+                ? controllerRef.current.deleteVoiceChannel(srv, ch)
+                : controllerRef.current.deleteChannel(srv, ch)
             }
             identityKey={controllerRef.current?.identityKeyString()}
           />

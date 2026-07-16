@@ -14,6 +14,7 @@ export default function Channels({
   onSettings,
   onCreate,
   onVoiceCreate,
+  onVoiceSettings,
   voice,
   onVoiceJoin,
   onVoiceLeave,
@@ -130,6 +131,16 @@ export default function Channels({
                 ) : (
                   <button className="voice-join" data-testid={`voice-join-${ch}`} onClick={() => onVoiceJoin(ch)}>
                     join
+                  </button>
+                )}
+                {canManage && onVoiceSettings && (
+                  <button
+                    className="ghost chan-gear"
+                    title={`${ch} voice room settings`}
+                    data-testid={`voice-settings-${ch}`}
+                    onClick={() => onVoiceSettings(ch)}
+                  >
+                    <Gear size={12} />
                   </button>
                 )}
               </div>

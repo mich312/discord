@@ -145,6 +145,37 @@ try {
   await bob.click('[data-testid=channel-logistics]');
   await bob.waitForSelector('text=trailer leaves at 6am', { timeout: 10000 });
 
+  console.log('6b. admin renames + deletes a channel (via settings); non-admins cannot');
+  // bob is not an admin: no create button, no per-channel settings gear.
+  if (await bob.locator('[data-testid=new-channel]').count()) {
+    throw new Error('non-admin bob should not see the channel create button');
+  }
+  if (await bob.locator('[data-testid=channel-settings-general]').count()) {
+    throw new Error('non-admin bob should not see channel settings gear');
+  }
+  // alice creates a scratch channel, posts to it, then renames it via the
+  // settings modal — history must follow the rename.
+  await alice.click('[data-testid=new-channel]');
+  await alice.fill('[data-testid=new-channel-name]', 'scratch');
+  await alice.press('[data-testid=new-channel-name]', 'Enter');
+  await bob.waitForSelector('[data-testid=channel-scratch]', { timeout: 10000 });
+  await alice.click('[data-testid=channel-scratch]');
+  await alice.fill('[data-testid=composer]', 'note before rename');
+  await alice.press('[data-testid=composer]', 'Enter');
+  await bob.click('[data-testid=channel-scratch]');
+  await bob.waitForSelector('text=note before rename', { timeout: 10000 });
+  await alice.click('[data-testid=channel-settings-scratch]');
+  await alice.fill('[data-testid=channel-rename-input]', 'archive');
+  await alice.click('[data-testid=channel-rename]');
+  await bob.waitForSelector('[data-testid=channel-archive]', { timeout: 10000 });
+  await bob.click('[data-testid=channel-archive]');
+  await bob.waitForSelector('text=note before rename', { timeout: 10000 }); // history migrated
+  // alice deletes it via the settings modal — confirm auto-accepted.
+  await alice.click('[data-testid=channel-settings-archive]');
+  alice.once('dialog', (d) => d.accept());
+  await alice.click('[data-testid=channel-delete]');
+  await bob.waitForSelector('[data-testid=channel-archive]', { state: 'detached', timeout: 10000 });
+
   console.log('7. bob reloads — state must come back from IndexedDB');
   await bob.reload();
   await bob.waitForSelector('[data-testid=channel-general]', { timeout: 15000 });
@@ -470,10 +501,18 @@ try {
   await pwPage.fill('[data-testid=signin-handle]', 'charlie');
   await pwPage.fill('[data-testid=signin-password]', 'tyre pressures at dawn');
   await pwPage.click('[data-testid=signin-submit]');
-  await pwPage.waitForSelector('.empty-state', { timeout: 30000 });
-  if (!(await pwPage.textContent('.empty-state')).includes('charlie')) {
-    throw new Error('password sign-in did not restore charlie');
-  }
+  // The identity comes back from the password vault…
+  await pwPage.waitForFunction(
+    () => document.querySelector('[data-testid=self-name]')?.textContent === 'charlie',
+    { timeout: 30000 }
+  );
+  // …and charlie's circles come back from the encrypted backup this account
+  // parked while online (restored read-only until re-added — the MLS ratchets
+  // are gone by design). Race Team is what charlie last belonged to.
+  await pwPage.waitForFunction(
+    () => document.querySelector('[data-testid=server-name]')?.textContent === 'Race Team',
+    { timeout: 15000 }
+  );
   // Wrong password must fail without leaking the vault.
   const pw2Ctx = await browser.newContext();
   const pw2 = await pw2Ctx.newPage();

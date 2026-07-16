@@ -73,5 +73,46 @@ function wrap(db) {
         t.oncomplete = () => resolve(removed);
         t.onerror = () => reject(t.error);
       }),
+    // Move a channel's history to a new name (channel rename). Fetch the
+    // primary keys first, then get/put by key — safer than mutating an
+    // indexed field mid-cursor.
+    msgsRename: (server, from, to) =>
+      new Promise((resolve, reject) => {
+        const store = db.transaction('messages', 'readwrite').objectStore('messages');
+        const keysReq = store.index('byChannel').getAllKeys([server, from]);
+        keysReq.onsuccess = () => {
+          const keys = keysReq.result;
+          let i = 0;
+          const next = () => {
+            if (i >= keys.length) return resolve();
+            const k = keys[i++];
+            const g = store.get(k);
+            g.onsuccess = () => {
+              const v = g.result;
+              if (v) {
+                v.channel = to;
+                store.put(v, k);
+              }
+              next();
+            };
+            g.onerror = () => reject(g.error);
+          };
+          next();
+        };
+        keysReq.onerror = () => reject(keysReq.error);
+      }),
+    // Purge a channel's history (channel delete).
+    msgsDelete: (server, channel) =>
+      new Promise((resolve, reject) => {
+        const store = db.transaction('messages', 'readwrite').objectStore('messages');
+        const req = store.index('byChannel').openCursor([server, channel]);
+        req.onsuccess = () => {
+          const cur = req.result;
+          if (!cur) return resolve();
+          cur.delete();
+          cur.continue();
+        };
+        req.onerror = () => reject(req.error);
+      }),
   };
 }
