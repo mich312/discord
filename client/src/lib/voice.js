@@ -436,8 +436,15 @@ export class VoiceManager {
         case 'leave': {
           this.track(server, content.ch, sender, false);
           this.dropPeer(sender);
-          // A direct call ends the instant the other side hangs up.
-          if (this.active && this.directPeer(this.active.channel) && this.peers.size === 0) {
+          // A direct call ends when the *other party* leaves that same room —
+          // not when some unrelated member leaves another voice room, which
+          // would otherwise spuriously drop a 1:1 call or cancel a live ring.
+          if (
+            this.active &&
+            content.ch === this.active.channel &&
+            sender === this.directPeer(this.active.channel) &&
+            this.peers.size === 0
+          ) {
             await this.leave();
           }
           break;
