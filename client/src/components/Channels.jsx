@@ -9,6 +9,7 @@ export default function Channels({
   server,
   activeChannel,
   me,
+  canManage,
   onSelect,
   onCreate,
   onVoiceCreate,
@@ -25,9 +26,11 @@ export default function Channels({
     <aside className="channels">
       <div className="section-label">
         <span className="overline"><span className="idx">02</span>rooms</span>
-        <button className="ghost" title="new room" data-testid="new-channel" onClick={() => setAdding(true)}>
-          <Plus size={13} />
-        </button>
+        {canManage && (
+          <button className="ghost" title="new room" data-testid="new-channel" onClick={() => setAdding(true)}>
+            <Plus size={13} />
+          </button>
+        )}
       </div>
       <ul className="channel-list rooms">
         {server.channels.map((ch) => (
@@ -69,14 +72,16 @@ export default function Channels({
       </ul>
       <div className="section-label">
         <span className="overline"><span className="idx">03</span>voice</span>
-        <button
-          className="ghost"
-          title="new voice room"
-          data-testid="new-voice"
-          onClick={() => setAddingVoice(true)}
-        >
-          <Plus size={13} />
-        </button>
+        {canManage && (
+          <button
+            className="ghost"
+            title="new voice room"
+            data-testid="new-voice"
+            onClick={() => setAddingVoice(true)}
+          >
+            <Plus size={13} />
+          </button>
+        )}
       </div>
       <ul className="channel-list voice-list">
         {(server.voiceChannels ?? ['lounge']).map((ch) => {

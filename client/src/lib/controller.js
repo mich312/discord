@@ -377,6 +377,11 @@ export class Controller {
         break;
       }
       case 'chan': {
+        // Only admins may create channels. Enforced client-side (the relay
+        // can't read content): ignore a chan from someone we know is not an
+        // admin. Fail open if the sender's role isn't known yet, so a legit
+        // creation racing role sync isn't dropped.
+        if (record.roles?.[sender] && record.roles[sender] !== 'admin') break;
         if (!record.channels.includes(content.ch)) {
           record.channels.push(content.ch);
           await this.addSystemMessage(record.id, `#${content.ch} created by ${sender}`, content.ch);
@@ -384,6 +389,7 @@ export class Controller {
         break;
       }
       case 'vchan': {
+        if (record.roles?.[sender] && record.roles[sender] !== 'admin') break;
         const rooms = record.voiceChannels ?? ['lounge'];
         if (!rooms.includes(content.ch)) {
           record.voiceChannels = [...rooms, content.ch];

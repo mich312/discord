@@ -323,6 +323,7 @@ export default function App() {
               server={activeServer}
               activeChannel={channel}
               me={state.me}
+              canManage={canManage}
               onSelect={(ch) => {
                 dispatch({ type: 'select', server, channel: ch });
                 setDrawer(null);
