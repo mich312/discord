@@ -12,8 +12,9 @@ import Channels from './components/Channels.jsx';
 import Messages from './components/Messages.jsx';
 import Members from './components/Members.jsx';
 import CallPanel from './components/CallPanel.jsx';
+import Settings from './components/Settings.jsx';
 import Seal from './components/Seal.jsx';
-import { Key, Bell, ShieldCheck, LinkGlyph, Sun, QuorumGlyph } from './components/icons.jsx';
+import { Key, Bell, ShieldCheck, LinkGlyph, Sun, QuorumGlyph, Gear } from './components/icons.jsx';
 
 const initial = {
   phase: 'loading', // loading | onboarding | ready
@@ -224,6 +225,7 @@ export default function App() {
       modal: { type: 'identity', key: controllerRef.current.identityKeyString() },
     });
   const openSecure = () => dispatch({ type: 'modal', modal: { type: 'secure' } });
+  const openSettings = () => dispatch({ type: 'modal', modal: { type: 'settings' } });
   const openInvite = async () => {
     try {
       const url = await controllerRef.current.createInvite(server);
@@ -260,6 +262,7 @@ export default function App() {
     ...(state.globalAdmin
       ? [{ id: 'act:admin', label: 'relay admin overview', hint: 'action', glyph: <ShieldCheck />, run: openAdminOverview }]
       : []),
+    { id: 'act:settings', label: 'open settings', hint: 'action', glyph: <Gear />, run: openSettings },
     { id: 'act:identity', label: 'show identity key', hint: 'action', glyph: <Key />, run: openIdentity },
     { id: 'act:secure', label: 'secure this account', hint: 'action', glyph: <ShieldCheck />, run: openSecure },
     {
@@ -363,6 +366,9 @@ export default function App() {
             <button className="icon-btn" title="enable push notifications" data-testid="enable-notifications" onClick={enableAlerts}>
               <Bell size={14} />
             </button>
+            <button className="icon-btn" title="settings" data-testid="open-settings" onClick={openSettings}>
+              <Gear size={14} />
+            </button>
           </div>
         </nav>
         {activeServer ? (
@@ -461,7 +467,20 @@ export default function App() {
           onHangup={() => controllerRef.current.voice.leave()}
         />
         {state.toast && <div className="toast">{state.toast}</div>}
-        {state.modal && (
+        {state.modal?.type === 'settings' && (
+          <Settings
+            me={state.me}
+            theme={theme}
+            onTheme={() => setTheme((t) => (t === 'paper' ? 'carbon' : 'paper'))}
+            onEnableNotifications={() => controllerRef.current.enableNotifications()}
+            voice={controllerRef.current?.voice}
+            secured={!unsecured}
+            onShowIdentity={openIdentity}
+            onSecure={openSecure}
+            onClose={() => dispatch({ type: 'modal', modal: null })}
+          />
+        )}
+        {state.modal && state.modal.type !== 'settings' && (
           <Modal
             modal={state.modal}
             onClose={() => dispatch({ type: 'modal', modal: null })}

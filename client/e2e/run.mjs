@@ -306,6 +306,20 @@ try {
   await alice.click('[data-testid=enable-notifications]');
   await alice.waitForSelector('.toast', { timeout: 10000 });
 
+  console.log('15b. settings panel: opens, shows audio + theme controls, theme toggles');
+  await alice.click('[data-testid=open-settings]');
+  await alice.waitForSelector('[data-testid=settings-mic]', { timeout: 8000 });
+  await alice.waitForSelector('[data-testid=settings-theme]');
+  const themeBefore = await alice.evaluate(() => document.documentElement.dataset.theme);
+  await alice.click('[data-testid=settings-theme]');
+  await alice.waitForFunction((b) => document.documentElement.dataset.theme !== b, themeBefore, {
+    timeout: 5000,
+  });
+  await alice.click('[data-testid=settings-close]');
+  await alice.waitForFunction(() => !document.querySelector('[data-testid=settings-mic]'), {
+    timeout: 8000,
+  });
+
   console.log('16. voice: alice joins lounge, charlie sees presence and joins — DTLS connects');
   await aliceCtx.grantPermissions(['microphone'], { origin: `http://127.0.0.1:${HTTP}` });
   await charlieCtx.grantPermissions(['microphone'], { origin: `http://127.0.0.1:${HTTP}` });
@@ -404,6 +418,17 @@ try {
   await alice.waitForSelector('[data-testid=call-dialing]', { timeout: 10000 });
   // The ring reaches charlie (addressed to him inside the MLS group).
   await charlie.waitForSelector('[data-testid=call-incoming]', { timeout: 15000 });
+  // Regression: an unrelated member's voice activity (dave joining then
+  // leaving another room) must NOT cancel the pending ring. The caller has no
+  // peers yet, so a naive "no peers left -> hang up" drops the call here.
+  await dave.click('[data-testid=voice-join-lounge]');
+  await dave.waitForFunction(() => window.__voice?.active?.channel === 'lounge', { timeout: 8000 });
+  await dave.click('[data-testid=voice-leave-lounge]');
+  await new Promise((r) => setTimeout(r, 1200));
+  const stillDialing = await alice.evaluate(() => !!window.__voice?.dial);
+  if (!stillDialing) {
+    throw new Error('outgoing ring was cancelled by an unrelated member leaving a room (regression)');
+  }
   await charlie.click('[data-testid=call-accept]');
   // Both legs of the direct call reach 'connected' (real DTLS-SRTP).
   await alice
@@ -509,10 +534,14 @@ try {
   // Same page, phone-sized viewport — the sidebar and roster become drawers.
   await alice.setViewportSize({ width: 390, height: 844 });
   await alice.waitForSelector('[data-testid=menu-toggle]', { state: 'visible' });
-  // The static panels are off-canvas until summoned.
-  if (await alice.locator('[data-testid=channel-general]').isVisible()) {
-    throw new Error('mobile: sidebar should be hidden until the menu opens it');
-  }
+  // The static panels are off-canvas until summoned. The sidebar hides via a
+  // visibility transition (~180ms), so wait for it to settle rather than
+  // reading the instant after the viewport change.
+  await alice
+    .waitForSelector('[data-testid=channel-general]', { state: 'hidden', timeout: 5000 })
+    .catch(() => {
+      throw new Error('mobile: sidebar should be hidden until the menu opens it');
+    });
   await alice.click('[data-testid=menu-toggle]');
   await alice.click('[data-testid=channel-logistics]');
   // Navigation closes the drawer and lands in the room (alice pre-dates the

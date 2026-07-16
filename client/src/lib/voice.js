@@ -40,6 +40,11 @@ export class VoiceManager {
     this.meterCtx = null;
     this.meterSink = null;
     this.meterRAF = null;
+    // Preferred audio devices (persisted). Empty = system default. Output
+    // routing (setSinkId) is what fixes "sound comes out of the wrong device".
+    const ls = typeof localStorage !== 'undefined' ? localStorage : null;
+    this.inputDeviceId = ls?.getItem('quorum-audio-in') || null;
+    this.outputDeviceId = ls?.getItem('quorum-audio-out') || null;
   }
 
   key(server, channel) {
@@ -183,15 +188,71 @@ export class VoiceManager {
       symmetric (audio m-line in both directions) either way. */
   async captureAudio() {
     try {
-      const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: this.audioConstraint() });
       this.listenOnly = false;
       return stream;
     } catch {
+      // A pinned input device that's since been unplugged throws — fall back
+      // to the system default before giving up to listen-only.
+      if (this.inputDeviceId) {
+        try {
+          const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
+          this.listenOnly = false;
+          return stream;
+        } catch {
+          /* fall through to silent track */
+        }
+      }
+    }
+    {
       const ctx = new AudioContext();
       const destination = ctx.createMediaStreamDestination();
       this.audioCtx = ctx; // no source connected -> silence
       this.listenOnly = true;
       return destination.stream;
+    }
+  }
+
+  audioConstraint() {
+    return this.inputDeviceId ? { deviceId: { exact: this.inputDeviceId } } : true;
+  }
+
+  persistDevice(key, id) {
+    if (typeof localStorage === 'undefined') return;
+    if (id) localStorage.setItem(key, id);
+    else localStorage.removeItem(key);
+  }
+
+  /** Persist and apply the output device to every live call leg (setSinkId).
+      This is the fix for "audio plays out of the wrong device". */
+  async setOutputDevice(id) {
+    this.outputDeviceId = id || null;
+    this.persistDevice('quorum-audio-out', this.outputDeviceId);
+    for (const peer of this.peers.values()) {
+      if (peer.audio?.setSinkId) await peer.audio.setSinkId(id || '').catch(() => {});
+    }
+  }
+
+  /** Persist the input device and hot-swap the mic on any active call. */
+  async setInputDevice(id) {
+    this.inputDeviceId = id || null;
+    this.persistDevice('quorum-audio-in', this.inputDeviceId);
+    if (!this.active) return; // otherwise it applies on the next join
+    try {
+      const stream = await navigator.mediaDevices.getUserMedia({ audio: this.audioConstraint() });
+      const track = stream.getAudioTracks()[0];
+      for (const peer of this.peers.values()) {
+        const sender = peer.pc.getSenders().find((s) => s.track && s.track.kind === 'audio');
+        if (sender) await sender.replaceTrack(track).catch(() => {});
+      }
+      this.active.stream.getTracks().forEach((t) => t.stop());
+      this.active.stream = stream;
+      this.removeMeter(this.me);
+      this.addMeter(this.me, stream);
+      this.listenOnly = false;
+      this.publish();
+    } catch {
+      /* keep the current mic if the chosen device won't open */
     }
   }
 
@@ -375,8 +436,15 @@ export class VoiceManager {
         case 'leave': {
           this.track(server, content.ch, sender, false);
           this.dropPeer(sender);
-          // A direct call ends the instant the other side hangs up.
-          if (this.active && this.directPeer(this.active.channel) && this.peers.size === 0) {
+          // A direct call ends when the *other party* leaves that same room —
+          // not when some unrelated member leaves another voice room, which
+          // would otherwise spuriously drop a 1:1 call or cancel a live ring.
+          if (
+            this.active &&
+            content.ch === this.active.channel &&
+            sender === this.directPeer(this.active.channel) &&
+            this.peers.size === 0
+          ) {
             await this.leave();
           }
           break;
@@ -435,9 +503,28 @@ export class VoiceManager {
       const audio = new Audio();
       audio.srcObject = streams[0];
       audio.autoplay = true;
+      audio.playsInline = true;
+      // Attach the element to the DOM. A detached <audio> plays unreliably:
+      // iOS Safari won't play it at all, and on desktop the audio can fail to
+      // follow the system output device (e.g. Bluetooth headphones) — it
+      // sticks to the default sink. Hidden in the DOM, playback routes to the
+      // active output like any other media element.
+      audio.style.display = 'none';
+      if (typeof document !== 'undefined') document.body.appendChild(audio);
+      // Route to the user's chosen output device, if any and if supported.
+      if (this.outputDeviceId && audio.setSinkId) audio.setSinkId(this.outputDeviceId).catch(() => {});
       // Autoplay can be blocked pre-gesture; media still flows and the
-      // join click is normally gesture enough.
-      audio.play().catch(() => {});
+      // join click is normally gesture enough. Retry once on the next pointer
+      // interaction so a blocked start doesn't leave the call silent.
+      const tryPlay = () => audio.play().catch(() => {});
+      tryPlay();
+      if (typeof document !== 'undefined') {
+        const resume = () => {
+          tryPlay();
+          document.removeEventListener('pointerdown', resume);
+        };
+        document.addEventListener('pointerdown', resume, { once: true });
+      }
       peer.audio = audio;
       this.addMeter(name, streams[0]); // measure this peer's speaking level
     };

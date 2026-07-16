@@ -69,6 +69,13 @@ export const Plus = (p) => (
   </Svg>
 );
 
+export const Gear = (p) => (
+  <Svg {...p}>
+    <circle cx="8" cy="8" r="2.1" />
+    <path d="M8 1.6v1.5M8 12.9v1.5M3.5 3.5l1.1 1.1M11.4 11.4l1.1 1.1M1.6 8h1.5M12.9 8h1.5M3.5 12.5l1.1-1.1M11.4 4.6l1.1-1.1" />
+  </Svg>
+);
+
 export const Phone = (p) => (
   <Svg {...p}>
     <g transform="scale(0.667)">
@@ -153,13 +160,6 @@ export const Users = (p) => (
 export const X = (p) => (
   <Svg {...p}>
     <path d="m4 4 8 8M12 4l-8 8" />
-  </Svg>
-);
-
-export const Gear = (p) => (
-  <Svg {...p}>
-    <circle cx="8" cy="8" r="2.2" />
-    <path d="M8 1.8v1.8M8 12.4v1.8M1.8 8h1.8M12.4 8h1.8M3.6 3.6l1.3 1.3M11.1 11.1l1.3 1.3M12.4 3.6l-1.3 1.3M4.9 11.1l-1.3 1.3" />
   </Svg>
 );
 

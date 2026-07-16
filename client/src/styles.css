@@ -1038,6 +1038,41 @@ kbd {
 .card > .muted, .card .lede { margin-bottom: 16px; font-size: 13px; line-height: 1.55; }
 .card h1 + .muted, .card h1 + .lede { margin-top: 6px; }
 
+/* settings panel */
+.card.modal.settings { width: 480px; }
+.dialog-head .dialog-close { margin-left: auto; }
+.settings-section { padding: 14px 0; border-bottom: 1px solid var(--hairline); }
+.settings-section:last-child { border-bottom: none; padding-bottom: 0; }
+.settings-label {
+  font: var(--text-xs) var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ink-mute);
+  margin-bottom: 10px;
+}
+.settings-profile { display: flex; align-items: center; gap: 12px; }
+.settings-handle { font: var(--text-md) var(--mono); color: var(--ink); }
+.settings-row { display: flex; align-items: flex-start; gap: 10px; }
+.settings-row-glyph { color: var(--accent-ink); display: grid; place-items: center; padding-top: 1px; }
+.settings-row-body { flex: 1; min-width: 0; }
+.settings-row-body .fineprint { margin-top: 4px; }
+.settings-row > .button { flex-shrink: 0; align-self: center; }
+.settings-field { display: flex; align-items: center; gap: 10px; margin-top: 10px; }
+.settings-field > span { width: 90px; flex-shrink: 0; font-size: var(--text-sm); color: var(--ink-dim); }
+.settings-field select {
+  flex: 1;
+  min-width: 0;
+  padding: 7px 9px;
+  font-size: var(--text-sm);
+  background: var(--panel);
+  color: var(--ink);
+  border: 1px solid var(--hairline-strong);
+  border-radius: 8px;
+}
+.settings-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.fineprint.warn { color: var(--danger); }
+.fineprint.ok { color: var(--ok); }
+
 .tabs { display: flex; gap: 2px; margin-bottom: 18px; border-bottom: 1px solid var(--hairline); }
 .tab {
   background: none;
