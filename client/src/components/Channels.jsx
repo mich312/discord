@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import Seal from './Seal.jsx';
 import VoiceMeter from './VoiceMeter.jsx';
+import { userTint } from '../lib/identicon.js';
 import { Hash, Wave, Plus, Gear, Clock } from './icons.jsx';
 
 // Rooms and voice tables of the active circle. Channel names travel inside
@@ -26,7 +27,7 @@ export default function Channels({
   return (
     <aside className="channels">
       <div className="section-label">
-        <span className="overline"><span className="idx">02</span>rooms</span>
+        <span className="overline">rooms</span>
         {canManage && (
           <button className="ghost" title="new room" data-testid="new-channel" onClick={() => setAdding(true)}>
             <Plus size={13} />
@@ -90,7 +91,7 @@ export default function Channels({
         )}
       </ul>
       <div className="section-label">
-        <span className="overline"><span className="idx">03</span>voice</span>
+        <span className="overline">voice</span>
         {canManage && (
           <button
             className="ghost"
@@ -145,8 +146,8 @@ export default function Channels({
                         data-speaking={speaking ? 'true' : 'false'}
                       >
                         <Seal name={p} size={16} />
-                        <span className="vp-name">{p}</span>
-                        {joined && <VoiceMeter name={p} />}
+                        <span className="vp-name uc" style={userTint(p)}>{p}</span>
+                        {joined && <VoiceMeter name={p} width={56} height={16} />}
                         {joined && p !== me && voice.connections[p] && voice.connections[p] !== 'connected' && (
                           <span className="link-state">· {voice.connections[p]}</span>
                         )}

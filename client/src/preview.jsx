@@ -57,7 +57,12 @@ const messages = [
   { sender: 'alice', text: 'on it. tyre pressures from this morning still good?', ts: now - 25.6 * H },
   { system: true, text: 'charlie joined via invite link — unverified until someone checks their safety number', ts: now - 25 * H },
   { sender: 'charlie', text: 'found my way in via the link, reading up now', ts: now - 24.8 * H },
-  { sender: 'alice', text: 'dropped 0.2 up front, track temp is way up', ts: now - 3 * H },
+  {
+    sender: 'alice',
+    text: 'dropped 0.2 up front, track temp is way up',
+    ts: now - 3 * H,
+    reactions: { '👍': ['bob', 'dana'], '🔥': ['charlie'] },
+  },
   { sender: 'alice', file: { name: 'tyre-temps.png', mime: 'image/png', size: 48213 }, ts: now - 3 * H + 30e3 },
   { sender: 'alice', text: 'left front is the one to watch', ts: now - 3 * H + 55e3 },
   { sender: 'dana', text: 'trailer leaves at 6am sharp — pack the spare diffuser tonight', ts: now - 2.2 * H },
@@ -182,6 +187,9 @@ function PreviewShell({ empty = false, banner = false, modal = null, palette = f
               channel={active.channel}
               me={me}
               messages={messages}
+              typing={['bob']}
+              onTyping={noop}
+              onReact={noop}
               onSend={noop}
               onSendFile={noop}
               fetchFile={async (f) => {

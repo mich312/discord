@@ -48,11 +48,16 @@ one token contract in `src/styles.css` — **carbon** (dark, default) and
 **paper** (light) — with a single **signal-yellow** accent used strictly
 functionally (selection, primary action, focus); green and red appear
 only where they carry meaning (trust, danger). The monospace carries the
-brand: wordmark, section indices (`01 CIRCLES`), epochs, timestamps,
-handles, statuses — anything the system says, it says in mono. Member
-avatars are **cipher marks** (`src/lib/identicon.js`): flat 5×5 mirrored
-module glyphs computed from the handle — identity is a key, so the
-avatar is a fingerprint, never an upload. Chrome layout: a full-width
+brand: wordmark, section labels, epochs, timestamps, handles, statuses —
+anything the system says, it says in mono. **Every user owns a color**:
+a hue derived from the handle (`userHue` in `src/lib/identicon.js`),
+carried as a `--uh` CSS variable and turned into theme-appropriate ink by
+the `.uc` class — the same hue drives the member's seal, their name
+everywhere (messages, roster, voice, calls, typing), their live waveform,
+and their speaking glow. Member avatars are **cipher marks**
+(`src/lib/identicon.js`): flat 5×5 mirrored module glyphs computed from
+the handle — identity is a key, so the avatar is a fingerprint, never an
+upload. Chrome layout: a full-width
 masthead (brand · circle + epoch · invite · ⌘K palette · theme · relay
 state), a single sidebar (circles → rooms → voice → self card), the
 conversation (grouped messages, day dividers, hover timestamps), and the
@@ -107,6 +112,18 @@ rides inside the MLS message envelope (`{k:'file', ch, file}`). Receivers
 fetch the ciphertext and decrypt locally — images render inline, other
 files decrypt on click. The relay stores bytes it cannot read.
 
+### Typing indicators & reactions
+
+Typing notices ride the same MLS-encrypted **ephemeral** fan-out as voice
+signaling (`{k:'typing', ch}`): throttled to one packet per 3s per
+channel, never logged by the relay, never stored by peers — a name shows
+above the composer for 5s and lapses. Reactions are ordinary group
+messages (`{k:'react', ch, fp, emoji, op}`): the target message is
+addressed by its content fingerprint (sender|ts|payload — timestamps ride
+inside the chat envelope, so every device stores the identical message),
+and the reactor is always the MLS-authenticated sender. Stored per-device
+on the message record, toggled from a hover palette on any line.
+
 ### Safety numbers
 
 Click a member: both sides derive the same 60 digits from the pair's MLS
@@ -147,7 +164,12 @@ the identity bundle on the relay, encrypted client-side:
 - **Passkey (recommended)**: WebAuthn registration + the PRF extension —
   the passkey deterministically derives the wrap key. Phishing-resistant,
   nothing brute-forceable stored anywhere, and synced passkeys make it
-  portable across the user's devices.
+  portable across the user's devices. iOS note: PRF is evaluated inside
+  the `create()` ceremony itself (iOS allows one authenticator prompt per
+  tap, so a second assert right after create dies with NotAllowedError);
+  registration also reports credential transports so later sign-ins route
+  straight to iCloud Keychain. Requires iOS 18+ (earlier Safari has no
+  PRF; those users get a clear error and the password path).
 - **Password**: Argon2id (in the crypto WASM) yields 64 bytes — the auth
   half is sent (server stores only its hash), the wrap half encrypts the
   bundle locally. The honest caveat: the relay could brute-force *weak*

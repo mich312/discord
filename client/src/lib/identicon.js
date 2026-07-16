@@ -13,6 +13,20 @@ function fnv1a(str) {
   return h >>> 0;
 }
 
+/** The stable hue (0–359) that IS this user's color everywhere: seal,
+    name, waveform, speaking glow. Derived from the handle, so every
+    device computes the same color without any coordination. */
+export function userHue(name) {
+  return fnv1a(String(name ?? '?')) % 360;
+}
+
+/** Inline style carrying the user's hue as a CSS variable. Components put
+    this on any element whose subtree renders identity-colored ink; the
+    stylesheet turns `--uh` into a readable color per theme. */
+export function userTint(name) {
+  return { '--uh': userHue(name) };
+}
+
 export function sealParams(name) {
   const h = fnv1a(String(name ?? '?'));
   const hue = h % 360;

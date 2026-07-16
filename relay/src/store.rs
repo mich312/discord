@@ -269,6 +269,7 @@ impl Store for MemoryStore {
                 created_by: creator.to_string(),
                 members: vec![(creator.to_string(), ROLE_ADMIN.to_string())],
                 log: Vec::new(),
+                history: HashMap::new(),
             },
         );
         Ok(())

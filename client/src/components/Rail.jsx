@@ -11,7 +11,7 @@ export default function Rail({ servers, active, onSelect, onCreate }) {
   return (
     <nav className="rail">
       <div className="section-label">
-        <span className="overline"><span className="idx">01</span>circles</span>
+        <span className="overline">circles</span>
       </div>
       <ul className="circle-list">
         {servers.map((s) => (

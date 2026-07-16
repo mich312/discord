@@ -163,6 +163,10 @@ try {
   await bob.press('[data-testid=composer]', 'Enter');
   await alice.waitForSelector('text=post-reload pong', { timeout: 10000 });
 
+  // The circles backup uploads on a 3s debounce; give bob's post-reload
+  // upload time to land before a "new device" goes looking for it.
+  await new Promise((r) => setTimeout(r, 4500));
+
   console.log('8. recovery: bob restores identity in a fresh profile');
   const freshCtx = await browser.newContext();
   const fresh = await freshCtx.newPage();
@@ -180,8 +184,11 @@ try {
     () => document.querySelector('[data-testid=self-name]')?.textContent === 'bob',
     { timeout: 15000 }
   );
-  // …but groups are intentionally gone (their keys died with the "device").
-  await fresh.waitForSelector('.empty-state', { timeout: 5000 });
+  // …and the circles backup brings his groups back read-only: the MLS
+  // ratchets died with the "device", but the encrypted backup restores
+  // the shape (names, channels) under a key only the identity derives.
+  await fresh.waitForSelector('[data-testid="rail-Race Team"]', { timeout: 15000 });
+  await fresh.waitForSelector('[data-testid=restored-note]', { timeout: 15000 });
 
   console.log('9. alice creates an invite link');
   await alice.click('[data-testid=create-invite]');
@@ -226,10 +233,13 @@ try {
     });
   });
   await bob.reload();
-  // bob is still bob (no onboarding screen), but groups are gone.
-  await bob.waitForSelector('.empty-state', { timeout: 15000 });
-  const emptyText = await bob.textContent('.empty-state');
-  if (!emptyText.includes('bob')) throw new Error('identity lost after IndexedDB wipe');
+  // bob is still bob (no onboarding screen); his group keys are gone but
+  // the circles backup restores the circle read-only.
+  await bob.waitForFunction(
+    () => document.querySelector('[data-testid=self-name]')?.textContent === 'bob',
+    { timeout: 15000 }
+  );
+  await bob.waitForSelector('[data-testid="rail-Race Team"]', { timeout: 15000 });
 
   console.log('12. identity key export/import: paste alice into a fresh profile');
   await alice.click('[data-testid=identity-open]');
@@ -245,9 +255,12 @@ try {
   await imported.click('summary');
   await imported.fill('[data-testid=paste-key]', aliceKey);
   await imported.click('[data-testid=signin-submit]');
-  await imported.waitForSelector('.empty-state', { timeout: 15000 });
-  const importedText = await imported.textContent('.empty-state');
-  if (!importedText.includes('alice')) throw new Error('pasted identity key did not restore alice');
+  await imported.waitForFunction(
+    () => document.querySelector('[data-testid=self-name]')?.textContent === 'alice',
+    { timeout: 15000 }
+  );
+  // Backup restore: her circles come back (read-only) on the new device.
+  await imported.waitForSelector('[data-testid="rail-Race Team"]', { timeout: 15000 });
 
   console.log('13. encrypted attachment: image round-trips and renders');
   // 1x1 red PNG.
@@ -271,6 +284,32 @@ try {
     .first()
     .evaluate((img) => img.naturalWidth);
   if (naturalWidth !== 1) throw new Error(`decrypted image is broken (naturalWidth=${naturalWidth})`);
+
+  console.log('13b. typing indicator: charlie sees alice typing, then it lapses');
+  await alice.fill('[data-testid=composer]', 'drafting…');
+  await charlie.waitForSelector('[data-testid=typing-line]', { timeout: 10000 });
+  if (!(await charlie.textContent('[data-testid=typing-line]')).includes('alice')) {
+    throw new Error('typing line does not name alice');
+  }
+  // No keystrokes for a while -> the notice expires client-side.
+  await charlie.waitForSelector('[data-testid=typing-line]', { state: 'detached', timeout: 10000 });
+  await alice.fill('[data-testid=composer]', '');
+
+  console.log('13c. reactions: toggle an emoji, both sides converge');
+  await alice.fill('[data-testid=composer]', 'box box box');
+  await alice.press('[data-testid=composer]', 'Enter');
+  await charlie.waitForSelector('text=box box box', { timeout: 10000 });
+  const lastLine = charlie.locator('.msg-line', { hasText: 'box box box' }).last();
+  await lastLine.hover();
+  await lastLine.locator('[data-testid=react-trigger]').click();
+  await charlie.click('[data-testid=react-option-🔥]');
+  // Reactor sees his own chip highlighted; the sender receives it encrypted.
+  await charlie.waitForSelector('.reaction.mine', { timeout: 10000 });
+  await alice.waitForSelector('[data-testid=reaction-🔥]', { timeout: 10000 });
+  // Toggling it off removes the chip everywhere.
+  await charlie.click('[data-testid=reaction-🔥]');
+  await charlie.waitForSelector('[data-testid=reaction-🔥]', { state: 'detached', timeout: 10000 });
+  await alice.waitForSelector('[data-testid=reaction-🔥]', { state: 'detached', timeout: 10000 });
 
   console.log('14. safety numbers match on both sides; unverified -> verified');
   await alice.click('[data-testid=member-charlie]');
@@ -470,10 +509,12 @@ try {
   await pwPage.fill('[data-testid=signin-handle]', 'charlie');
   await pwPage.fill('[data-testid=signin-password]', 'tyre pressures at dawn');
   await pwPage.click('[data-testid=signin-submit]');
-  await pwPage.waitForSelector('.empty-state', { timeout: 30000 });
-  if (!(await pwPage.textContent('.empty-state')).includes('charlie')) {
-    throw new Error('password sign-in did not restore charlie');
-  }
+  await pwPage.waitForFunction(
+    () => document.querySelector('[data-testid=self-name]')?.textContent === 'charlie',
+    { timeout: 30000 }
+  );
+  // Backup restore fills his circles back in, read-only.
+  await pwPage.waitForSelector('[data-testid="rail-Race Team"]', { timeout: 15000 });
   // Wrong password must fail without leaking the vault.
   const pw2Ctx = await browser.newContext();
   const pw2 = await pw2Ctx.newPage();

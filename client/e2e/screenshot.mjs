@@ -12,7 +12,10 @@ const out = process.env.SHOT_PATH ?? '/tmp/client.png';
 
 const relayBin = fileURLToPath(new URL('../../target/debug/relay', import.meta.url));
 const procs = [
-  spawn(relayBin, [], { stdio: 'ignore', env: { ...process.env, RELAY_PORT: RELAY } }),
+  spawn(relayBin, [], {
+    stdio: 'ignore',
+    env: { ...process.env, RELAY_PORT: RELAY, OPEN_REGISTRATION: '1' },
+  }),
   spawn('node', ['serve.mjs'], { cwd: dir, stdio: 'ignore', env: { ...process.env, HTTP_PORT: HTTP } }),
 ];
 process.on('exit', () => procs.forEach((p) => p.kill()));

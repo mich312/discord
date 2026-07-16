@@ -26,21 +26,21 @@ function Gate({ children }) {
         </p>
         <ul className="principles">
           <li>
-            <span className="p-glyph">01</span>
+            <span className="p-glyph" aria-hidden="true" />
             <div>
               <strong>Sealed by default</strong>
               <span>Messages, room names, membership — all of it travels inside the encryption.</span>
             </div>
           </li>
           <li>
-            <span className="p-glyph">02</span>
+            <span className="p-glyph" aria-hidden="true" />
             <div>
               <strong>Your identity is a key, not an email</strong>
               <span>A keypair born in this browser. Recovery is a file you hold, not a reset button we own.</span>
             </div>
           </li>
           <li>
-            <span className="p-glyph">03</span>
+            <span className="p-glyph" aria-hidden="true" />
             <div>
               <strong>The roster is the boundary</strong>
               <span>Joiners see nothing from before they joined. That is the cost of it being true.</span>

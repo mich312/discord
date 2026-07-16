@@ -3,6 +3,7 @@ import { openDb } from './lib/db.js';
 import { createCrypto } from './lib/rpc.js';
 import { Controller } from './lib/controller.js';
 import { parseInviteUrl } from './lib/invite.js';
+import { userTint } from './lib/identicon.js';
 import Modal from './components/Modal.jsx';
 import Onboarding from './components/Onboarding.jsx';
 import Masthead from './components/Masthead.jsx';
@@ -26,6 +27,7 @@ const initial = {
   toast: null,
   modal: null, // invite | identity | safety | secure
   voice: { active: null, connections: {}, presence: {} },
+  typing: {}, // 'server/channel' -> [names currently typing]
   vault: { kind: undefined, securedLocal: true }, // kind: undefined=unknown, null=none
   globalAdmin: false, // relay-side flag (RELAY_ADMINS)
   messagesRev: 0, // bumped when stored messages changed outside the live path (backfill, prune)
@@ -73,6 +75,8 @@ function reducer(state, action) {
       return { ...state, modal: action.modal };
     case 'voice':
       return { ...state, voice: action.state };
+    case 'typing':
+      return { ...state, typing: action.typing };
     case 'vault':
       return { ...state, vault: { kind: action.kind, securedLocal: action.securedLocal } };
     case 'admin':
@@ -357,7 +361,7 @@ export default function App() {
           <div className="self-card">
             <Seal name={state.me} size={32} title={state.me} />
             <span className="who">
-              <span className="handle" data-testid="self-name">{state.me}</span>
+              <span className="handle uc" style={userTint(state.me)} data-testid="self-name">{state.me}</span>
               <span className={`status ${state.connection}`}>{state.connection}</span>
             </span>
             <button className="icon-btn" title="identity key" data-testid="identity-open" onClick={openIdentity}>
@@ -379,6 +383,13 @@ export default function App() {
               channel={channel}
               me={state.me}
               messages={state.messages}
+              typing={state.typing[`${server}/${channel}`] ?? []}
+              onTyping={() => controllerRef.current.notifyTyping(server, channel)}
+              onReact={(message, emoji) =>
+                controllerRef.current
+                  .toggleReaction(server, channel, message, emoji)
+                  .catch((e) => dispatch({ type: 'toast', text: e.message }))
+              }
               onSend={(text) =>
                 controllerRef.current
                   .sendChat(server, channel, text)

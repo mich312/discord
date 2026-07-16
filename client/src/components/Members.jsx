@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import Seal from './Seal.jsx';
+import { userTint } from '../lib/identicon.js';
 import { Check, Phone } from './icons.jsx';
 
 // The roster is the security boundary: it is, exactly, who can read this
@@ -14,7 +15,7 @@ export default function Members({ server, me, canManage, onAdd, onMember, onSetR
   return (
     <aside className="members">
       <div className="section-label">
-        <span className="overline"><span className="idx">04</span>roster</span>
+        <span className="overline">roster</span>
         <span className="member-count">{server.members.length}</span>
       </div>
       <p className="roster-sub">Everyone who holds the keys to this circle — no one else can read it.</p>
@@ -23,7 +24,8 @@ export default function Members({ server, me, canManage, onAdd, onMember, onSetR
           <li key={m} className="member">
             <Seal name={m} size={26} />
             <button
-              className="member-name"
+              className="member-name uc"
+              style={userTint(m)}
               data-testid={`member-${m}`}
               disabled={m === me}
               title={m === me ? undefined : 'safety number & verification'}

@@ -1,7 +1,10 @@
 // IndexedDB, promisified, three stores:
 //   kv       — mls state snapshot, session record
 //   servers  — {id, name, channels[], members[], epoch, lastSeq}
-//   messages — {server, channel, sender, text, ts, system?}, indexed by channel
+//   messages — {server, channel, sender, text, ts, system?, reactions?},
+//              indexed by channel; reactions is {emoji: [handles]}
+import { messageFingerprint } from './history.js';
+
 const DB_NAME = 'e2ee-client';
 
 export function openDb() {
@@ -54,6 +57,36 @@ function wrap(db) {
           .getAll([server, channel]);
         req.onsuccess = () => resolve(req.result);
         req.onerror = () => reject(req.error);
+      }),
+    /** Toggle `user` on/off a message's reaction set. The message is
+        addressed by content fingerprint (sender|ts|payload) — the same
+        identity used to dedupe history backfill — so every device edits
+        the same message regardless of local insertion order. Returns
+        true if a message matched. */
+    msgReact: (server, channel, fp, emoji, user, op) =>
+      new Promise((resolve, reject) => {
+        const t = db.transaction('messages', 'readwrite');
+        const req = t.objectStore('messages').index('byChannel').openCursor([server, channel]);
+        let found = false;
+        req.onsuccess = () => {
+          const cursor = req.result;
+          if (!cursor || found) return;
+          const m = cursor.value;
+          if (!m.system && messageFingerprint(m) === fp) {
+            found = true;
+            const reactions = { ...(m.reactions ?? {}) };
+            const users = new Set(reactions[emoji] ?? []);
+            if (op === 'add') users.add(user);
+            else users.delete(user);
+            if (users.size) reactions[emoji] = [...users];
+            else delete reactions[emoji];
+            cursor.update({ ...m, reactions });
+            return;
+          }
+          cursor.continue();
+        };
+        t.oncomplete = () => resolve(found);
+        t.onerror = () => reject(t.error);
       }),
     /** Delete a channel's messages older than `beforeTs` (auto-delete). */
     msgsPrune: (server, channel, beforeTs) =>

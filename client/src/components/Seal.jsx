@@ -3,10 +3,12 @@ import { sealParams } from '../lib/identicon.js';
 
 // A member's mark: a 5×5 mirrored module glyph computed from the handle —
 // flat, sharp, machine-made. Identity here is a key, so the avatar is a
-// fingerprint you can glance at, never a picture someone uploaded.
+// fingerprint you can glance at, never a picture someone uploaded. The
+// hue is the user's color everywhere (name, waveform, glow); the svg also
+// exposes it as --uh so CSS effects around it can borrow the same color.
 export default function Seal({ name, size = 32, title }) {
   const { hue, bits } = sealParams(name);
-  const ink = `hsl(${hue} 32% 52%)`;
+  const ink = `hsl(${hue} 52% 56%)`;
   // 15 bits fill the left three columns; the right two mirror them.
   const cells = [];
   for (let row = 0; row < 5; row++) {
@@ -24,7 +26,11 @@ export default function Seal({ name, size = 32, title }) {
       viewBox="0 0 20 20"
       role="img"
       aria-label={title ?? String(name)}
-      style={{ background: 'var(--well)', border: '1px solid var(--hairline-strong)' }}
+      style={{
+        '--uh': hue,
+        background: 'var(--well)',
+        border: '1px solid var(--hairline-strong)',
+      }}
     >
       {title ? <title>{title}</title> : null}
       {cells.map(([c, r]) => (

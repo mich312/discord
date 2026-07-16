@@ -1,7 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import Seal from './Seal.jsx';
 import { describeRetention } from '../lib/controller.js';
-import { Lock, Paperclip, Clock } from './icons.jsx';
+import { userTint } from '../lib/identicon.js';
+import { Lock, Paperclip, Clock, Plus } from './icons.jsx';
+
+// The quick palette: enough to carry tone, few enough to stay a gesture.
+const QUICK_REACTIONS = ['👍', '❤️', '😂', '🎉', '👀', '🔥'];
 
 function timeOf(ts) {
   return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -103,7 +107,93 @@ function Attachment({ file, fetchFile }) {
   );
 }
 
-export default function Messages({ server, channel, me, messages, onSend, onSendFile, fetchFile }) {
+// Reaction chips + the hover trigger for one message line. Reactions are
+// stored on the message as {emoji: [handles]}; clicking a chip toggles
+// your own mark on it.
+function Reactions({ message, me, onReact }) {
+  const [open, setOpen] = useState(false);
+  const entries = Object.entries(message.reactions ?? {}).filter(([, users]) => users.length);
+  if (!onReact && !entries.length) return null;
+  return (
+    <span className="reactions">
+      {entries.map(([emoji, users]) => (
+        <button
+          key={emoji}
+          className={users.includes(me) ? 'reaction mine' : 'reaction'}
+          title={users.join(', ')}
+          data-testid={`reaction-${emoji}`}
+          onClick={() => onReact?.(message, emoji)}
+        >
+          {emoji} <span className="count">{users.length}</span>
+        </button>
+      ))}
+      {onReact && (
+        <span className="react-anchor">
+          <button
+            className="react-trigger"
+            title="add reaction"
+            data-testid="react-trigger"
+            onClick={() => setOpen((v) => !v)}
+            onBlur={() => setTimeout(() => setOpen(false), 150)}
+          >
+            <Plus size={11} />
+          </button>
+          {open && (
+            <span className="react-palette" data-testid="react-palette">
+              {QUICK_REACTIONS.map((emoji) => (
+                <button
+                  key={emoji}
+                  className="react-option"
+                  data-testid={`react-option-${emoji}`}
+                  onMouseDown={(e) => {
+                    e.preventDefault();
+                    setOpen(false);
+                    onReact(message, emoji);
+                  }}
+                >
+                  {emoji}
+                </button>
+              ))}
+            </span>
+          )}
+        </span>
+      )}
+    </span>
+  );
+}
+
+// "who is typing" — ephemeral presence above the composer, names in their
+// identity colors, dots doing the waiting.
+function TypingLine({ typing }) {
+  if (!typing.length) return null;
+  return (
+    <div className="typing-line" data-testid="typing-line">
+      <span className="typing-dots" aria-hidden="true">
+        <i /><i /><i />
+      </span>
+      {typing.map((name, i) => (
+        <React.Fragment key={name}>
+          {i > 0 && (i === typing.length - 1 ? ' and ' : ', ')}
+          <span className="uc" style={userTint(name)}>{name}</span>
+        </React.Fragment>
+      ))}
+      {typing.length === 1 ? ' is typing…' : ' are typing…'}
+    </div>
+  );
+}
+
+export default function Messages({
+  server,
+  channel,
+  me,
+  messages,
+  typing = [],
+  onSend,
+  onSendFile,
+  onTyping,
+  onReact,
+  fetchFile,
+}) {
   const [draft, setDraft] = useState('');
   const scroller = useRef(null);
   const folded = useMemo(() => fold(messages), [messages]);
@@ -175,9 +265,14 @@ export default function Messages({ server, channel, me, messages, onSend, onSend
           }
           return (
             <div className="msg-group" key={item.key}>
-              <Seal name={item.sender} size={34} title={item.sender} />
+              <Seal name={item.sender} size={32} title={item.sender} />
               <div className="msg-head">
-                <span className={item.sender === me ? 'sender self' : 'sender'}>{item.sender}</span>
+                <span
+                  className={item.sender === me ? 'sender uc self' : 'sender uc'}
+                  style={userTint(item.sender)}
+                >
+                  {item.sender}
+                </span>
                 <time>{timeOf(item.ts)}</time>
               </div>
               {item.lines.map((m, i) => (
@@ -187,6 +282,7 @@ export default function Messages({ server, channel, me, messages, onSend, onSend
                   ) : (
                     <span className="text">{m.text}</span>
                   )}
+                  <Reactions message={m} me={me} onReact={onReact} />
                   {i > 0 && <time>{timeOf(m.ts)}</time>}
                 </div>
               ))}
@@ -195,6 +291,7 @@ export default function Messages({ server, channel, me, messages, onSend, onSend
         })}
       </div>
       <div className="composer-dock">
+        <TypingLine typing={typing} />
         {server.restored ? (
           <div className="composer-note restored-note" data-testid="restored-note">
             <Lock size={11} />
@@ -229,7 +326,10 @@ export default function Messages({ server, channel, me, messages, onSend, onSend
           <input
             type="text"
             value={draft}
-            onChange={(e) => setDraft(e.target.value)}
+            onChange={(e) => {
+              setDraft(e.target.value);
+              if (e.target.value) onTyping?.();
+            }}
             placeholder={`Message #${channel}`}
             data-testid="composer"
           />

@@ -18,6 +18,11 @@
 //   {k:'file', ch, file}          — an attachment: {name,size,mime,blob,key};
 //                                   blob id points at relay disk, the AES key
 //                                   travels only inside this encrypted envelope
+//   {k:'react', ch, fp, emoji,
+//    op}                          — toggle an emoji on the message whose
+//                                   content fingerprint is `fp` (add|remove)
+//   {k:'typing', ch}              — ephemeral only: sender is typing in `ch`;
+//                                   never stored, expires client-side
 import { b64, Relay } from './relay.js';
 import {
   generateHistoryId,
@@ -31,6 +36,7 @@ import {
 import { VoiceManager } from './voice.js';
 import {
   derivePrfSecret,
+  explainWebAuthnError,
   parseCreationOptions,
   parseRequestOptions,
   prfSecret,
@@ -276,6 +282,8 @@ export class Controller {
       const content = JSON.parse(event.text);
       if (content.k === 'voice' || content.k === 'rtc' || content.k === 'ring') {
         await this.voice.handleEnvelope(msg.group, event.sender, content);
+      } else if (content.k === 'typing' && event.sender !== this.me) {
+        this.onPeerTyping(msg.group, event.sender, String(content.ch ?? ''));
       }
     } catch (e) {
       console.warn(`ephemeral from ${msg.sender} undecryptable: ${e.message}`);
@@ -402,7 +410,10 @@ export class Controller {
           channel: content.ch,
           sender,
           text: content.text,
-          ts: Date.now(),
+          // The sender's clock, carried inside the envelope, so every
+          // device stores the identical message (same fingerprint —
+          // reactions and history dedupe depend on that).
+          ts: Number(content.ts) || Date.now(),
         });
         break;
       }
@@ -454,7 +465,7 @@ export class Controller {
           channel: content.ch,
           sender,
           file: content.file,
-          ts: Date.now(),
+          ts: Number(content.ts) || Date.now(),
         });
         break;
       }
@@ -478,6 +489,16 @@ export class Controller {
           record.voiceChannels = [...rooms, content.ch];
           await this.addSystemMessage(record.id, `voice room "${content.ch}" created by ${sender}`);
         }
+        break;
+      }
+      case 'react': {
+        // A member toggled an emoji on a message. Whitelist the fields —
+        // the emoji is rendered, so cap it to a couple of glyphs, and the
+        // reactor is always the MLS-authenticated sender, never a claim.
+        const emoji = String(content.emoji ?? '').slice(0, 8);
+        const op = content.op === 'remove' ? 'remove' : 'add';
+        if (!emoji || typeof content.fp !== 'string') break;
+        await this.applyReaction(record.id, String(content.ch ?? ''), content.fp, emoji, sender, op);
         break;
       }
       case 'role': {
@@ -614,9 +635,72 @@ export class Controller {
     this.scheduleBackup();
   }
 
+  // === typing presence ====================================================
+  //
+  // Typing rides the same MLS-encrypted ephemeral fan-out as voice
+  // signaling: never logged by the relay, never stored here. Peers show a
+  // name for a few seconds and let it lapse — no "stopped typing" packet.
+
+  /** Called by the composer on every keystroke; throttled on the wire. */
+  notifyTyping(serverId, channel) {
+    const record = this.servers.get(serverId);
+    if (!record || record.restored || !this.relay?.ready) return;
+    const key = `${serverId}/${channel}`;
+    this.typingSentAt ??= {};
+    const now = Date.now();
+    if (now - (this.typingSentAt[key] ?? 0) < 3000) return;
+    this.typingSentAt[key] = now;
+    this.sendEphemeral(serverId, { k: 'typing', ch: channel }).catch(() => {});
+  }
+
+  /** A peer's typing notice landed: show them for 5s, then lapse. */
+  onPeerTyping(serverId, sender, channel) {
+    if (!channel) return;
+    const key = `${serverId}/${channel}`;
+    this.typers ??= new Map(); // key -> Map(name -> expiry)
+    if (!this.typers.has(key)) this.typers.set(key, new Map());
+    this.typers.get(key).set(sender, Date.now() + 5000);
+    this.publishTyping();
+    clearTimeout(this.typingSweep);
+    this.typingSweep = setTimeout(() => this.publishTyping(), 5200);
+  }
+
+  publishTyping() {
+    const now = Date.now();
+    const typing = {};
+    for (const [key, names] of this.typers ?? []) {
+      for (const [name, expiry] of names) {
+        if (expiry <= now) names.delete(name);
+      }
+      if (names.size) typing[key] = [...names.keys()];
+    }
+    this.dispatch({ type: 'typing', typing });
+  }
+
+  // === reactions ==========================================================
+
+  /** Toggle my `emoji` on a message (addressed by content fingerprint so
+      every member lands on the same one). Sent as a normal group message:
+      encrypted, ordered, replayable by catch-up. */
+  async toggleReaction(serverId, channel, message, emoji) {
+    if (message.system) return;
+    const fp = messageFingerprint(message);
+    const op = (message.reactions?.[emoji] ?? []).includes(this.me) ? 'remove' : 'add';
+    await this.sendContent(serverId, { k: 'react', ch: channel, fp, emoji, op });
+    await this.applyReaction(serverId, channel, fp, emoji, this.me, op);
+  }
+
+  async applyReaction(serverId, channel, fp, emoji, user, op) {
+    const found = await this.db.msgReact(serverId, channel, fp, emoji, user, op);
+    if (found) this.dispatch({ type: 'refreshMessages' });
+  }
+
   async sendChat(serverId, channel, text) {
-    await this.sendContent(serverId, { k: 'chat', ch: channel, text });
-    const message = { server: serverId, channel, sender: this.me, text, ts: Date.now() };
+    // Sending clears my own typing throttle so the next draft re-announces.
+    if (this.typingSentAt) delete this.typingSentAt[`${serverId}/${channel}`];
+    const ts = Date.now();
+    await this.sendContent(serverId, { k: 'chat', ch: channel, text, ts });
+    const message = { server: serverId, channel, sender: this.me, text, ts };
     await this.storeMessage(message);
     this.appendHistory(serverId, channel, message);
   }
@@ -913,19 +997,32 @@ export class Controller {
 
   /** Passkey vault: register a WebAuthn credential, derive a wrap key via
       the PRF extension, park the wrapped identity. Nothing brute-forceable
-      is stored anywhere. */
+      is stored anywhere. PRF is evaluated inside the create() ceremony —
+      iOS allows only one authenticator prompt per tap, so the previous
+      create-then-assert sequence always failed there; a second ceremony
+      remains as a fallback for authenticators that only evaluate on get(). */
   async secureWithPasskey() {
     if (!navigator.credentials?.create) throw new Error('WebAuthn unavailable in this browser');
     const start = await this.relay.request({ t: 'passkey_register_start' });
-    const created = await navigator.credentials.create({
-      publicKey: parseCreationOptions(JSON.parse(start.payload)),
-    });
+    const prfSalt = crypto.getRandomValues(new Uint8Array(32));
+    let created;
+    try {
+      created = await navigator.credentials.create({
+        publicKey: parseCreationOptions(JSON.parse(start.payload), prfSalt),
+      });
+    } catch (e) {
+      throw explainWebAuthnError(e, 'passkey registration failed');
+    }
     const finish = await this.relay.request({
       t: 'passkey_register_finish',
       credential: JSON.stringify(serializeRegistration(created)),
     });
-    const prfSalt = crypto.getRandomValues(new Uint8Array(32));
-    const secret = await derivePrfSecret(created.rawId, prfSalt);
+    let secret = prfSecret(created);
+    if (!secret) {
+      secret = await derivePrfSecret(created.rawId, prfSalt).catch((e) => {
+        throw explainWebAuthnError(e, 'PRF derivation failed');
+      });
+    }
     if (!secret) {
       throw new Error('this authenticator does not support the PRF extension — use a password instead');
     }
@@ -959,16 +1056,26 @@ export class Controller {
   }
 
   async signInWithPasskey(user) {
-    const params = await this.accountFetch(`/account/${encodeURIComponent(user)}/params`);
+    // Both round trips run in parallel: iOS ties the authenticator prompt
+    // to the button tap's transient activation, so the less time between
+    // tap and credentials.get(), the better.
+    const [params, challenge] = await Promise.all([
+      this.accountFetch(`/account/${encodeURIComponent(user)}/params`),
+      this.accountFetch(`/account/${encodeURIComponent(user)}/passkey/challenge`, {}),
+    ]).catch(async () => {
+      // The challenge endpoint 400s for non-passkey vaults; re-fetch params
+      // alone so the user gets the accurate "uses password" message.
+      const p = await this.accountFetch(`/account/${encodeURIComponent(user)}/params`);
+      if (p.kind !== 'passkey') throw new Error(`this account uses ${p.kind} sign-in`);
+      throw new Error('could not fetch passkey challenge');
+    });
     if (params.kind !== 'passkey') throw new Error(`this account uses ${params.kind} sign-in`);
     const prfSalt = b64.dec(params.salt);
-    const challenge = await this.accountFetch(
-      `/account/${encodeURIComponent(user)}/passkey/challenge`,
-      {}
-    );
-    const assertion = await navigator.credentials.get({
-      publicKey: parseRequestOptions(challenge, prfSalt),
-    });
+    const assertion = await navigator.credentials
+      .get({ publicKey: parseRequestOptions(challenge, prfSalt) })
+      .catch((e) => {
+        throw explainWebAuthnError(e, 'passkey sign-in failed');
+      });
     const secret = prfSecret(assertion);
     if (!secret) throw new Error('authenticator returned no PRF secret');
     const reply = await this.accountFetch(`/account/${encodeURIComponent(user)}/passkey/login`, {
@@ -1020,8 +1127,9 @@ export class Controller {
       blob: blobId,
       key: b64.enc(key),
     };
-    await this.sendContent(serverId, { k: 'file', ch: channel, file });
-    const message = { server: serverId, channel, sender: this.me, file, ts: Date.now() };
+    const ts = Date.now();
+    await this.sendContent(serverId, { k: 'file', ch: channel, file, ts });
+    const message = { server: serverId, channel, sender: this.me, file, ts };
     await this.storeMessage(message);
     this.appendHistory(serverId, channel, message);
   }
