@@ -31,3 +31,6 @@ crypto-core = { path = "../crypto-core" }
 tempfile = "3"
 tower = { version = "0.5", features = ["util"] }
 tokio-tungstenite = "0.24"
+# Receiver-side Web Push decryption (RFC 8291/8188) for the push crypto test.
+hkdf = "0.12"
+aes-gcm = "0.10"

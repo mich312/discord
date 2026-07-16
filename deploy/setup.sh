@@ -97,15 +97,20 @@ fi
 # --- generate a VAPID key if none supplied ---------------------------------
 if [ -z "$VAPID" ]; then
 	log "Generating a VAPID key for durable Web Push…"
+	# The 32-byte private scalar sits at DER offset 7 (SEQUENCE, INTEGER
+	# version, then a 32-byte OCTET STRING). Count from the FRONT — the raw
+	# scalar — not `tail -c 32`, which for a named curve grabs the last 20
+	# scalar bytes plus the trailing 12-byte prime256v1 OID (a wrong, weak,
+	# curve-OID-contaminated key that push services then can't be signed for).
 	if command -v basenc >/dev/null 2>&1; then
 		VAPID="$(openssl ecparam -genkey -name prime256v1 2>/dev/null \
 			| openssl ec -no_public -outform DER 2>/dev/null \
-			| tail -c 32 | basenc --base64url | tr -d '=')"
+			| tail -c +8 | head -c 32 | basenc --base64url | tr -d '=')"
 	else
 		# basenc (coreutils ≥8.31) missing: make base64url from base64 by hand
 		VAPID="$(openssl ecparam -genkey -name prime256v1 2>/dev/null \
 			| openssl ec -no_public -outform DER 2>/dev/null \
-			| tail -c 32 | openssl base64 -A | tr '+/' '-_' | tr -d '=')"
+			| tail -c +8 | head -c 32 | openssl base64 -A | tr '+/' '-_' | tr -d '=')"
 	fi
 	[ -n "$VAPID" ] || warn "VAPID generation failed; push will use an ephemeral key."
 fi
