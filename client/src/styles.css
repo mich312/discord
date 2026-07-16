@@ -643,6 +643,219 @@ kbd {
 .call-parties .voice-meter { color: var(--ink-mute); opacity: 0.5; }
 .call-parties li.speaking .voice-meter { color: var(--accent-ink); opacity: 1; }
 
+/* ------------------------------------------------------------- call stage -- */
+/* The in-call dashboard: one bubble per participant, the shared screen when
+   someone presents, and the call's own conversation thread on the right. */
+.call-stage {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  background: var(--raised);
+}
+.stage-head { gap: 10px; }
+.stage-head .room-name { flex-shrink: 0; }
+.stage-count {
+  font: var(--text-xs) var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ink-mute);
+  border-left: 1px solid var(--hairline-strong);
+  padding-left: 12px;
+  white-space: nowrap;
+}
+.stage-count .listen-only { color: var(--accent-ink); }
+.stage-head .sealed-note { margin-left: 0; flex: 1; }
+.stage-actions {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+}
+
+.stage-body { flex: 1; min-height: 0; display: flex; }
+.stage-main {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 18px;
+  padding: 20px;
+  overflow-y: auto;
+}
+
+/* the shared screen owns the stage; bubbles compact into a strip below */
+.stage-screen {
+  position: relative;
+  width: 100%;
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  background: var(--well);
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--r);
+  overflow: hidden;
+}
+.stage-screen video {
+  width: 100%;
+  height: 100%;
+  object-fit: contain;
+  display: block;
+  background: #000;
+}
+.stage-screen-label {
+  position: absolute;
+  left: 10px;
+  bottom: 10px;
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 9px;
+  border-radius: var(--r);
+  background: rgba(0, 0, 0, 0.55);
+  color: #fff;
+  font: 500 var(--text-xs) var(--mono);
+  letter-spacing: 0.04em;
+}
+.stage-screen.waiting {
+  flex: 0 0 auto;
+  min-height: 180px;
+  flex-direction: column;
+  gap: 10px;
+  color: var(--ink-mute);
+  font: var(--text-sm) var(--mono);
+}
+
+.stage-sharers { display: flex; gap: 8px; flex-wrap: wrap; }
+.sharer-pill {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 4px 10px;
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--r);
+  background: none;
+  color: var(--ink-mute);
+  font: 500 var(--text-xs) var(--mono);
+  cursor: pointer;
+}
+.sharer-pill:hover { color: var(--ink); }
+.sharer-pill.active { color: var(--accent-ink); border-color: var(--accent); }
+
+.stage-bubbles {
+  list-style: none;
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: center;
+  gap: 22px;
+  max-width: 100%;
+}
+.stage-bubbles.compact { gap: 14px; flex-shrink: 0; }
+.stage-bubble {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 7px;
+  min-width: 96px;
+  padding: 14px 12px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--r);
+  background: var(--panel);
+}
+.stage-bubbles.compact .stage-bubble { min-width: 76px; padding: 9px 10px; gap: 5px; }
+.stage-bubble .bubble-seal { display: grid; place-items: center; border-radius: 50%; }
+.stage-bubble .bubble-seal svg {
+  border-radius: 50%;
+  transition: box-shadow 0.12s ease;
+}
+.stage-bubble.speaking { border-color: var(--accent); }
+.stage-bubble.speaking .bubble-seal svg {
+  box-shadow: 0 0 0 2px var(--accent), 0 0 14px var(--accent);
+}
+.stage-bubble .bubble-name {
+  font: 600 var(--text-sm) var(--mono);
+  max-width: 120px;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.stage-bubble .voice-meter { color: var(--ink-mute); opacity: 0.5; }
+.stage-bubble.speaking .voice-meter { color: var(--accent-ink); opacity: 1; }
+.bubble-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font: 500 var(--text-xs) var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ok);
+}
+.bubble-conn {
+  font: var(--text-xs) var(--mono);
+  color: var(--ink-mute);
+}
+
+/* the call's conversation thread */
+.stage-chat {
+  width: 300px;
+  flex-shrink: 0;
+  display: flex;
+  flex-direction: column;
+  border-left: 1px solid var(--hairline);
+  background: var(--panel);
+}
+.stage-chat-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 8px;
+  padding: 10px 14px;
+  border-bottom: 1px solid var(--hairline);
+  font: 600 var(--text-sm) var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+}
+.stage-chat-head .muted { font-weight: 400; font-size: var(--text-xs); text-transform: none; letter-spacing: normal; }
+.stage-chat .scroll { padding: 10px 14px; }
+.stage-chat-empty { font-size: var(--text-sm); padding-top: 8px; }
+.stage-chat-line {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  padding: 3px 0;
+  font-size: var(--text-sm);
+  line-height: 1.45;
+}
+.stage-chat-line .seal-avatar { align-self: center; }
+.stage-chat-line .sender { font: 600 var(--text-xs) var(--mono); white-space: nowrap; }
+.stage-chat-line .sender.self { color: var(--accent-ink); }
+.stage-chat-line .text { min-width: 0; overflow-wrap: anywhere; }
+.stage-chat-line time { margin-left: auto; font: var(--text-xs) var(--mono); color: var(--ink-mute); white-space: nowrap; }
+.stage-chat-line.system .text { font-size: var(--text-xs); }
+.stage-composer { padding: 8px 10px 4px; }
+.stage-composer input {
+  width: 100%;
+  background: var(--well);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r);
+  padding: 8px 10px;
+  font: inherit;
+  color: var(--ink);
+}
+.stage-composer input:focus { border-color: var(--ink-dim); outline: none; }
+.stage-chat .composer-note { padding: 4px 12px 10px; }
+
+/* joined voice room name doubles as the way back to its stage */
+.voice-row .channel.joined { cursor: pointer; }
+.voice-row .channel.joined:hover { background: var(--active, var(--well)); color: var(--ink); }
+.voice-row .channel.joined:hover .glyph { color: var(--accent-ink); }
+
 /* self card */
 .self-card {
   flex-shrink: 0;
@@ -1424,6 +1637,21 @@ kbd {
     max-width: none;
     flex-wrap: wrap;
   }
+
+  /* call stage: chat tucks under the bubbles in one column */
+  .stage-head { flex-wrap: wrap; height: auto; min-height: 42px; padding: 8px 12px; }
+  .stage-count { border-left: none; padding-left: 0; }
+  .stage-actions { width: 100%; justify-content: flex-end; }
+  .stage-body { flex-direction: column; }
+  .stage-main { padding: 14px 12px; gap: 14px; }
+  .stage-chat {
+    width: auto;
+    border-left: none;
+    border-top: 1px solid var(--hairline);
+    max-height: 40%;
+    min-height: 150px;
+  }
+  .stage-composer input { font-size: 16px; }
 
   /* onboarding: single column already (860px rule); tighten the frame */
   .gate-form { padding: 20px 16px calc(20px + env(safe-area-inset-bottom, 0px)); }

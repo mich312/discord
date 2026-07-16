@@ -17,6 +17,7 @@ export default function Channels({
   voice,
   onVoiceJoin,
   onVoiceLeave,
+  onOpenStage,
 }) {
   const [adding, setAdding] = useState(false);
   const [name, setName] = useState('');
@@ -110,12 +111,26 @@ export default function Channels({
           return (
             <li key={ch} className="voice-channel">
               <div className="voice-row">
-                <span className="channel">
-                  <span className="glyph">
-                    <Wave size={13} />
+                {joined ? (
+                  <button
+                    className="channel joined"
+                    title="open the call view"
+                    data-testid={`voice-open-${ch}`}
+                    onClick={onOpenStage}
+                  >
+                    <span className="glyph">
+                      <Wave size={13} />
+                    </span>
+                    {ch}
+                  </button>
+                ) : (
+                  <span className="channel">
+                    <span className="glyph">
+                      <Wave size={13} />
+                    </span>
+                    {ch}
                   </span>
-                  {ch}
-                </span>
+                )}
                 {joined ? (
                   <>
                     {voice.listenOnly && (
