@@ -1,0 +1,44 @@
+# Production stack with automatic HTTPS: Caddy → quorum relay → postgres.
+#
+# Caddy owns ports 80/443 on the host and terminates TLS with a Let's Encrypt
+# certificate it provisions and renews on its own. The relay is NOT published
+# to the host — it is only reachable from Caddy over the internal network.
+#
+# Run from the repo root:
+#
+#   cp deploy/.env.example deploy/.env      # then edit deploy/.env
+#   docker compose --env-file deploy/.env \
+#     -f docker-compose.yml -f deploy/docker-compose.tls.yml up --build -d
+#
+# This layers on top of the base docker-compose.yml: it removes quorum's host
+# port, points RP_ID/RP_ORIGIN at your HTTPS origin, and adds the Caddy proxy.
+
+services:
+  quorum:
+    # Base compose publishes "80:80"; behind the proxy the relay must not be
+    # exposed on the host. `!reset` drops the inherited port mapping.
+    ports: !reset []
+    environment:
+      RP_ID: ${CADDY_DOMAIN}
+      RP_ORIGIN: https://${CADDY_DOMAIN}
+      VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
+
+  caddy:
+    image: caddy:2
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"   # HTTP/3
+    environment:
+      CADDY_DOMAIN: ${CADDY_DOMAIN}
+    volumes:
+      - ./deploy/Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data      # certificates + ACME account — MUST persist
+      - caddy_config:/config
+    depends_on:
+      - quorum
+    restart: unless-stopped
+
+volumes:
+  caddy_data:
+  caddy_config:
