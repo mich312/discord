@@ -517,6 +517,80 @@ kbd {
 .voice-participants li.me { color: var(--ink); }
 .voice-participants li.me::after { content: '·you'; color: var(--ink-mute); }
 .voice-participants .link-state { color: var(--ink-mute); font-size: var(--text-xs); }
+.voice-participants .vp-name { white-space: nowrap; }
+/* who's talking: the seal lights up and lifts while sound is flowing */
+.voice-participants li.speaking { color: var(--ink); }
+.voice-participants li svg:first-of-type {
+  border-radius: 50%;
+  transition: filter .12s ease, transform .12s ease;
+}
+.voice-participants li.speaking svg:first-of-type {
+  filter: drop-shadow(0 0 4px var(--accent));
+  transform: scale(1.08);
+}
+/* mini scrolling waveform, dim until the speaker is active */
+.voice-participants .voice-meter {
+  margin-left: auto;
+  width: 36px;
+  height: 14px;
+  color: var(--ink-mute);
+  opacity: 0.45;
+  transition: color .15s ease, opacity .15s ease;
+}
+.voice-participants li.speaking .voice-meter { color: var(--accent-ink); opacity: 1; }
+
+/* direct call: a call button on each roster row */
+.member-call { color: var(--ink-mute); padding: 2px 3px; display: inline-grid; place-items: center; }
+.member-call:hover { color: var(--ok); }
+
+/* direct-call panel — floats bottom-right over the workspace */
+.call-panel {
+  position: fixed;
+  right: 20px;
+  bottom: 20px;
+  z-index: 40;
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 12px 14px;
+  border: 1px solid var(--hairline-strong);
+  border-radius: 12px;
+  background: var(--panel);
+  box-shadow: 0 12px 34px rgba(0, 0, 0, 0.28);
+  font: var(--text-sm) var(--mono);
+  max-width: 360px;
+}
+.call-panel .call-glyph { color: var(--accent-ink); display: grid; place-items: center; }
+.call-panel.connected .call-glyph.live { color: var(--ok); }
+.call-glyph.pulse { animation: call-pulse 1s ease-in-out infinite; }
+@keyframes call-pulse {
+  0%, 100% { opacity: 1; transform: scale(1); }
+  50% { opacity: 0.35; transform: scale(0.82); }
+}
+.call-text { display: flex; flex-direction: column; line-height: 1.25; margin-right: auto; }
+.call-text .muted { font-size: var(--text-xs); }
+.call-btn {
+  display: inline-flex;
+  align-items: center;
+  gap: 4px;
+  padding: 5px 10px;
+  border-radius: 8px;
+  border: 1px solid var(--hairline-strong);
+  font: var(--text-xs) var(--mono);
+  cursor: pointer;
+  background: none;
+  color: var(--ink);
+}
+.call-btn.accept { color: var(--ok); border-color: var(--ok); }
+.call-btn.accept:hover { background: var(--ok-soft); }
+.call-btn.decline { color: var(--danger); border-color: var(--danger); }
+.call-btn.decline:hover { background: var(--danger-soft); }
+.call-parties { list-style: none; display: flex; flex-direction: column; gap: 4px; margin-right: auto; }
+.call-parties li { display: flex; align-items: center; gap: 7px; }
+.call-parties li svg:first-of-type { border-radius: 50%; transition: filter .12s ease; }
+.call-parties li.speaking svg:first-of-type { filter: drop-shadow(0 0 4px var(--accent)); }
+.call-parties .voice-meter { color: var(--ink-mute); opacity: 0.5; }
+.call-parties li.speaking .voice-meter { color: var(--accent-ink); opacity: 1; }
 
 /* self card */
 .self-card {

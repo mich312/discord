@@ -5,6 +5,7 @@
   "scripts": {
     "dev": "node scripts/copy-pkg.mjs && vite",
     "build": "node scripts/copy-pkg.mjs && vite build && node scripts/inject-sri.mjs",
+    "test": "node --test test/*.test.mjs",
     "e2e": "node e2e/run.mjs",
     "preview:ui": "vite --open /preview.html"
   },

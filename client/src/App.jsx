@@ -11,6 +11,7 @@ import Rail from './components/Rail.jsx';
 import Channels from './components/Channels.jsx';
 import Messages from './components/Messages.jsx';
 import Members from './components/Members.jsx';
+import CallPanel from './components/CallPanel.jsx';
 import Seal from './components/Seal.jsx';
 import { Key, Bell, ShieldCheck, LinkGlyph, Sun, QuorumGlyph } from './components/icons.jsx';
 
@@ -293,6 +294,7 @@ export default function App() {
               me={state.me}
               onSelect={(ch) => dispatch({ type: 'select', server, channel: ch })}
               onCreate={(ch) => controllerRef.current.createChannel(server, ch)}
+              onVoiceCreate={(ch) => controllerRef.current.createVoiceChannel(server, ch)}
               voice={state.voice}
               onVoiceJoin={(ch) =>
                 controllerRef.current.voice
@@ -340,6 +342,11 @@ export default function App() {
               server={activeServer}
               me={state.me}
               canManage={canManage}
+              onCall={(peer) =>
+                controllerRef.current.voice
+                  .callUser(server, peer)
+                  .catch((e) => dispatch({ type: 'toast', text: `call: ${e.message}` }))
+              }
               onAdd={(user) =>
                 controllerRef.current
                   .addMember(server, user)
@@ -393,6 +400,18 @@ export default function App() {
             </div>
           </div>
         )}
+        <CallPanel
+          voice={state.voice}
+          me={state.me}
+          onAccept={() =>
+            controllerRef.current.voice
+              .acceptRing()
+              .catch((e) => dispatch({ type: 'toast', text: `call: ${e.message}` }))
+          }
+          onDecline={() => controllerRef.current.voice.declineRing()}
+          onCancel={() => controllerRef.current.voice.cancelCall()}
+          onHangup={() => controllerRef.current.voice.leave()}
+        />
         {state.toast && <div className="toast">{state.toast}</div>}
         {state.modal && (
           <Modal

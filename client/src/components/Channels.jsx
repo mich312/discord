@@ -1,12 +1,25 @@
 import React, { useState } from 'react';
 import Seal from './Seal.jsx';
+import VoiceMeter from './VoiceMeter.jsx';
 import { Hash, Wave, Plus } from './icons.jsx';
 
 // Rooms and voice tables of the active circle. Channel names travel inside
 // the encryption, so even this sidebar is knowledge the relay never has.
-export default function Channels({ server, activeChannel, me, onSelect, onCreate, voice, onVoiceJoin, onVoiceLeave }) {
+export default function Channels({
+  server,
+  activeChannel,
+  me,
+  onSelect,
+  onCreate,
+  onVoiceCreate,
+  voice,
+  onVoiceJoin,
+  onVoiceLeave,
+}) {
   const [adding, setAdding] = useState(false);
   const [name, setName] = useState('');
+  const [addingVoice, setAddingVoice] = useState(false);
+  const [voiceName, setVoiceName] = useState('');
 
   return (
     <aside className="channels">
@@ -56,6 +69,14 @@ export default function Channels({ server, activeChannel, me, onSelect, onCreate
       </ul>
       <div className="section-label">
         <span className="overline"><span className="idx">03</span>voice</span>
+        <button
+          className="ghost"
+          title="new voice room"
+          data-testid="new-voice"
+          onClick={() => setAddingVoice(true)}
+        >
+          <Plus size={13} />
+        </button>
       </div>
       <ul className="channel-list voice-list">
         {(server.voiceChannels ?? ['lounge']).map((ch) => {
@@ -90,20 +111,51 @@ export default function Channels({ server, activeChannel, me, onSelect, onCreate
               </div>
               {participants.length > 0 && (
                 <ul className="voice-participants" data-testid={`voice-participants-${ch}`}>
-                  {participants.map((p) => (
-                    <li key={p} className={p === me ? 'me' : undefined}>
-                      <Seal name={p} size={16} />
-                      {p}
-                      {joined && p !== me && voice.connections[p] && voice.connections[p] !== 'connected' && (
-                        <span className="link-state">· {voice.connections[p]}</span>
-                      )}
-                    </li>
-                  ))}
+                  {participants.map((p) => {
+                    const speaking = voice.speaking?.includes(p);
+                    return (
+                      <li
+                        key={p}
+                        className={[p === me ? 'me' : '', speaking ? 'speaking' : ''].filter(Boolean).join(' ') || undefined}
+                        data-testid={`voice-participant-${p}`}
+                        data-speaking={speaking ? 'true' : 'false'}
+                      >
+                        <Seal name={p} size={16} />
+                        <span className="vp-name">{p}</span>
+                        {joined && <VoiceMeter name={p} />}
+                        {joined && p !== me && voice.connections[p] && voice.connections[p] !== 'connected' && (
+                          <span className="link-state">· {voice.connections[p]}</span>
+                        )}
+                      </li>
+                    );
+                  })}
                 </ul>
               )}
             </li>
           );
         })}
+        {addingVoice && (
+          <li>
+            <form
+              onSubmit={(e) => {
+                e.preventDefault();
+                if (voiceName.trim()) onVoiceCreate(voiceName.trim());
+                setVoiceName('');
+                setAddingVoice(false);
+              }}
+            >
+              <input
+                autoFocus
+                className="channel-input"
+                value={voiceName}
+                onChange={(e) => setVoiceName(e.target.value)}
+                onBlur={() => setAddingVoice(false)}
+                placeholder="voice-room"
+                data-testid="new-voice-name"
+              />
+            </form>
+          </li>
+        )}
       </ul>
     </aside>
   );

@@ -349,6 +349,41 @@ try {
     { timeout: 15000 }
   );
 
+  console.log('17b. a second voice room propagates to every member (MLS-carried)');
+  await alice.click('[data-testid=new-voice]');
+  await alice.fill('[data-testid=new-voice-name]', 'strategy');
+  await alice.press('[data-testid=new-voice-name]', 'Enter');
+  for (const [name, page] of [['charlie', charlie], ['dave', dave]]) {
+    await page
+      .waitForSelector('[data-testid=voice-join-strategy]', { timeout: 15000 })
+      .catch(() => {
+        throw new Error(`${name} never saw the new voice room 'strategy'`);
+      });
+  }
+
+  console.log('17c. active-speaker meter is wired for every participant');
+  // Headless WebAudio won't drive a MediaStream analyser (no audio clock), so
+  // levels stay flat here; the detection *math* is covered by test/meter.test.
+  // What we assert end-to-end is the plumbing: an AnalyserNode exists per
+  // participant (window.__voiceLevels keyed by name) and a waveform canvas is
+  // rendered for each one.
+  await alice
+    .waitForFunction(
+      () => {
+        const lv = window.__voiceLevels || {};
+        return ['alice', 'charlie', 'dave'].every((n) => n in lv);
+      },
+      { timeout: 15000 }
+    )
+    .catch(() => {
+      throw new Error('per-participant meters (window.__voiceLevels) were never created');
+    });
+  const meterCount = await alice.$$eval(
+    '[data-testid=voice-participants-lounge] .voice-meter',
+    (els) => els.length
+  );
+  if (meterCount < 3) throw new Error(`expected a waveform per participant, saw ${meterCount}`);
+
   console.log('18. leaving updates everyone');
   await charlie.click('[data-testid=voice-leave-lounge]');
   await alice.waitForFunction(
@@ -357,6 +392,38 @@ try {
   );
   await alice.waitForFunction(
     () => window.__voice?.connections?.charlie === undefined,
+    { timeout: 15000 }
+  );
+
+  console.log('18b. direct 1:1 call: alice rings charlie from the roster, charlie accepts');
+  // Free both parties from the mesh so they can place / take a direct call.
+  await alice.click('[data-testid=voice-leave-lounge]');
+  await dave.click('[data-testid=voice-leave-lounge]');
+  await alice.waitForFunction(() => !window.__voice?.active, { timeout: 10000 });
+  await alice.click('[data-testid=call-charlie]');
+  await alice.waitForSelector('[data-testid=call-dialing]', { timeout: 10000 });
+  // The ring reaches charlie (addressed to him inside the MLS group).
+  await charlie.waitForSelector('[data-testid=call-incoming]', { timeout: 15000 });
+  await charlie.click('[data-testid=call-accept]');
+  // Both legs of the direct call reach 'connected' (real DTLS-SRTP).
+  await alice
+    .waitForFunction(() => window.__voice?.connections?.charlie === 'connected', { timeout: 20000 })
+    .catch(() => {
+      throw new Error('alice: direct call to charlie never connected');
+    });
+  await charlie
+    .waitForFunction(() => window.__voice?.connections?.alice === 'connected', { timeout: 20000 })
+    .catch(() => {
+      throw new Error('charlie: direct call to alice never connected');
+    });
+  await alice.waitForSelector('[data-testid=call-connected]', { timeout: 10000 });
+  await charlie.waitForSelector('[data-testid=call-connected]', { timeout: 10000 });
+
+  console.log('18c. hanging up ends the direct call for both sides');
+  await alice.click('[data-testid=call-hangup]');
+  // charlie's leg auto-ends the moment his only peer (alice) hangs up.
+  await charlie.waitForFunction(
+    () => !document.querySelector('[data-testid=call-connected]') && !window.__voice?.active,
     { timeout: 15000 }
   );
 
@@ -443,7 +510,8 @@ try {
   console.log('      join with unverified badge, localStorage identity survival,');
   console.log('      plain key export/import, encrypted attachments, safety');
   console.log('      numbers, service-worker registration, E2EE-signaled mesh');
-  console.log('      voice, deferred invite onboarding, password vault sign-in,');
+  console.log('      voice, multi-room voice + active-speaker meter, direct 1:1');
+  console.log('      calls, deferred invite onboarding, password vault sign-in,');
   console.log('      and passkey (WebAuthn PRF) vault sign-in');
   await browser.close();
 } catch (e) {

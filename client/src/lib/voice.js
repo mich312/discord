@@ -12,6 +12,8 @@
 // Mesh rule: for each pair, the lexicographically smaller name makes the
 // offer — no glare. Audio-only keeps mesh viable to ~6–8 participants.
 
+import { frameRms, levelFromRms, nextSpeaking } from './meter.js';
+
 const DEFAULT_ICE = [{ urls: 'stun:stun.l.google.com:19302' }];
 
 export class VoiceManager {
@@ -23,11 +25,21 @@ export class VoiceManager {
     this.me = opts.me;
     this.send = opts.send;
     this.onState = opts.onState;
+    this.onNotify = opts.onNotify ?? (() => {}); // transient user messages (toasts)
     this.iceServers = opts.iceServers ?? DEFAULT_ICE;
     this.active = null; // {server, channel, stream}
+    this.ring = null; // incoming direct call awaiting our answer: {server, room, from}
+    this.dial = null; // outgoing direct call we're ringing: {server, room, to}
     this.peers = new Map(); // name -> {pc, audio}
     // (server, channel) -> Set of names, maintained passively for everyone
     this.presence = new Map();
+    // Active-speaker metering (local + each remote), all client-side.
+    this.levels = {}; // name -> 0..1 instantaneous loudness (read by the meter UI)
+    this.speaking = new Set(); // names currently over the speaking threshold
+    this.analysers = new Map(); // name -> { src, analyser, data }
+    this.meterCtx = null;
+    this.meterSink = null;
+    this.meterRAF = null;
   }
 
   key(server, channel) {
@@ -48,9 +60,115 @@ export class VoiceManager {
       presence: Object.fromEntries(
         [...this.presence.entries()].map(([k, v]) => [k.replace('\n', '/'), [...v].sort()])
       ),
+      // Who is currently talking. Instantaneous per-name levels for the mini
+      // waveforms live on window.__voiceLevels (updated every frame) so the
+      // meters can animate smoothly without re-rendering React each tick.
+      speaking: [...this.speaking].sort(),
+      // Direct (1:1) calling: an incoming ring to answer, or an outgoing one
+      // we're placing. `direct` names the peer when the active room is a DM.
+      ring: this.ring ? { server: this.ring.server, room: this.ring.room, from: this.ring.from } : null,
+      dial: this.dial ? { server: this.dial.server, room: this.dial.room, to: this.dial.to } : null,
+      direct: this.active ? this.directPeer(this.active.channel) : null,
     };
     if (typeof window !== 'undefined') window.__voice = state;
     this.onState(state);
+  }
+
+  // === active-speaker metering ===========================================
+
+  /** Tap `stream` with an AnalyserNode so we can measure how loud `name` is.
+      Purely local analysis of media that is already flowing; adds nothing to
+      the wire. */
+  addMeter(name, stream) {
+    if (!stream || this.analysers.has(name)) return;
+    try {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      if (!this.meterCtx) {
+        this.meterCtx = new Ctx();
+        // A silent sink keeps the graph pulling: an AnalyserNode with no path
+        // to the destination isn't guaranteed to advance (it stays flat in
+        // headless Chrome), and gain 0 means we never double-play the audio.
+        this.meterSink = this.meterCtx.createGain();
+        this.meterSink.gain.value = 0;
+        this.meterSink.connect(this.meterCtx.destination);
+      }
+      this.meterCtx.resume?.().catch?.(() => {});
+      const src = this.meterCtx.createMediaStreamSource(stream);
+      const analyser = this.meterCtx.createAnalyser();
+      analyser.fftSize = 512;
+      analyser.smoothingTimeConstant = 0.6;
+      src.connect(analyser);
+      analyser.connect(this.meterSink);
+      this.analysers.set(name, { src, analyser, data: new Uint8Array(analyser.fftSize) });
+      this.startMeter();
+    } catch {
+      /* a stream that can't be analysed just gets no meter */
+    }
+  }
+
+  removeMeter(name) {
+    const m = this.analysers.get(name);
+    if (m) {
+      try {
+        m.src.disconnect();
+        m.analyser.disconnect();
+      } catch {
+        /* already gone */
+      }
+      this.analysers.delete(name);
+    }
+    delete this.levels[name];
+    this.speaking.delete(name);
+  }
+
+  startMeter() {
+    if (this.meterRAF || typeof requestAnimationFrame === 'undefined') return;
+    const tick = () => {
+      let changed = false;
+      for (const [name, m] of this.analysers) {
+        m.analyser.getByteTimeDomainData(m.data);
+        const rms = frameRms(m.data);
+        this.levels[name] = levelFromRms(rms);
+        const was = this.speaking.has(name);
+        const now = nextSpeaking(was, rms);
+        if (now !== was) {
+          if (now) this.speaking.add(name);
+          else this.speaking.delete(name);
+          changed = true;
+        }
+      }
+      if (typeof window !== 'undefined') window.__voiceLevels = this.levels;
+      if (changed) this.publish(); // React re-renders only on start/stop talking
+      this.meterRAF = requestAnimationFrame(tick);
+    };
+    this.meterRAF = requestAnimationFrame(tick);
+  }
+
+  stopMeter() {
+    if (this.meterRAF && typeof cancelAnimationFrame !== 'undefined') {
+      cancelAnimationFrame(this.meterRAF);
+    }
+    this.meterRAF = null;
+    for (const m of this.analysers.values()) {
+      try {
+        m.src.disconnect();
+        m.analyser.disconnect();
+      } catch {
+        /* already gone */
+      }
+    }
+    this.analysers.clear();
+    this.levels = {};
+    this.speaking.clear();
+    try {
+      this.meterSink?.disconnect();
+    } catch {
+      /* already gone */
+    }
+    this.meterSink = null;
+    this.meterCtx?.close?.().catch?.(() => {});
+    this.meterCtx = null;
+    if (typeof window !== 'undefined') window.__voiceLevels = {};
   }
 
   track(server, channel, name, present) {
@@ -81,6 +199,7 @@ export class VoiceManager {
     if (this.active) await this.leave();
     const stream = await this.captureAudio();
     this.active = { server, channel, stream };
+    this.addMeter(this.me, stream); // show my own level even before anyone joins
     this.track(server, channel, this.me, true);
     await this.send(server, { k: 'voice', ch: channel, action: 'join' });
     this.publish();
@@ -92,11 +211,13 @@ export class VoiceManager {
     await this.send(server, { k: 'voice', ch: channel, action: 'leave' }).catch(() => {});
     for (const [, peer] of this.peers) this.teardownPeer(peer);
     this.peers.clear();
+    this.stopMeter();
     stream.getTracks().forEach((t) => t.stop());
     this.audioCtx?.close?.().catch?.(() => {});
     this.audioCtx = null;
     this.track(server, channel, this.me, false);
     this.active = null;
+    this.dial = null; // hanging up also ends any outstanding outgoing ring
     this.publish();
   }
 
@@ -114,12 +235,65 @@ export class VoiceManager {
     if (!peer) return;
     this.teardownPeer(peer);
     this.peers.delete(name);
+    this.removeMeter(name);
     this.publish();
   }
 
   /** Ask who's in voice (on connect/reconnect) — participants answer 'here'. */
   async probe(server) {
     await this.send(server, { k: 'voice', ch: '*', action: 'probe' }).catch(() => {});
+  }
+
+  // === direct (1:1) calls ================================================
+  // A direct call is just an ad-hoc voice room shared by two members of a
+  // circle: no new crypto, it rides the same MLS group. A `ring` envelope
+  // invites the callee; both sides derive the same deterministic room id and
+  // the existing mesh machinery does the rest.
+
+  /** Deterministic room id for a pair, so both sides derive the same name. */
+  directRoom(a, b) {
+    return 'dm:' + [a, b].sort().join('+');
+  }
+
+  /** The other party in a direct room, or null for a normal voice room. */
+  directPeer(channel) {
+    if (!channel || !channel.startsWith('dm:')) return null;
+    return channel.slice(3).split('+').find((n) => n !== this.me) ?? null;
+  }
+
+  /** Ring a member we share this server with, and wait in the room. */
+  async callUser(server, name) {
+    if (name === this.me || this.active || this.dial) return;
+    const room = this.directRoom(this.me, name);
+    this.dial = { server, room, to: name };
+    await this.send(server, { k: 'ring', to: name, ch: room, action: 'invite' });
+    await this.join(server, room); // the caller waits in the room for an answer
+  }
+
+  /** Give up on an unanswered outgoing call. */
+  async cancelCall() {
+    const d = this.dial;
+    if (!d) return;
+    this.dial = null;
+    await this.send(d.server, { k: 'ring', to: d.to, ch: d.room, action: 'cancel' }).catch(() => {});
+    await this.leave();
+  }
+
+  /** Answer an incoming ring: join the same room; the caller is already there. */
+  async acceptRing() {
+    const r = this.ring;
+    if (!r) return;
+    this.ring = null;
+    await this.send(r.server, { k: 'ring', to: r.from, ch: r.room, action: 'accept' }).catch(() => {});
+    await this.join(r.server, r.room);
+  }
+
+  async declineRing() {
+    const r = this.ring;
+    if (!r) return;
+    this.ring = null;
+    await this.send(r.server, { k: 'ring', to: r.from, ch: r.room, action: 'decline' }).catch(() => {});
+    this.publish();
   }
 
   /** MLS membership changed: anyone no longer in the group leaves the mesh
@@ -146,6 +320,44 @@ export class VoiceManager {
 
   async handleEnvelope(server, sender, content) {
     if (sender === this.me) return;
+
+    if (content.k === 'ring') {
+      if (content.to !== this.me) return; // rings are addressed to one member
+      switch (content.action) {
+        case 'invite': {
+          if (this.active || this.ring) {
+            // Busy: refuse right away so the caller stops ringing.
+            await this.send(server, { k: 'ring', to: sender, ch: content.ch, action: 'decline' }).catch(() => {});
+            return;
+          }
+          this.ring = { server, room: content.ch, from: sender };
+          break;
+        }
+        case 'accept': {
+          this.dial = null; // callee picked up — we're in the call now
+          break;
+        }
+        case 'decline': {
+          if (this.dial && this.dial.to === sender) {
+            this.dial = null;
+            this.onNotify(`${sender} declined the call`);
+            await this.leave();
+            return;
+          }
+          break;
+        }
+        case 'cancel': {
+          if (this.ring && this.ring.from === sender) {
+            this.ring = null;
+            this.onNotify(`missed call from ${sender}`);
+          }
+          break;
+        }
+      }
+      this.publish();
+      return;
+    }
+
     if (content.k === 'voice') {
       switch (content.action) {
         case 'join':
@@ -163,6 +375,10 @@ export class VoiceManager {
         case 'leave': {
           this.track(server, content.ch, sender, false);
           this.dropPeer(sender);
+          // A direct call ends the instant the other side hangs up.
+          if (this.active && this.directPeer(this.active.channel) && this.peers.size === 0) {
+            await this.leave();
+          }
           break;
         }
         case 'probe': {
@@ -223,6 +439,7 @@ export class VoiceManager {
       // join click is normally gesture enough.
       audio.play().catch(() => {});
       peer.audio = audio;
+      this.addMeter(name, streams[0]); // measure this peer's speaking level
     };
     pc.onconnectionstatechange = () => {
       if (['failed', 'closed', 'disconnected'].includes(pc.connectionState)) {

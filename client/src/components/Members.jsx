@@ -1,13 +1,13 @@
 import React, { useState } from 'react';
 import Seal from './Seal.jsx';
-import { Check } from './icons.jsx';
+import { Check, Phone } from './icons.jsx';
 
 // The roster is the security boundary: it is, exactly, who can read this
 // circle. Adding someone happens here, not in a settings page, because it
 // is a cryptographic act — a new epoch — not an administrative one.
 // Roles are relay-side and weaker: admins manage the ACL (adding members,
 // invites, promotions), but they gain no read access anyone else lacks.
-export default function Members({ server, me, canManage, onAdd, onMember, onSetRole }) {
+export default function Members({ server, me, canManage, onAdd, onMember, onSetRole, onCall }) {
   const [name, setName] = useState('');
   const roles = server.roles ?? {};
 
@@ -31,6 +31,16 @@ export default function Members({ server, me, canManage, onAdd, onMember, onSetR
             >
               {m}
             </button>
+            {m !== me && onCall && (
+              <button
+                className="ghost member-call"
+                data-testid={`call-${m}`}
+                title={`call ${m}`}
+                onClick={() => onCall(m)}
+              >
+                <Phone size={13} />
+              </button>
+            )}
             <span className="tag">
               {roles[m] === 'admin' && (
                 <span className="badge-admin" title="manages membership and invites for this circle">

@@ -127,6 +127,7 @@ export class Controller {
       me: this.me,
       send: (server, content) => this.sendEphemeral(server, content),
       onState: (state) => this.dispatch({ type: 'voice', state }),
+      onNotify: (text) => this.dispatch({ type: 'toast', text }),
     });
     this.relay = new Relay({
       url: this.relayUrl,
@@ -235,7 +236,7 @@ export class Controller {
       await this.persistState(state);
       if (event.kind !== 'message') return;
       const content = JSON.parse(event.text);
-      if (content.k === 'voice' || content.k === 'rtc') {
+      if (content.k === 'voice' || content.k === 'rtc' || content.k === 'ring') {
         await this.voice.handleEnvelope(msg.group, event.sender, content);
       }
     } catch (e) {
@@ -262,6 +263,7 @@ export class Controller {
       id: group,
       name: group, // placeholder until the meta rebroadcast lands
       channels: ['general'],
+      voiceChannels: ['lounge'],
       members,
       epoch,
       lastSeq: msg.after,
@@ -309,6 +311,7 @@ export class Controller {
               k: 'meta',
               name: record.name,
               channels: record.channels,
+              voiceChannels: record.voiceChannels ?? ['lounge'],
             });
           }
         } else {
@@ -355,6 +358,11 @@ export class Controller {
         for (const ch of content.channels ?? []) {
           if (!record.channels.includes(ch)) record.channels.push(ch);
         }
+        if (content.voiceChannels) {
+          const rooms = record.voiceChannels ?? ['lounge'];
+          for (const ch of content.voiceChannels) if (!rooms.includes(ch)) rooms.push(ch);
+          record.voiceChannels = rooms;
+        }
         break;
       }
       case 'file': {
@@ -372,6 +380,14 @@ export class Controller {
         if (!record.channels.includes(content.ch)) {
           record.channels.push(content.ch);
           await this.addSystemMessage(record.id, `#${content.ch} created by ${sender}`, content.ch);
+        }
+        break;
+      }
+      case 'vchan': {
+        const rooms = record.voiceChannels ?? ['lounge'];
+        if (!rooms.includes(content.ch)) {
+          record.voiceChannels = [...rooms, content.ch];
+          await this.addSystemMessage(record.id, `voice room "${content.ch}" created by ${sender}`);
         }
         break;
       }
@@ -399,6 +415,7 @@ export class Controller {
       id,
       name,
       channels: ['general'],
+      voiceChannels: ['lounge'],
       members: [this.me],
       roles: { [this.me]: 'admin' },
       epoch: 0,
@@ -417,6 +434,19 @@ export class Controller {
     if (!ch || record.channels.includes(ch)) return;
     record.channels.push(ch);
     await this.sendContent(serverId, { k: 'chan', ch });
+    await this.db.serverPut(record);
+    this.dispatch({ type: 'servers', servers: this.snapshotServers() });
+  }
+
+  /** Create a named voice room. Like text rooms, the name travels inside the
+      encryption; the relay only ever sees an opaque ephemeral/log blob. */
+  async createVoiceChannel(serverId, channel) {
+    const record = this.servers.get(serverId);
+    const ch = channel.toLowerCase().replace(/[^a-z0-9-]+/g, '-');
+    const rooms = record.voiceChannels ?? ['lounge'];
+    if (!ch || rooms.includes(ch)) return;
+    record.voiceChannels = [...rooms, ch];
+    await this.sendContent(serverId, { k: 'vchan', ch });
     await this.db.serverPut(record);
     this.dispatch({ type: 'servers', servers: this.snapshotServers() });
   }
@@ -457,7 +487,12 @@ export class Controller {
     await this.addSystemMessage(serverId, `${user} added (epoch ${epoch}) — unverified until you check their safety number`);
     // Joiners have no scrollback: rebroadcast name + channels so their
     // placeholder record fills in.
-    await this.sendContent(serverId, { k: 'meta', name: record.name, channels: record.channels });
+    await this.sendContent(serverId, {
+      k: 'meta',
+      name: record.name,
+      channels: record.channels,
+      voiceChannels: record.voiceChannels ?? ['lounge'],
+    });
     await this.db.serverPut(record);
     this.dispatch({ type: 'servers', servers: this.snapshotServers() });
     this.refreshRoles(serverId);
@@ -822,7 +857,13 @@ export class Controller {
     // Plain-object projection for React (sorted stable by join time).
     return [...this.servers.values()]
       .sort((a, b) => (a.joinedAt ?? 0) - (b.joinedAt ?? 0))
-      .map((r) => ({ ...r, channels: [...r.channels], members: [...r.members], roles: { ...(r.roles ?? {}) } }));
+      .map((r) => ({
+        ...r,
+        channels: [...r.channels],
+        voiceChannels: [...(r.voiceChannels ?? ['lounge'])],
+        members: [...r.members],
+        roles: { ...(r.roles ?? {}) },
+      }));
   }
 
   async loadMessages(serverId, channel) {
