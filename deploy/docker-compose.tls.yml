@@ -22,6 +22,7 @@ services:
       RP_ID: ${CADDY_DOMAIN}
       RP_ORIGIN: https://${CADDY_DOMAIN}
       VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
+      ICE_SERVERS: ${ICE_SERVERS:-}
 
   caddy:
     image: caddy:2

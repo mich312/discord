@@ -156,6 +156,15 @@ export class Controller {
           payloads.push(b64.enc(keyPackage));
         }
         await this.relay.request({ t: 'publish_kp', payloads });
+        // Pick up the operator's ICE servers (STUN/TURN) so voice can traverse
+        // NATs. Falls back to VoiceManager's built-in STUN if unavailable.
+        try {
+          const ice = await this.relay.request({ t: 'ice_info' });
+          const servers = JSON.parse(ice.servers);
+          if (Array.isArray(servers) && servers.length) this.voice.iceServers = servers;
+        } catch (e) {
+          console.warn(`ice_info: ${e.message}`);
+        }
         for (const record of this.servers.values()) {
           this.voice.probe(record.id);
         }
