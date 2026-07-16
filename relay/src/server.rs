@@ -223,7 +223,7 @@ impl App {
                 Ok(false) => {
                     let _ = self.store.delete_push_subscription(user, &endpoint).await;
                 }
-                Err(e) => tracing::debug!("push to {user} failed: {e}"),
+                Err(e) => tracing::warn!("push to {user} failed: {e}"),
             }
         }
     }

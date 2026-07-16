@@ -731,10 +731,24 @@ export class Controller {
     const permission = await Notification.requestPermission();
     if (permission !== 'granted') throw new Error('notification permission denied');
     const info = await this.relay.request({ t: 'push_info' });
-    const subscription = await this.swReg.pushManager.subscribe({
-      userVisibleOnly: true,
-      applicationServerKey: b64url.dec(info.pubkey),
-    });
+    const appKey = b64url.dec(info.pubkey);
+    const subscribe = () =>
+      this.swReg.pushManager.subscribe({ userVisibleOnly: true, applicationServerKey: appKey });
+    let subscription;
+    try {
+      subscription = await subscribe();
+    } catch (e) {
+      // The browser refuses to create a subscription when one already exists
+      // with a *different* applicationServerKey — which is exactly what
+      // happens after the relay's VAPID key rotates (e.g. an early ephemeral
+      // key, or a redeploy). The stale subscription is dead: the push service
+      // rejects everything signed with the new key. Drop it and re-subscribe
+      // so this device heals itself instead of staying silently broken.
+      const existing = await this.swReg.pushManager.getSubscription();
+      if (!existing) throw e;
+      await existing.unsubscribe().catch(() => {});
+      subscription = await subscribe();
+    }
     await this.relay.request({
       t: 'push_subscribe',
       subscription: JSON.stringify(subscription.toJSON()),
