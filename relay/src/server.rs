@@ -171,19 +171,22 @@ pub async fn handle_socket(mut socket: WebSocket, app: Arc<App>) {
 
     let (tx, mut rx) = mpsc::unbounded_channel::<ServerMsg>();
     {
+        // Register as online AND drain Welcomes queued while offline under a
+        // single hold of the hub lock. This serializes against the Welcome
+        // handler's "check online, else store" critical section: otherwise a
+        // Welcome that saw us offline could store *just after* we drained,
+        // stranding it until our next reconnect.
         let mut hub = app.hub.lock().await;
         hub.online.insert(user.clone(), tx.clone());
-    }
-
-    // Flush Welcomes queued while this user was offline.
-    if let Ok(welcomes) = app.store.take_welcomes(&user).await {
-        for w in welcomes {
-            let _ = tx.send(ServerMsg::Welcome {
-                from: w.from,
-                group: w.group,
-                after: w.after,
-                payload: B64.encode(&w.payload),
-            });
+        if let Ok(welcomes) = app.store.take_welcomes(&user).await {
+            for w in welcomes {
+                let _ = tx.send(ServerMsg::Welcome {
+                    from: w.from,
+                    group: w.group,
+                    after: w.after,
+                    payload: B64.encode(&w.payload),
+                });
+            }
         }
     }
 
@@ -318,36 +321,45 @@ async fn handle_request(
             };
             // Append and fan out under the hub lock: seq order == delivery
             // order for every subscriber.
-            let mut hub = app.hub.lock().await;
-            let seq = match app.store.append_message(&group, epoch, user, payload.clone()).await {
-                Ok(s) => s,
-                Err(e) => return err(rid, e),
-            };
-            if let Some(subs) = hub.subscribers.get_mut(&group) {
-                let out = ServerMsg::Msg {
-                    group: group.clone(),
-                    seq,
-                    epoch,
-                    sender: user.to_string(),
-                    payload: B64.encode(&payload),
+            let seq = {
+                let mut hub = app.hub.lock().await;
+                let seq = match app.store.append_message(&group, epoch, user, payload.clone()).await
+                {
+                    Ok(s) => s,
+                    Err(e) => return err(rid, e),
                 };
-                subs.retain(|peer, ch| {
-                    if peer == user {
-                        return true;
-                    }
-                    ch.send(out.clone()).is_ok()
-                });
-            }
-            // Nudge members with no live connection. Payload carries only
-            // what the relay knows anyway (the group id).
+                if let Some(subs) = hub.subscribers.get_mut(&group) {
+                    let out = ServerMsg::Msg {
+                        group: group.clone(),
+                        seq,
+                        epoch,
+                        sender: user.to_string(),
+                        payload: B64.encode(&payload),
+                    };
+                    subs.retain(|peer, ch| {
+                        if peer == user {
+                            return true;
+                        }
+                        ch.send(out.clone()).is_ok()
+                    });
+                }
+                seq
+            };
+            // Nudge members with no live connection. The membership read is a
+            // DB round-trip, so keep it off the hub lock — only the in-memory
+            // liveness check needs the lock. Push is a best-effort nudge, so a
+            // small liveness race here is harmless. Payload carries only what
+            // the relay knows anyway (the group id).
             let offline: Vec<String> = match app.store.group_members(&group).await {
-                Ok(members) => members
-                    .into_iter()
-                    .filter(|m| m != user && !hub.online.contains_key(m))
-                    .collect(),
+                Ok(members) => {
+                    let hub = app.hub.lock().await;
+                    members
+                        .into_iter()
+                        .filter(|m| m != user && !hub.online.contains_key(m))
+                        .collect()
+                }
                 Err(_) => Vec::new(),
             };
-            drop(hub);
             if !offline.is_empty() {
                 let app = app.clone();
                 let group = group.clone();
@@ -374,16 +386,25 @@ async fn handle_request(
                 after,
                 payload: B64.encode(&payload),
             };
+            // Deliver live if the recipient is connected, else persist for
+            // their next connect. The online check and the store both happen
+            // under the hub lock so they can't interleave with a recipient's
+            // connect+drain (see handle_socket) — which would otherwise let a
+            // Welcome be neither delivered nor drained.
             let hub = app.hub.lock().await;
             let delivered = hub.online.get(&to).is_some_and(|ch| ch.send(out.clone()).is_ok());
-            drop(hub);
             if !delivered {
                 let stored =
                     StoredWelcome { from: user.to_string(), group: group.clone(), after, payload };
                 if let Err(e) = app.store.store_welcome(&to, stored).await {
+                    drop(hub);
                     return err(rid, e);
                 }
+            }
+            drop(hub);
+            if !delivered {
                 let app = app.clone();
+                let to = to.clone();
                 tokio::spawn(async move {
                     app.push_notify(&to, serde_json::json!({"welcome": group})).await;
                 });
