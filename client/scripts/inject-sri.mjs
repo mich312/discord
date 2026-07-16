@@ -9,8 +9,11 @@
 import { createHash } from 'node:crypto';
 import { readFileSync, writeFileSync } from 'node:fs';
 import { join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
-const dist = new URL('../dist', import.meta.url).pathname;
+// fileURLToPath (not URL.pathname) so a space in the project path — e.g.
+// "Mobile Documents" under iCloud — decodes instead of staying %20.
+const dist = fileURLToPath(new URL('../dist', import.meta.url));
 const htmlPath = join(dist, 'index.html');
 let html = readFileSync(htmlPath, 'utf8');
 
