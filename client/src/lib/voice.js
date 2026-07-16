@@ -435,9 +435,26 @@ export class VoiceManager {
       const audio = new Audio();
       audio.srcObject = streams[0];
       audio.autoplay = true;
+      audio.playsInline = true;
+      // Attach the element to the DOM. A detached <audio> plays unreliably:
+      // iOS Safari won't play it at all, and on desktop the audio can fail to
+      // follow the system output device (e.g. Bluetooth headphones) — it
+      // sticks to the default sink. Hidden in the DOM, playback routes to the
+      // active output like any other media element.
+      audio.style.display = 'none';
+      if (typeof document !== 'undefined') document.body.appendChild(audio);
       // Autoplay can be blocked pre-gesture; media still flows and the
-      // join click is normally gesture enough.
-      audio.play().catch(() => {});
+      // join click is normally gesture enough. Retry once on the next pointer
+      // interaction so a blocked start doesn't leave the call silent.
+      const tryPlay = () => audio.play().catch(() => {});
+      tryPlay();
+      if (typeof document !== 'undefined') {
+        const resume = () => {
+          tryPlay();
+          document.removeEventListener('pointerdown', resume);
+        };
+        document.addEventListener('pointerdown', resume, { once: true });
+      }
       peer.audio = audio;
       this.addMeter(name, streams[0]); // measure this peer's speaking level
     };
