@@ -20,7 +20,16 @@ pub enum ClientMsg {
     CreateGroup { rid: u64, group: String },
     /// Allow `user` to subscribe/send on `group` (server-side ACL only —
     /// the cryptographic boundary is MLS membership, not this list).
+    /// Group admins only.
     Allow { rid: u64, group: String, user: String },
+    /// Promote/demote a member ("admin" | "member"). Group admins only;
+    /// the last admin of a group cannot be demoted.
+    SetRole { rid: u64, group: String, user: String, role: String },
+    /// The group's roster with roles. Members (or a global admin).
+    Members { rid: u64, group: String },
+    /// Global admins only: every registered user and every group the relay
+    /// knows about. Metadata only — the relay has nothing else to show.
+    AdminList { rid: u64 },
     /// Join the live fan-out and receive the log after seq `after`.
     Subscribe { rid: u64, group: String, after: u64 },
     /// Append an opaque blob to the group log. `epoch` is client-declared
@@ -81,7 +90,9 @@ pub enum ClientMsg {
 #[serde(tag = "t", rename_all = "snake_case")]
 pub enum ServerMsg {
     Challenge { nonce: String },
-    Ready { user: String },
+    Ready { user: String, global_admin: bool },
+    Members { rid: u64, group: String, members: Vec<MemberEntry> },
+    AdminList { rid: u64, users: Vec<String>, groups: Vec<GroupEntry> },
     Ok { rid: u64, #[serde(skip_serializing_if = "Option::is_none")] seq: Option<u64> },
     Error { #[serde(skip_serializing_if = "Option::is_none")] rid: Option<u64>, message: String },
     Kp { rid: u64, user: String, #[serde(skip_serializing_if = "Option::is_none")] payload: Option<String> },
@@ -96,6 +107,18 @@ pub enum ServerMsg {
     VaultStatus { rid: u64, kind: Option<String> },
     /// WebAuthn ceremony payloads (JSON passthrough).
     Passkey { rid: u64, payload: String },
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct MemberEntry {
+    pub user: String,
+    pub role: String,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct GroupEntry {
+    pub group: String,
+    pub created_by: String,
 }
 
 pub const AUTH_CONTEXT: &[u8] = b"relay-auth-v1";

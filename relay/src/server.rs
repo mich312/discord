@@ -5,16 +5,18 @@
 
 use crate::account::AccountService;
 use crate::blobs::BlobStore;
-use crate::proto::{ClientMsg, ServerMsg, AUTH_CONTEXT};
+use crate::proto::{ClientMsg, GroupEntry, MemberEntry, ServerMsg, AUTH_CONTEXT};
 use crate::push::PushService;
-use crate::store::{InviteRecord, RegisterOutcome, Store, StoreError, StoredWelcome};
+use crate::store::{
+    InviteRecord, RegisterOutcome, Store, StoreError, StoredWelcome, ROLE_ADMIN, ROLE_MEMBER,
+};
 use axum::extract::ws::{Message, WebSocket};
 use base64::engine::general_purpose::STANDARD as B64;
 use base64::Engine;
 use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use futures_util::{SinkExt, StreamExt};
 use rand::RngCore;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Arc;
 use tokio::sync::{mpsc, Mutex};
 
@@ -24,6 +26,10 @@ pub struct App {
     pub blobs: BlobStore,
     pub push: PushService,
     pub accounts: AccountService,
+    /// Global admins (RELAY_ADMINS, comma-separated user ids): treated as
+    /// admin of every group and allowed to list all users/groups. Metadata
+    /// power only — message content stays end-to-end encrypted.
+    pub admins: HashSet<String>,
     /// JSON array of RTCIceServer objects handed to voice clients. Operator-
     /// set via `ICE_SERVERS`; defaults to a public STUN (enough for cone NATs,
     /// but self-hosters behind symmetric NATs must supply their own TURN).
@@ -72,12 +78,29 @@ impl App {
     }
 
     pub fn with_parts(store: Box<dyn Store>, blobs: BlobStore, push: PushService) -> Arc<Self> {
+        let admins = std::env::var("RELAY_ADMINS")
+            .unwrap_or_default()
+            .split(',')
+            .map(str::trim)
+            .filter(|s| !s.is_empty())
+            .map(String::from)
+            .collect();
+        Self::with_parts_and_admins(store, blobs, push, admins)
+    }
+
+    pub fn with_parts_and_admins(
+        store: Box<dyn Store>,
+        blobs: BlobStore,
+        push: PushService,
+        admins: HashSet<String>,
+    ) -> Arc<Self> {
         Arc::new(Self {
             store,
             hub: Mutex::new(Hub::default()),
             blobs,
             push,
             accounts: AccountService::from_env(),
+            admins,
             ice_servers: parse_ice_servers(std::env::var("ICE_SERVERS").ok()),
         })
     }
@@ -184,7 +207,8 @@ async fn authenticate(socket: &mut WebSocket, app: &App) -> Option<String> {
         }
     }
 
-    send_json(socket, &ServerMsg::Ready { user: user.clone() }).await.ok()?;
+    let ready = ServerMsg::Ready { user: user.clone(), global_admin: app.admins.contains(&user) };
+    send_json(socket, &ready).await.ok()?;
     Some(user)
 }
 
@@ -306,13 +330,81 @@ async fn handle_request(
         }
 
         ClientMsg::Allow { rid, group, user: target } => {
-            match require_member(app, &group, user).await {
+            match require_admin(app, &group, user).await {
                 Ok(()) => match app.store.allow_member(&group, &target).await {
                     Ok(()) => Some(ServerMsg::Ok { rid, seq: None }),
                     Err(e) => err(rid, e),
                 },
                 Err(e) => err(rid, e),
             }
+        }
+
+        ClientMsg::SetRole { rid, group, user: target, role } => {
+            if role != ROLE_ADMIN && role != ROLE_MEMBER {
+                return err(rid, "role must be admin or member");
+            }
+            if let Err(e) = require_admin(app, &group, user).await {
+                return err(rid, e);
+            }
+            // A group must always keep at least one admin, or it becomes
+            // unmanageable (global admins aside).
+            if role == ROLE_MEMBER {
+                let members = match app.store.group_members(&group).await {
+                    Ok(m) => m,
+                    Err(e) => return err(rid, e),
+                };
+                let target_is_admin =
+                    members.iter().any(|(m, r)| m == &target && r == ROLE_ADMIN);
+                let admins = members.iter().filter(|(_, r)| r == ROLE_ADMIN).count();
+                if target_is_admin && admins <= 1 {
+                    return err(rid, "cannot demote the last admin");
+                }
+            }
+            match app.store.set_member_role(&group, &target, &role).await {
+                Ok(()) => Some(ServerMsg::Ok { rid, seq: None }),
+                Err(e) => err(rid, e),
+            }
+        }
+
+        ClientMsg::Members { rid, group } => {
+            if !app.admins.contains(user) {
+                if let Err(e) = require_member(app, &group, user).await {
+                    return err(rid, e);
+                }
+            }
+            match app.store.group_members(&group).await {
+                Ok(members) => Some(ServerMsg::Members {
+                    rid,
+                    group,
+                    members: members
+                        .into_iter()
+                        .map(|(user, role)| MemberEntry { user, role })
+                        .collect(),
+                }),
+                Err(e) => err(rid, e),
+            }
+        }
+
+        ClientMsg::AdminList { rid } => {
+            if !app.admins.contains(user) {
+                return err(rid, "global admin required");
+            }
+            let users = match app.store.list_users().await {
+                Ok(u) => u,
+                Err(e) => return err(rid, e),
+            };
+            let groups = match app.store.list_groups().await {
+                Ok(g) => g,
+                Err(e) => return err(rid, e),
+            };
+            Some(ServerMsg::AdminList {
+                rid,
+                users,
+                groups: groups
+                    .into_iter()
+                    .map(|(group, created_by)| GroupEntry { group, created_by })
+                    .collect(),
+            })
         }
 
         ClientMsg::Subscribe { rid, group, after } => {
@@ -384,6 +476,7 @@ async fn handle_request(
                     let hub = app.hub.lock().await;
                     members
                         .into_iter()
+                        .map(|(m, _)| m)
                         .filter(|m| m != user && !hub.online.contains_key(m))
                         .collect()
                 }
@@ -442,7 +535,7 @@ async fn handle_request(
         }
 
         ClientMsg::CreateInvite { rid, invite, group, payload, expires_at, max_uses } => {
-            if let Err(e) = require_member(app, &group, user).await {
+            if let Err(e) = require_admin(app, &group, user).await {
                 return err(rid, e);
             }
             let payload = match decode_b64(&payload) {
@@ -462,7 +555,7 @@ async fn handle_request(
                 Ok(None) => return err(rid, StoreError::InviteInvalid),
                 Err(e) => return err(rid, e),
             };
-            if let Err(e) = require_member(app, &group, user).await {
+            if let Err(e) = require_admin(app, &group, user).await {
                 return err(rid, e);
             }
             let payload = match decode_b64(&payload) {
@@ -481,7 +574,7 @@ async fn handle_request(
                 Ok(None) => return Some(ServerMsg::Ok { rid, seq: None }), // already gone
                 Err(e) => return err(rid, e),
             };
-            if let Err(e) = require_member(app, &group, user).await {
+            if let Err(e) = require_admin(app, &group, user).await {
                 return err(rid, e);
             }
             match app.store.revoke_invite(&invite).await {
@@ -607,6 +700,19 @@ async fn require_member(app: &App, group: &str, user: &str) -> Result<(), StoreE
         Ok(true) => Ok(()),
         Ok(false) => Err(StoreError::Backend(format!("not a member of {group}"))),
         Err(e) => Err(e),
+    }
+}
+
+/// Group admin or global admin. Gates the management surface: allowing
+/// members, invites, role changes.
+async fn require_admin(app: &App, group: &str, user: &str) -> Result<(), StoreError> {
+    if app.admins.contains(user) {
+        return Ok(());
+    }
+    match app.store.member_role(group, user).await? {
+        Some(role) if role == ROLE_ADMIN => Ok(()),
+        Some(_) => Err(StoreError::Backend(format!("admin of {group} required"))),
+        None => Err(StoreError::Backend(format!("not a member of {group}"))),
     }
 }
 

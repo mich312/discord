@@ -5,7 +5,7 @@ import { QuorumGlyph, LinkGlyph, CommandGlyph, Sun, Moon } from './icons.jsx';
 // title (not a sidebar header), epoch as a visible artifact of the key
 // schedule, and the session chrome (palette, theme, relay state) at the
 // right. Nothing here scrolls; this is the instrument's fascia.
-export default function Masthead({ server, connection, theme, onInvite, onPalette, onTheme }) {
+export default function Masthead({ server, connection, theme, canInvite, onInvite, onPalette, onTheme }) {
   return (
     <header className="masthead">
       <div className="masthead-brand">
@@ -23,7 +23,7 @@ export default function Masthead({ server, connection, theme, onInvite, onPalett
         </div>
       )}
       <div className="masthead-actions">
-        {server && (
+        {server && canInvite && (
           <button className="button" data-testid="create-invite" title="create an invite link" onClick={onInvite}>
             <LinkGlyph />
             invite

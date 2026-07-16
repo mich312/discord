@@ -25,6 +25,7 @@ const initial = {
   modal: null, // invite | identity | safety | secure
   voice: { active: null, connections: {}, presence: {} },
   vault: { kind: undefined, securedLocal: true }, // kind: undefined=unknown, null=none
+  globalAdmin: false, // relay-side flag (RELAY_ADMINS)
 };
 
 function reducer(state, action) {
@@ -71,6 +72,8 @@ function reducer(state, action) {
       return { ...state, voice: action.state };
     case 'vault':
       return { ...state, vault: { kind: action.kind, securedLocal: action.securedLocal } };
+    case 'admin':
+      return { ...state, globalAdmin: action.globalAdmin };
     default:
       return state;
   }
@@ -188,6 +191,10 @@ export default function App() {
   }
 
   const unsecured = state.vault.kind === null && !state.vault.securedLocal;
+  // Admin of the active circle (or a global admin): may add members,
+  // create invites, and change roles. Relay-enforced; this only gates UI.
+  const canManage =
+    state.globalAdmin || (activeServer && activeServer.roles?.[state.me] === 'admin');
 
   const openIdentity = () =>
     dispatch({
@@ -212,9 +219,24 @@ export default function App() {
     }
   };
 
+  const openAdminOverview = async () => {
+    try {
+      const reply = await controllerRef.current.adminList();
+      dispatch({
+        type: 'modal',
+        modal: { type: 'admin', users: reply.users, groups: reply.groups },
+      });
+    } catch (e) {
+      dispatch({ type: 'toast', text: e.message });
+    }
+  };
+
   const paletteActions = [
-    ...(activeServer
+    ...(activeServer && canManage
       ? [{ id: 'act:invite', label: 'create invite link', hint: 'action', glyph: <LinkGlyph />, run: openInvite }]
+      : []),
+    ...(state.globalAdmin
+      ? [{ id: 'act:admin', label: 'relay admin overview', hint: 'action', glyph: <ShieldCheck />, run: openAdminOverview }]
       : []),
     { id: 'act:identity', label: 'show identity key', hint: 'action', glyph: <Key />, run: openIdentity },
     { id: 'act:secure', label: 'secure this account', hint: 'action', glyph: <ShieldCheck />, run: openSecure },
@@ -233,6 +255,7 @@ export default function App() {
         server={activeServer}
         connection={state.connection}
         theme={theme}
+        canInvite={canManage}
         onInvite={openInvite}
         onPalette={() => setPaletteOpen(true)}
         onTheme={() => setTheme((t) => (t === 'paper' ? 'carbon' : 'paper'))}
@@ -316,9 +339,15 @@ export default function App() {
             <Members
               server={activeServer}
               me={state.me}
+              canManage={canManage}
               onAdd={(user) =>
                 controllerRef.current
                   .addMember(server, user)
+                  .catch((e) => dispatch({ type: 'toast', text: e.message }))
+              }
+              onSetRole={(user, role) =>
+                controllerRef.current
+                  .setRole(server, user, role)
                   .catch((e) => dispatch({ type: 'toast', text: e.message }))
               }
               onMember={async (peer) => {

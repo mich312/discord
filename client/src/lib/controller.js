@@ -142,12 +142,16 @@ export class Controller {
   async onRelayEvent(msg) {
     switch (msg.t) {
       case 'ready': {
+        // Whether the relay treats us as a global admin (RELAY_ADMINS).
+        this.globalAdmin = !!msg.global_admin;
+        this.dispatch({ type: 'admin', globalAdmin: this.globalAdmin });
         // Re-subscribe everything from where we left off, then top up
         // the KeyPackage store so others can add us while we're away.
         for (const record of this.servers.values()) {
           await this.relay
             .request({ t: 'subscribe', group: record.id, after: record.lastSeq })
             .catch((e) => this.toast(`subscribe ${record.id}: ${e.message}`));
+          this.refreshRoles(record.id);
         }
         const payloads = [];
         for (let i = 0; i < KP_TOPUP; i++) {
@@ -235,6 +239,7 @@ export class Controller {
     await this.addSystemMessage(group, `you joined — history before this point does not exist for you`);
     this.dispatch({ type: 'servers', servers: this.snapshotServers() });
     await this.relay.request({ t: 'subscribe', group, after: msg.after });
+    this.refreshRoles(group);
   }
 
   async onGroupMessage(msg) {
@@ -281,6 +286,7 @@ export class Controller {
         }
         // Every epoch change kills parked GroupInfo blobs; refresh ours.
         await this.refreshInvites(record);
+        this.refreshRoles(record.id);
         // And nobody outside the group keeps a live voice leg.
         this.voice.membershipChanged(record.id, event.members);
       }
@@ -336,6 +342,16 @@ export class Controller {
         }
         break;
       }
+      case 'role': {
+        // Roles live in the relay's ACL; this envelope just tells everyone
+        // to re-read them and leaves a trace in the channel.
+        await this.addSystemMessage(
+          record.id,
+          `${content.user} is now ${content.role === 'admin' ? 'an admin' : 'a regular member'} (changed by ${sender})`
+        );
+        this.refreshRoles(record.id);
+        break;
+      }
     }
   }
 
@@ -351,6 +367,7 @@ export class Controller {
       name,
       channels: ['general'],
       members: [this.me],
+      roles: { [this.me]: 'admin' },
       epoch: 0,
       lastSeq: 0,
       joinedAt: Date.now(),
@@ -410,6 +427,42 @@ export class Controller {
     await this.sendContent(serverId, { k: 'meta', name: record.name, channels: record.channels });
     await this.db.serverPut(record);
     this.dispatch({ type: 'servers', servers: this.snapshotServers() });
+    this.refreshRoles(serverId);
+  }
+
+  // === roles ==============================================================
+
+  /** Pull the relay's roster roles (admin/member) into the local record.
+      Best-effort: the ACL is advisory, so failures only affect badges. */
+  async refreshRoles(serverId) {
+    const record = this.servers.get(serverId);
+    if (!record) return;
+    try {
+      const reply = await this.relay.request({ t: 'members', group: serverId });
+      record.roles = Object.fromEntries(reply.members.map((m) => [m.user, m.role]));
+      await this.db.serverPut(record);
+      this.dispatch({ type: 'servers', servers: this.snapshotServers() });
+    } catch (e) {
+      console.warn(`roles for ${serverId}: ${e.message}`);
+    }
+  }
+
+  /** Promote/demote a member (admins only — the relay enforces it), then
+      tell the group so everyone refreshes their badges. */
+  async setRole(serverId, user, role) {
+    await this.relay.request({ t: 'set_role', group: serverId, user, role });
+    await this.sendContent(serverId, { k: 'role', user, role });
+    await this.addSystemMessage(
+      serverId,
+      `${user} is now ${role === 'admin' ? 'an admin' : 'a regular member'} (changed by you)`
+    );
+    await this.refreshRoles(serverId);
+  }
+
+  /** Global admin overview: every user and group the relay knows about.
+      Metadata only — the relay cannot read names or messages. */
+  adminList() {
+    return this.relay.request({ t: 'admin_list' });
   }
 
   // === account vaults =====================================================
@@ -696,6 +749,7 @@ export class Controller {
     );
     this.dispatch({ type: 'servers', servers: this.snapshotServers() });
     await this.relay.request({ t: 'subscribe', group, after: sent.seq });
+    this.refreshRoles(group);
   }
 
   // === helpers ============================================================
@@ -735,7 +789,7 @@ export class Controller {
     // Plain-object projection for React (sorted stable by join time).
     return [...this.servers.values()]
       .sort((a, b) => (a.joinedAt ?? 0) - (b.joinedAt ?? 0))
-      .map((r) => ({ ...r, channels: [...r.channels], members: [...r.members] }));
+      .map((r) => ({ ...r, channels: [...r.channels], members: [...r.members], roles: { ...(r.roles ?? {}) } }));
   }
 
   async loadMessages(serverId, channel) {
