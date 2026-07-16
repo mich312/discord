@@ -445,7 +445,7 @@ export class Controller {
     await this.sendContent(serverId, { k: 'role', user, role });
     await this.addSystemMessage(
       serverId,
-      `${user} is now ${role === 'admin' ? 'an admin' : 'a regular member'}`
+      `${user} is now ${role === 'admin' ? 'an admin' : 'a regular member'} (changed by you)`
     );
     await this.refreshRoles(serverId);
   }
