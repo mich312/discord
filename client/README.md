@@ -59,6 +59,16 @@ conversation (grouped messages, day dividers, hover timestamps), and the
 roster. `Ctrl/⌘-K` opens a command palette (rooms, circles, actions).
 All icons are inline SVG (`src/components/icons.jsx`) — no fonts, no CDN.
 
+**Mobile** (≤820px): the same components, a different floor plan — the
+conversation owns the screen and the sidebar/roster become edge drawers
+(menu and roster toggles appear in the masthead; the invite action moves
+into the palette). Touch devices get bigger targets, surfaced
+hover-affordances, 16px inputs (so iOS doesn't zoom the page on focus),
+`dvh` heights and safe-area insets for notches and home bars. The client
+ships a web manifest plus generated icons (`scripts/gen-icons.mjs`,
+outputs committed under `public/icons/`), so it installs to the home
+screen as a PWA; the service worker for push already registers at boot.
+
 **UI gallery**: `npm run preview:ui` serves `/preview.html`, which renders
 the real components against mock state (no relay, no WASM) — views:
 `?view=app|onboarding|invited|empty|banner|palette|modal-*`, plus

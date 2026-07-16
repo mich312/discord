@@ -44,6 +44,11 @@ threat-model sections still apply verbatim.
   connection presents a currently-usable invite id (the one from the
   `?j=<id>#k=<key>` link). The very first user bootstraps a fresh relay
   without one; set `OPEN_REGISTRATION=1` to turn the gate off for dev.
+- **Mobile** — on phone-sized screens the workspace collapses to a single
+  pane: circles/rooms and the roster slide in as drawers, touch targets
+  grow, and safe areas (notch, home bar) are respected. A web manifest +
+  icons make it installable from the browser as a PWA — combined with Web
+  Push, that's the mobile app, with no store build to trust separately.
 - **Accounts (passkeys / password)** — sign in from a new device without
   moving key files. The identity bundle is parked on the relay *encrypted
   client-side*: under a passkey's PRF output (nothing brute-forceable
