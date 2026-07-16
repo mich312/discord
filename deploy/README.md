@@ -13,6 +13,59 @@ calls simply won't work over plain HTTP.
 Internet ──443──▶ Caddy (TLS termination, auto Let's Encrypt) ──▶ quorum:80 ──▶ postgres
 ```
 
+The rest of this guide assumes you have a **domain**. If you only have an IP
+address, read the next section first — then the DNS/firewall/launch steps still
+apply.
+
+## No domain? Using just an IP address
+
+Two constraints make a bare IP awkward:
+
+1. **Public CAs don't issue ordinary certificates for IP addresses** — they
+   certify domain names.
+2. **Passkeys (WebAuthn) can't use an IP at all.** The spec requires the
+   relying-party ID to be a domain, so browsers reject an IP. Password accounts
+   and all E2EE chat/voice still work; passkey sign-in does not.
+
+You have two options.
+
+### Option A (recommended): a free hostname that resolves to your IP
+
+Wildcard-DNS services like **[sslip.io](https://sslip.io)** and
+**[nip.io](https://nip.io)** map `<ip>.sslip.io` → `<ip>` with no signup. Because
+that's a real hostname, Caddy gets a genuine Let's Encrypt certificate — **no
+browser warning, and passkeys work.** Nothing extra to install; just use the
+standard setup (§3–§4) with the magic hostname as your domain:
+
+```sh
+cp deploy/.env.example deploy/.env
+# in deploy/.env:  CADDY_DOMAIN=203.0.113.10.sslip.io
+docker compose --env-file deploy/.env \
+  -f docker-compose.yml -f deploy/docker-compose.tls.yml up --build -d
+```
+
+Open `https://203.0.113.10.sslip.io`. Skip §1 (DNS) — sslip.io resolves for you.
+
+### Option B: the raw IP with a self-signed certificate
+
+If you must have the IP in the URL, Caddy can mint a self-signed cert
+(`tls internal`). The app works **after clicking through a certificate warning**
+on each device, and **passkeys stay off** (IP relying-party ID). Do the firewall
+step (§2) and install Docker (§3), then:
+
+```sh
+git clone https://github.com/mich312/discord.git quorum && cd quorum
+
+SERVER_IP=203.0.113.10 docker compose \
+  -f docker-compose.yml -f deploy/docker-compose.tls-ip.yml up --build -d
+```
+
+Open `https://203.0.113.10`, accept the warning once. (Set `VAPID_PRIVATE_KEY`
+in the same `SERVER_IP=... VAPID_PRIVATE_KEY=... docker compose ...` line to keep
+push subscriptions across restarts.) No ACME happens, so §1 (DNS) doesn't apply
+and port 80 isn't strictly required — but leave it open for the HTTP→HTTPS
+redirect.
+
 ## 1. DNS
 
 Point a domain at the VM **before** starting the stack — Caddy proves control

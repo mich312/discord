@@ -1,0 +1,43 @@
+# Production stack for a bare IP address with a SELF-SIGNED certificate:
+# Caddy → quorum relay → postgres. Use this only when you have no domain and
+# can't use a free <ip>.sslip.io hostname (which would get a real, trusted
+# cert — see deploy/README.md, "Recommended"). Browsers warn on the self-
+# signed cert, and passkeys do not work on an IP.
+#
+# Run from the repo root (SERVER_IP is your VM's public IPv4):
+#
+#   SERVER_IP=203.0.113.10 docker compose \
+#     -f docker-compose.yml -f deploy/docker-compose.tls-ip.yml up --build -d
+#
+# Layers on top of the base docker-compose.yml.
+
+services:
+  quorum:
+    ports: !reset []
+    environment:
+      # RP_ID/RP_ORIGIN drive WebAuthn, which can't work on an IP anyway;
+      # set so origin checks are at least self-consistent. Password auth
+      # ignores these.
+      RP_ID: ${SERVER_IP}
+      RP_ORIGIN: https://${SERVER_IP}
+      VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
+
+  caddy:
+    image: caddy:2
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"   # HTTP/3
+    environment:
+      CADDY_SITE_ADDRESS: https://${SERVER_IP}
+    volumes:
+      - ./deploy/Caddyfile.ip:/etc/caddy/Caddyfile:ro
+      - caddy_data:/data      # the internal CA + cert — persist it
+      - caddy_config:/config
+    depends_on:
+      - quorum
+    restart: unless-stopped
+
+volumes:
+  caddy_data:
+  caddy_config:
