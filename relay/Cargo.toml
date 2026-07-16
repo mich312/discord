@@ -17,6 +17,9 @@ serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
 subtle = "2"
+# TURN REST API ephemeral credentials (coturn use-auth-secret): HMAC-SHA1.
+hmac = "0.12"
+sha1 = "0.10"
 p256 = { version = "0.13", features = ["ecdh"] }
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres"] }
 thiserror = "2"
@@ -32,3 +35,6 @@ crypto-core = { path = "../crypto-core" }
 tempfile = "3"
 tower = { version = "0.5", features = ["util"] }
 tokio-tungstenite = "0.24"
+# Receiver-side Web Push decryption (RFC 8291/8188) for the push crypto test.
+hkdf = "0.12"
+aes-gcm = "0.10"

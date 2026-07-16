@@ -769,7 +769,7 @@ kbd {
 .member .tag { margin-left: auto; flex-shrink: 0; }
 
 .badge-you { font: var(--text-xs) var(--mono); color: var(--ink-mute); }
-.badge-verified, .badge-unverified {
+.badge-verified, .badge-unverified, .badge-admin {
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -782,6 +782,20 @@ kbd {
 }
 .badge-verified { color: var(--ok); border-color: var(--ok); }
 .badge-unverified { color: var(--accent-ink); border-color: var(--accent-ink); }
+.badge-admin { color: var(--ink-mute); border-color: var(--hairline-strong); margin-right: 4px; }
+
+.role-toggle {
+  font: 600 9px var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ink-mute);
+  cursor: pointer;
+  margin-left: 6px;
+  padding: 1px 4px;
+  visibility: hidden;
+}
+.member:hover .role-toggle { visibility: visible; }
+.role-toggle:hover { color: var(--ink); text-decoration: underline; text-underline-offset: 3px; }
 
 .add-member { padding: 10px 14px 0; }
 .add-member input {

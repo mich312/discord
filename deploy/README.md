@@ -167,6 +167,48 @@ nothing else to do.
 Certificates and the ACME account live in the `caddy_data` volume, so they
 survive restarts and you don't re-hit Let's Encrypt rate limits.
 
+## Voice calls (TURN)
+
+Text, attachments, and the app all work with just the TLS stack above. **Voice
+mesh calls** additionally need a way to traverse NAT. A public STUN server (the
+built-in default) connects callers on cone NATs, but calls between users on
+symmetric NATs or locked-down networks will silently fail to connect. The fix
+is a TURN relay, which forwards **ciphertext only** — media stays E2EE.
+
+The bundled coturn overlay uses coturn's REST API: the relay mints a
+short-lived credential per user on each connection, so no shared password is
+ever handed to clients.
+
+1. Add two vars to `deploy/.env` (`SERVER_IP`/domain is your host):
+
+   ```sh
+   TURN_SECRET=$(openssl rand -hex 32)          # shared with the relay
+   TURN_URLS=turn:chat.example.org:3478?transport=udp,turn:chat.example.org:3478?transport=tcp
+   ```
+
+2. Open the TURN ports (Hetzner Cloud Firewall **and** `ufw`):
+
+   ```sh
+   sudo ufw allow 3478/tcp
+   sudo ufw allow 3478/udp
+   sudo ufw allow 49160:49200/udp     # the relay allocation range
+   ```
+
+3. Launch with the TURN overlay added:
+
+   ```sh
+   docker compose --env-file deploy/.env \
+     -f docker-compose.yml \
+     -f deploy/docker-compose.tls.yml \
+     -f deploy/docker-compose.turn.yml up -d
+   ```
+
+**Verify:** open the [Trickle ICE tester](https://webrtc.github.io/samples/src/content/peerconnection/trickle-ice/),
+enter one of your `turn:` URLs with any username/password (the page just needs
+a server to gather against — for a real check use credentials the app serves),
+and confirm you see candidates of type `relay`. In the app, two people on
+different networks joining a voice channel should reach a connected call.
+
 ## Resetting the database
 
 The relay recreates its tables on boot, so a reset just means emptying Postgres

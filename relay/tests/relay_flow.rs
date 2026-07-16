@@ -15,16 +15,29 @@ use tokio::net::TcpStream;
 use tokio_tungstenite::tungstenite::Message;
 use tokio_tungstenite::{MaybeTlsStream, WebSocketStream};
 
+async fn spawn_relay() -> SocketAddr {
+    spawn_relay_configured(true, &[]).await
+}
+
 async fn spawn_relay_with(open_registration: bool) -> SocketAddr {
+    spawn_relay_configured(open_registration, &[]).await
+}
+
+async fn spawn_relay_with_admins(admins: &[&str]) -> SocketAddr {
+    spawn_relay_configured(true, admins).await
+}
+
+async fn spawn_relay_configured(open_registration: bool, admins: &[&str]) -> SocketAddr {
     let blobs = relay::blobs::BlobStore::new(
         tempfile::tempdir().map(|d| d.keep()).unwrap(),
     )
     .unwrap();
-    let app = App::with_parts(
+    let app = App::with_parts_and_admins(
         Box::new(MemoryStore::default()),
         blobs,
         relay::push::PushService::from_env(),
         open_registration,
+        admins.iter().map(|s| s.to_string()).collect(),
     );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
@@ -34,16 +47,13 @@ async fn spawn_relay_with(open_registration: bool) -> SocketAddr {
     addr
 }
 
-async fn spawn_relay() -> SocketAddr {
-    spawn_relay_with(true).await
-}
-
 struct TestClient {
     ws: WebSocketStream<MaybeTlsStream<TcpStream>>,
     buffered: VecDeque<Value>,
     mls: ChatClient,
     name: String,
     next_rid: u64,
+    global_admin: bool,
 }
 
 impl TestClient {
@@ -69,6 +79,7 @@ impl TestClient {
             mls,
             name: name.to_string(),
             next_rid: 1,
+            global_admin: false,
         };
         client
             .send_raw(json!({
@@ -87,6 +98,7 @@ impl TestClient {
         client.send_raw(json!({"t": "auth", "sig": B64.encode(sig)})).await;
         let reply = client.recv().await;
         if reply["t"] == "ready" {
+            client.global_admin = reply["global_admin"] == json!(true);
             Ok(client)
         } else {
             Err(reply["message"].as_str().unwrap_or("?").to_string())
@@ -634,4 +646,104 @@ async fn invite_only_registration_gate() {
             .is_err(),
         "expired invite must not admit anyone"
     );
+}
+
+#[tokio::test]
+async fn group_admins_gate_membership_invites_and_roles() {
+    let addr = spawn_relay().await;
+
+    // alice creates the group and is its first admin.
+    let mut alice =
+        TestClient::connect(addr, ChatClient::new("alice").unwrap(), "alice").await.unwrap();
+    alice.request(json!({"t": "create_group", "group": "g1"})).await;
+    let reply = alice.request(json!({"t": "allow", "group": "g1", "user": "bob"})).await;
+    assert_eq!(reply["t"], "ok", "creator can allow members");
+
+    // bob is a plain member: no allow, no invites, no role changes.
+    let mut bob = TestClient::connect(addr, ChatClient::new("bob").unwrap(), "bob").await.unwrap();
+    let reply = bob.request(json!({"t": "allow", "group": "g1", "user": "carol"})).await;
+    assert_eq!(reply["t"], "error", "plain members must not extend the ACL");
+    let reply = bob
+        .request(json!({
+            "t": "create_invite", "invite": "inv-x", "group": "g1",
+            "payload": "AA==", "expires_at": null, "max_uses": null,
+        }))
+        .await;
+    assert_eq!(reply["t"], "error", "plain members must not create invites");
+    let reply = bob
+        .request(json!({"t": "set_role", "group": "g1", "user": "bob", "role": "admin"}))
+        .await;
+    assert_eq!(reply["t"], "error", "plain members must not self-promote");
+
+    // The roster (with roles) is visible to any member.
+    let reply = bob.request(json!({"t": "members", "group": "g1"})).await;
+    assert_eq!(reply["t"], "members");
+    assert_eq!(
+        reply["members"],
+        json!([
+            {"user": "alice", "role": "admin"},
+            {"user": "bob", "role": "member"},
+        ])
+    );
+
+    // Promotion unlocks the management surface.
+    let reply = alice
+        .request(json!({"t": "set_role", "group": "g1", "user": "bob", "role": "admin"}))
+        .await;
+    assert_eq!(reply["t"], "ok");
+    let reply = bob.request(json!({"t": "allow", "group": "g1", "user": "carol"})).await;
+    assert_eq!(reply["t"], "ok", "promoted admin can allow members");
+
+    // Bad role values are rejected.
+    let reply = alice
+        .request(json!({"t": "set_role", "group": "g1", "user": "bob", "role": "owner"}))
+        .await;
+    assert_eq!(reply["t"], "error");
+
+    // Demotion works, and the last admin cannot be demoted.
+    let reply = alice
+        .request(json!({"t": "set_role", "group": "g1", "user": "bob", "role": "member"}))
+        .await;
+    assert_eq!(reply["t"], "ok");
+    let reply = alice
+        .request(json!({"t": "set_role", "group": "g1", "user": "alice", "role": "member"}))
+        .await;
+    assert_eq!(reply["t"], "error", "a group must keep at least one admin");
+}
+
+#[tokio::test]
+async fn global_admin_manages_any_group_and_lists_everything() {
+    let addr = spawn_relay_with_admins(&["root"]).await;
+
+    let root = TestClient::connect(addr, ChatClient::new("root").unwrap(), "root").await.unwrap();
+    assert!(root.global_admin, "ready must carry the global_admin flag");
+    let mut root = root;
+
+    let mut alice =
+        TestClient::connect(addr, ChatClient::new("alice").unwrap(), "alice").await.unwrap();
+    assert!(!alice.global_admin);
+    alice.request(json!({"t": "create_group", "group": "g1"})).await;
+
+    // root is not a member of g1 but can inspect and manage its ACL.
+    let reply = root.request(json!({"t": "members", "group": "g1"})).await;
+    assert_eq!(reply["t"], "members");
+    let reply = root.request(json!({"t": "allow", "group": "g1", "user": "bob"})).await;
+    assert_eq!(reply["t"], "ok");
+    let reply = root
+        .request(json!({"t": "set_role", "group": "g1", "user": "bob", "role": "admin"}))
+        .await;
+    assert_eq!(reply["t"], "ok");
+
+    // The overview lists every registered user and every group.
+    let reply = root.request(json!({"t": "admin_list"})).await;
+    assert_eq!(reply["t"], "admin_list");
+    assert_eq!(reply["users"], json!(["alice", "root"]));
+    assert_eq!(reply["groups"], json!([{"group": "g1", "created_by": "alice"}]));
+
+    // …and it is global-admin only.
+    let reply = alice.request(json!({"t": "admin_list"})).await;
+    assert_eq!(reply["t"], "error");
+    // Non-members (even non-admin members elsewhere) can't read rosters.
+    let reply = alice.request(json!({"t": "members", "group": "does-not-exist"})).await;
+    assert_eq!(reply["t"], "error");
 }

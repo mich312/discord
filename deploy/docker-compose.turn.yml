@@ -1,0 +1,45 @@
+# Opt-in TURN server (coturn) for voice across NATs. Layer this on top of one
+# of the TLS overlays when you need calls to connect between users on
+# restrictive/symmetric NATs (a public STUN server alone can't relay those).
+#
+#   docker compose --env-file deploy/.env \
+#     -f docker-compose.yml \
+#     -f deploy/docker-compose.tls.yml \
+#     -f deploy/docker-compose.turn.yml up -d
+#
+# Set in deploy/.env first:
+#   TURN_SECRET  a long random string (shared with the relay, which mints
+#                short-lived per-user credentials — no static password is ever
+#                shipped to clients). Generate: openssl rand -hex 32
+#   TURN_URLS    what the relay advertises to clients, e.g.
+#                turn:chat.example.org:3478?transport=udp,turn:chat.example.org:3478?transport=tcp
+#
+# Open these ports on the host AND any cloud firewall (e.g. Hetzner):
+#   3478/udp, 3478/tcp, and 49160-49200/udp (the relay allocation range).
+#
+# coturn uses host networking: TURN hands out a wide range of UDP ports for
+# media relay, which the userland docker-proxy handles poorly.
+
+services:
+  coturn:
+    image: coturn/coturn:4
+    network_mode: host
+    command:
+      - -n                       # no config file; all flags here
+      - --realm=${TURN_REALM:-quorum}
+      - --listening-port=3478
+      - --min-port=49160
+      - --max-port=49200
+      - --use-auth-secret        # TURN REST API: credentials are HMAC(secret, user)
+      - --static-auth-secret=${TURN_SECRET:?set TURN_SECRET in deploy/.env to run coturn}
+      - --fingerprint
+      - --no-multicast-peers
+      - --no-cli
+      # Don't let TURN relay into loopback/link-local/private ranges (SSRF).
+      - --denied-peer-ip=0.0.0.0-0.255.255.255
+      - --denied-peer-ip=10.0.0.0-10.255.255.255
+      - --denied-peer-ip=127.0.0.0-127.255.255.255
+      - --denied-peer-ip=169.254.0.0-169.254.255.255
+      - --denied-peer-ip=172.16.0.0-172.31.255.255
+      - --denied-peer-ip=192.168.0.0-192.168.255.255
+    restart: unless-stopped

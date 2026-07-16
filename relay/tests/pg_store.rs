@@ -87,6 +87,18 @@ async fn membership_acl_roundtrip() {
     s.allow_member(&group, "bob").await.unwrap();
     assert!(s.is_member(&group, "bob").await.unwrap());
     assert!(s.allow_member(&unique("missing"), "bob").await.is_err());
+
+    // Roles: creator starts as admin, allowed members start plain, and
+    // set_member_role flips them.
+    assert_eq!(s.member_role(&group, "alice").await.unwrap().as_deref(), Some("admin"));
+    assert_eq!(s.member_role(&group, "bob").await.unwrap().as_deref(), Some("member"));
+    assert_eq!(s.member_role(&group, "nobody").await.unwrap(), None);
+    s.set_member_role(&group, "bob", "admin").await.unwrap();
+    assert_eq!(s.member_role(&group, "bob").await.unwrap().as_deref(), Some("admin"));
+    assert!(s.set_member_role(&group, "nobody", "admin").await.is_err());
+    let members = s.group_members(&group).await.unwrap();
+    assert!(members.contains(&("alice".to_string(), "admin".to_string())));
+    assert!(members.contains(&("bob".to_string(), "admin".to_string())));
 }
 
 #[tokio::test]

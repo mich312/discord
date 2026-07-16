@@ -1,15 +1,16 @@
 // Drive a short two-user session and screenshot the client. Dev tooling,
 // not a test — useful for docs and eyeballing the visual register.
 import { spawn } from 'node:child_process';
+import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 
 const HTTP = 9700;
 const RELAY = 9701;
-const dir = new URL('.', import.meta.url).pathname;
+const dir = fileURLToPath(new URL('.', import.meta.url));
 const base = `http://127.0.0.1:${HTTP}/?relay=${encodeURIComponent(`ws://127.0.0.1:${RELAY}/ws`)}`;
 const out = process.env.SHOT_PATH ?? '/tmp/client.png';
 
-const relayBin = new URL('../../target/debug/relay', import.meta.url).pathname;
+const relayBin = fileURLToPath(new URL('../../target/debug/relay', import.meta.url));
 const procs = [
   spawn(relayBin, [], { stdio: 'ignore', env: { ...process.env, RELAY_PORT: RELAY } }),
   spawn('node', ['serve.mjs'], { cwd: dir, stdio: 'ignore', env: { ...process.env, HTTP_PORT: HTTP } }),

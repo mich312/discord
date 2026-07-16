@@ -118,7 +118,15 @@ relay).
 | `VAPID_PRIVATE_KEY` | unset | base64url P-256 scalar; unset = ephemeral (push subscriptions die on restart) |
 | `OPEN_REGISTRATION` | unset | unset/`0` = invite-only: unknown handles register only with a usable invite id (the first user on an empty relay is exempt); `1`/`true` = anyone can register |
 | `TRUST_PROXY` | unset | `1` = key the rate limits on the first `X-Forwarded-For` hop instead of the socket peer — set it ONLY behind a proxy that overwrites the header (the `deploy/` Caddy setups do) |
+| `TURN_URLS` / `TURN_SECRET` | unset | voice TURN via coturn's REST API — the relay mints a short-lived credential per user (no shared password to clients). `TURN_TTL` (default 3600) sets its lifetime |
+| `ICE_SERVERS` | public STUN | verbatim JSON array of RTCIceServer objects; an alternative to `TURN_*` (static creds). Unset = public STUN, which only traverses cone NATs |
 | `RP_ID` / `RP_ORIGIN` | `localhost` / `http://localhost:9601` | WebAuthn relying party — must match the origin users load the client from |
+| `RELAY_ADMINS` | unset | comma-separated handles treated as global admins: they can manage any group's ACL/roles and list all users/groups — metadata only, they cannot read messages |
+
+Membership roles: whoever creates a group is its admin; admins add
+members, manage invites, and promote/demote via the roster. This gates
+the relay's (deliberately weak) ACL — the cryptographic boundary stays
+MLS membership.
 
 For real deployments: terminate TLS in front of the relay (`wss://`) and
 run your own STUN/TURN if members sit behind hard NATs (TURN relays

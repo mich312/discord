@@ -2836,6 +2836,7 @@ checksum = "d6f6ff9a378485b298a5286656da665ba74413d36db0979633275d2e708145d4"
 name = "relay"
 version = "0.1.0"
 dependencies = [
+ "aes-gcm",
  "anyhow",
  "async-trait",
  "axum",
@@ -2843,10 +2844,13 @@ dependencies = [
  "crypto-core",
  "ed25519-dalek",
  "futures-util",
+ "hkdf",
+ "hmac",
  "p256",
  "rand 0.8.7",
  "serde",
  "serde_json",
+ "sha1",
  "sha2",
  "sqlx",
  "subtle",
