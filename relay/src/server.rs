@@ -30,33 +30,94 @@ pub struct App {
     /// admin of every group and allowed to list all users/groups. Metadata
     /// power only — message content stays end-to-end encrypted.
     pub admins: HashSet<String>,
-    /// JSON array of RTCIceServer objects handed to voice clients. Operator-
-    /// set via `ICE_SERVERS`; defaults to a public STUN (enough for cone NATs,
-    /// but self-hosters behind symmetric NATs must supply their own TURN).
-    pub ice_servers: String,
+    /// Voice ICE configuration, rendered per client (TURN credentials are
+    /// minted fresh and short-lived on each `ice_info`).
+    pub ice: IceConfig,
 }
 
-/// Default ICE config when `ICE_SERVERS` is unset: one public STUN server.
+/// Default ICE config when nothing is configured: one public STUN server.
+/// Enough for cone NATs; self-hosters behind symmetric NATs need TURN.
 pub const DEFAULT_ICE_SERVERS: &str = r#"[{"urls":"stun:stun.l.google.com:19302"}]"#;
 
-/// Validate `raw` as a JSON array (of RTCIceServer objects); fall back to the
-/// default on absent or malformed input rather than shipping voice a value the
-/// browser will reject. Kept pure (no env read) so it is unit-testable.
-pub fn parse_ice_servers(raw: Option<String>) -> String {
-    match raw {
-        Some(s) if !s.trim().is_empty() => match serde_json::from_str::<serde_json::Value>(&s) {
-            Ok(v) if v.is_array() => s,
-            _ => {
-                tracing::error!(
-                    "ICE_SERVERS is set but is not a JSON array of RTCIceServer objects; \
-                     using the default STUN server. Example: \
-                     ICE_SERVERS='[{{\"urls\":\"turn:turn.example.org:3478\",\
-                     \"username\":\"u\",\"credential\":\"p\"}}]'"
-                );
-                DEFAULT_ICE_SERVERS.to_string()
-            }
-        },
-        _ => DEFAULT_ICE_SERVERS.to_string(),
+/// How the relay answers `ice_info`. Three modes, in precedence order:
+///   1. `ICE_SERVERS` — a verbatim JSON array, served as-is (static creds).
+///   2. `TURN_URLS` + `TURN_SECRET` — the relay mints a short-lived credential
+///      per request (coturn's TURN REST API / `use-auth-secret`), so no shared
+///      password is ever shipped to clients.
+///   3. neither — the default public STUN.
+pub struct IceConfig {
+    /// Verbatim `ICE_SERVERS` passthrough; wins if present.
+    static_json: Option<String>,
+    stun_urls: Vec<String>,
+    turn_urls: Vec<String>,
+    turn_secret: Option<String>,
+    /// Credential lifetime in seconds.
+    turn_ttl: u64,
+}
+
+type HmacSha1 = hmac::Hmac<sha1::Sha1>;
+
+/// TURN REST API credential: base64(HMAC-SHA1(secret, username)), where
+/// `username` is `<expiry-unix>:<user>`. coturn recomputes and compares this.
+fn turn_credential(secret: &str, username: &str) -> String {
+    use hmac::Mac;
+    let mut mac = HmacSha1::new_from_slice(secret.as_bytes()).expect("HMAC accepts any key length");
+    mac.update(username.as_bytes());
+    B64.encode(mac.finalize().into_bytes())
+}
+
+impl IceConfig {
+    pub fn from_env() -> Self {
+        let split = |v: String| {
+            v.split(',').map(|s| s.trim().to_string()).filter(|s| !s.is_empty()).collect::<Vec<_>>()
+        };
+        let static_json = std::env::var("ICE_SERVERS")
+            .ok()
+            .filter(|s| !s.trim().is_empty())
+            .and_then(|s| match serde_json::from_str::<serde_json::Value>(&s) {
+                Ok(v) if v.is_array() => Some(s),
+                _ => {
+                    tracing::error!(
+                        "ICE_SERVERS is set but is not a JSON array of RTCIceServer objects; \
+                         ignoring it."
+                    );
+                    None
+                }
+            });
+        let turn_urls = std::env::var("TURN_URLS").ok().map(split).unwrap_or_default();
+        let turn_secret = std::env::var("TURN_SECRET").ok().filter(|s| !s.is_empty());
+        let turn_ttl =
+            std::env::var("TURN_TTL").ok().and_then(|s| s.parse().ok()).unwrap_or(3600);
+        let stun_urls = std::env::var("STUN_URLS").ok().map(split).unwrap_or_default();
+        if turn_urls.is_empty() != turn_secret.is_none() {
+            tracing::warn!(
+                "TURN needs both TURN_URLS and TURN_SECRET; ignoring the partial configuration"
+            );
+        }
+        Self { static_json, stun_urls, turn_urls, turn_secret, turn_ttl }
+    }
+
+    /// Render the ICE server list this `user` should use `now`. Pure, so it is
+    /// unit-testable and the per-request credential is deterministic per second.
+    pub fn render(&self, user: &str, now: u64) -> String {
+        if let Some(s) = &self.static_json {
+            return s.clone();
+        }
+        let mut servers: Vec<serde_json::Value> =
+            self.stun_urls.iter().map(|u| serde_json::json!({ "urls": u })).collect();
+        if let (Some(secret), false) = (&self.turn_secret, self.turn_urls.is_empty()) {
+            let username = format!("{}:{}", now + self.turn_ttl, user);
+            let credential = turn_credential(secret, &username);
+            servers.push(serde_json::json!({
+                "urls": self.turn_urls,
+                "username": username,
+                "credential": credential,
+            }));
+        }
+        if servers.is_empty() {
+            return DEFAULT_ICE_SERVERS.to_string();
+        }
+        serde_json::to_string(&servers).unwrap_or_else(|_| DEFAULT_ICE_SERVERS.to_string())
     }
 }
 
@@ -101,7 +162,7 @@ impl App {
             push,
             accounts: AccountService::from_env(),
             admins,
-            ice_servers: parse_ice_servers(std::env::var("ICE_SERVERS").ok()),
+            ice: IceConfig::from_env(),
         })
     }
 
@@ -667,7 +728,7 @@ async fn handle_request(
         }
 
         ClientMsg::IceInfo { rid } => {
-            Some(ServerMsg::IceInfo { rid, servers: app.ice_servers.clone() })
+            Some(ServerMsg::IceInfo { rid, servers: app.ice.render(user, now_unix()) })
         }
 
         ClientMsg::PushSubscribe { rid, subscription } => {
@@ -718,34 +779,81 @@ async fn require_admin(app: &App, group: &str, user: &str) -> Result<(), StoreEr
 
 #[cfg(test)]
 mod tests {
-    use super::{parse_ice_servers, DEFAULT_ICE_SERVERS};
+    use super::{turn_credential, IceConfig, DEFAULT_ICE_SERVERS};
+    use serde_json::Value;
 
-    #[test]
-    fn ice_servers_defaults_when_absent_or_blank() {
-        assert_eq!(parse_ice_servers(None), DEFAULT_ICE_SERVERS);
-        assert_eq!(parse_ice_servers(Some(String::new())), DEFAULT_ICE_SERVERS);
-        assert_eq!(parse_ice_servers(Some("   ".into())), DEFAULT_ICE_SERVERS);
+    fn cfg(
+        static_json: Option<&str>,
+        stun: &[&str],
+        turn: &[&str],
+        secret: Option<&str>,
+        ttl: u64,
+    ) -> IceConfig {
+        IceConfig {
+            static_json: static_json.map(String::from),
+            stun_urls: stun.iter().map(|s| s.to_string()).collect(),
+            turn_urls: turn.iter().map(|s| s.to_string()).collect(),
+            turn_secret: secret.map(String::from),
+            turn_ttl: ttl,
+        }
     }
 
     #[test]
-    fn ice_servers_passes_through_a_valid_json_array() {
-        let custom =
-            r#"[{"urls":"turn:turn.example.org:3478","username":"u","credential":"p"}]"#;
-        assert_eq!(parse_ice_servers(Some(custom.to_string())), custom);
-        // An empty array is a valid (if useless) choice — respect it.
-        assert_eq!(parse_ice_servers(Some("[]".into())), "[]");
+    fn defaults_to_public_stun_when_nothing_is_configured() {
+        assert_eq!(cfg(None, &[], &[], None, 3600).render("alice", 1000), DEFAULT_ICE_SERVERS);
     }
 
     #[test]
-    fn ice_servers_rejects_non_arrays_and_garbage() {
-        // A JSON object (not an array) is the classic misconfiguration.
+    fn static_ice_servers_win_and_are_served_verbatim() {
+        let custom = r#"[{"urls":"turn:t.example:3478","username":"u","credential":"p"}]"#;
+        // Even with TURN also configured, an explicit ICE_SERVERS passthrough wins.
+        let c = cfg(Some(custom), &[], &["turn:other:3478"], Some("s"), 3600);
+        assert_eq!(c.render("alice", 1000), custom);
+    }
+
+    #[test]
+    fn turn_credentials_are_short_lived_per_user_and_hmac_signed() {
+        let c = cfg(
+            None,
+            &["stun:turn.example.org:3478"],
+            &["turn:turn.example.org:3478?transport=udp"],
+            Some("north-star"),
+            600,
+        );
+        let rendered = c.render("alice", 1_000_000);
+        let arr: Vec<Value> = serde_json::from_str(&rendered).unwrap();
+        // STUN entry first, then the credentialed TURN entry.
+        assert_eq!(arr[0]["urls"], "stun:turn.example.org:3478");
+        let turn = &arr[1];
+        // username = <expiry>:<user>, expiry = now + ttl.
+        assert_eq!(turn["username"], "1000600:alice");
+        // credential is exactly the coturn REST digest over that username.
         assert_eq!(
-            parse_ice_servers(Some(r#"{"urls":"stun:x"}"#.into())),
+            turn["credential"],
+            turn_credential("north-star", "1000600:alice")
+        );
+        // Different users and different times get different credentials.
+        let other: Vec<Value> = serde_json::from_str(&c.render("bob", 1_000_000)).unwrap();
+        assert_ne!(other[1]["username"], turn["username"]);
+        let later: Vec<Value> = serde_json::from_str(&c.render("alice", 1_000_001)).unwrap();
+        assert_ne!(later[1]["credential"], turn["credential"]);
+    }
+
+    #[test]
+    fn turn_urls_without_a_secret_are_ignored() {
+        // A half-configured TURN (no secret) must not emit a credential-less,
+        // useless TURN entry — fall back to STUN/default instead.
+        assert_eq!(
+            cfg(None, &[], &["turn:turn.example.org:3478"], None, 3600).render("alice", 1000),
             DEFAULT_ICE_SERVERS
         );
-        // Non-JSON falls back rather than shipping the client something the
-        // browser will choke on.
-        assert_eq!(parse_ice_servers(Some("turn:turn.example.org".into())), DEFAULT_ICE_SERVERS);
+    }
+
+    #[test]
+    fn turn_credential_matches_a_known_answer() {
+        // HMAC-SHA1("north-star", "1000600:alice") in base64 — pin the exact
+        // wire value coturn will verify against, so a lib/format change trips.
+        assert_eq!(turn_credential("north-star", "1000600:alice"), "qLDdP+u9y+AQ13RnJhTEkH1A5uI=");
     }
 }
 

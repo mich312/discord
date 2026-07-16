@@ -21,7 +21,11 @@ services:
       RP_ID: ${SERVER_IP}
       RP_ORIGIN: https://${SERVER_IP}
       VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
+      # Voice ICE — see deploy/docker-compose.turn.yml for the coturn overlay.
       ICE_SERVERS: ${ICE_SERVERS:-}
+      TURN_URLS: ${TURN_URLS:-}
+      TURN_SECRET: ${TURN_SECRET:-}
+      TURN_TTL: ${TURN_TTL:-3600}
 
   caddy:
     image: caddy:2

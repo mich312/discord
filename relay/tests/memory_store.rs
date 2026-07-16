@@ -49,7 +49,14 @@ async fn membership_and_allow_are_idempotent() {
 
     s.allow_member("g1", "bob").await.unwrap();
     s.allow_member("g1", "bob").await.unwrap(); // idempotent, no duplicate
-    assert_eq!(s.group_members("g1").await.unwrap(), vec!["alice", "bob"]);
+    // Creator is admin; an allowed member joins as a plain member.
+    assert_eq!(
+        s.group_members("g1").await.unwrap(),
+        vec![
+            ("alice".to_string(), "admin".to_string()),
+            ("bob".to_string(), "member".to_string()),
+        ],
+    );
 
     assert!(matches!(s.allow_member("missing", "bob").await, Err(StoreError::NoSuchGroup)));
     assert!(matches!(s.group_members("missing").await, Err(StoreError::NoSuchGroup)));

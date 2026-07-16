@@ -22,7 +22,13 @@ services:
       RP_ID: ${CADDY_DOMAIN}
       RP_ORIGIN: https://${CADDY_DOMAIN}
       VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
+      # Voice ICE. Prefer the TURN REST API (ephemeral per-user credentials) —
+      # set TURN_SECRET/TURN_URLS and add -f deploy/docker-compose.turn.yml to
+      # run coturn. ICE_SERVERS (static) is an alternative; empty = public STUN.
       ICE_SERVERS: ${ICE_SERVERS:-}
+      TURN_URLS: ${TURN_URLS:-}
+      TURN_SECRET: ${TURN_SECRET:-}
+      TURN_TTL: ${TURN_TTL:-3600}
 
   caddy:
     image: caddy:2

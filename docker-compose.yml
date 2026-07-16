@@ -23,6 +23,11 @@ services:
       # across restrictive networks (TURN relays ciphertext only). Example:
       #   ICE_SERVERS='[{"urls":"turn:turn.example.org:3478","username":"u","credential":"p"}]'
       ICE_SERVERS: ${ICE_SERVERS:-}
+      # Preferred over ICE_SERVERS: run coturn (deploy/docker-compose.turn.yml)
+      # and the relay mints short-lived per-user TURN credentials from these.
+      TURN_URLS: ${TURN_URLS:-}
+      TURN_SECRET: ${TURN_SECRET:-}
+      TURN_TTL: ${TURN_TTL:-3600}
     volumes:
       - blobs:/data
     depends_on:
