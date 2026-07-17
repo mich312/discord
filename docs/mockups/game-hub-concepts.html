@@ -348,10 +348,10 @@ h2{font-size:26px;letter-spacing:-.02em;font-weight:800;margin:0}
   <section class="dir" id="avatarlab">
     <div class="dir-head">
       <span class="dir-num">SIDE QUEST</span>
-      <h2>Generated avatars — three non-pixel takes</h2>
+      <h2>Generated avatars — four non-pixel takes</h2>
     </div>
     <p class="dir-sub">The current app derives a blocky identicon from each handle — right instinct
-    (no uploaded photos to moderate, deterministic, private), wrong look (GitHub). Three alternatives,
+    (no uploaded photos to moderate, deterministic, private), wrong look (GitHub). Four alternatives,
     each still computed purely from the handle, shown at full and roster size:</p>
     <div id="lab"></div>
   </section>
@@ -1152,6 +1152,25 @@ const CREW_COLORS = {
   charlie:['#ef6fae', '#ff9ad5'],
 };
 function hashStr(s){let h=2166136261;for(let i=0;i<s.length;i++){h^=s.charCodeAt(i);h=Math.imul(h,16777619)}return h>>>0}
+// hex <-> hsl so mesh orbs can derive extra hues from a member's anchor color
+function hexToHsl(hex){
+  const n=parseInt(hex.slice(1),16),r=(n>>16&255)/255,g=(n>>8&255)/255,b=(n&255)/255;
+  const mx=Math.max(r,g,b),mn=Math.min(r,g,b),l=(mx+mn)/2,d=mx-mn;
+  if(!d)return[0,0,l];
+  const s=d/(1-Math.abs(2*l-1));
+  let h=mx===r?((g-b)/d)%6:mx===g?(b-r)/d+2:(r-g)/d+4;
+  return[(h*60+360)%360,s,l];
+}
+function hslToHex(h,s,l){
+  const c=(1-Math.abs(2*l-1))*s,x=c*(1-Math.abs((h/60)%2-1)),m=l-c/2;
+  const[r,g,b]=h<60?[c,x,0]:h<120?[x,c,0]:h<180?[0,c,x]:h<240?[0,x,c]:h<300?[x,0,c]:[c,0,x];
+  const to=v=>Math.round((v+m)*255).toString(16).padStart(2,'0');
+  return'#'+to(r)+to(g)+to(b);
+}
+function shiftHue(hex,deg,dl=0,ds=0){
+  let[h,s,l]=hexToHsl(hex);
+  return hslToHex((h+deg+360)%360,Math.min(1,Math.max(0,s+ds)),Math.min(.92,Math.max(.08,l+dl)));
+}
 function prng(seed){let a=seed||1;return()=>{a=Math.imul(a^(a>>>15),a|1);a^=a+Math.imul(a^(a>>>7),a|61);return((a^(a>>>14))>>>0)/4294967296}}
 let gid=0;
 
@@ -1226,8 +1245,33 @@ function facet(name,size){
     <polygon points="${poly}" fill="url(#${id})"/>${lines}</svg>`;
 }
 
+// 4 · MESH ORB — a soft mesh gradient per handle: the member's anchor hue
+// plus two hues derived from it, blobs placed by the hash and blurred into
+// one organic wash. Color is the identity — instantly tellable at 24px.
+function meshOrb(name,size){
+  const [c1,c2]=CREW_COLORS[name]??['#8a8a94','#c0c0c8'];
+  const r=prng(hashStr('mesh:'+name)),id='g'+(gid++);
+  const flip=r()<.5?-1:1;
+  const c3=shiftHue(c2,flip*(90+r()*70),-.04,.05);     // contrast hue
+  const c4=shiftHue(c1,-flip*(25+r()*20),.2,-.05);     // light highlight
+  const blob=(c,cr)=>{const a=r()*Math.PI*2,d=4+r()*11;
+    return`<circle cx="${(20+Math.cos(a)*d).toFixed(1)}" cy="${(20+Math.sin(a)*d).toFixed(1)}" r="${cr.toFixed(1)}" fill="${c}"/>`};
+  return `<svg width="${size}" height="${size}" viewBox="0 0 40 40" role="img" aria-label="${name}">
+    <defs>
+      <clipPath id="c${id}"><circle cx="20" cy="20" r="20"/></clipPath>
+      <filter id="b${id}" x="-50%" y="-50%" width="200%" height="200%"><feGaussianBlur stdDeviation="5.5"/></filter>
+    </defs>
+    <g clip-path="url(#c${id})">
+      <rect width="40" height="40" fill="${c1}"/>
+      <g filter="url(#b${id})">
+        ${blob(c2,13+r()*5)}${blob(c3,11+r()*5)}${blob(c4,7+r()*4)}
+      </g>
+    </g></svg>`;
+}
+
 // ------------------------------------------------------------ avatar lab --
 const STYLES=[
+  ['Mesh orb','a mesh gradient per handle — anchor hue + two derived hues, blurred into one wash; color IS the identity, tellable at a glance',meshOrb],
   ['Star seal','a constellation per handle — sealed-circle lore, quiet at rest, the anchor star carries the member’s hue',starSeal],
   ['Crew face','an abstract face on the member’s gradient — friendliest, reads at every size',crewFace],
   ['Facet','a cut gem per handle — geometric identity without pixels',facet],
@@ -1245,7 +1289,7 @@ addEventListener('DOMContentLoaded',()=>{
     </div>`).join('');
   // Apply the chosen style inside every mounted mock frame: each .av span's
   // letter identifies the member (unique initials in this crew).
-  const CHOSEN=starSeal;
+  const CHOSEN=meshOrb;
   const byInitial={};Object.keys(CREW_COLORS).forEach(n=>byInitial[n[0].toUpperCase()]=n);
   document.querySelectorAll('.mock .av').forEach(el=>{
     const name=byInitial[(el.textContent||'').trim()];if(!name)return;

@@ -27,6 +27,7 @@ These are static mockups only — no product code changed.
 ## Avatars
 
 Generated avatars stay (deterministic from the handle, no uploads), but the
-blocky identicon is replaced. Three candidates in `avatar-lab.png` — the
-mockups apply **star seals**: a small constellation per handle on a
-hue-tinted night sky, size-aware so it stays legible at roster size.
+blocky identicon is replaced. Four candidates in `avatar-lab.png` — the
+mockups apply **mesh orbs**: a soft mesh gradient per handle, the member's
+anchor hue plus two derived hues blurred into one wash. Color is the
+identity — tellable at a glance at any size.
