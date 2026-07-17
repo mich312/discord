@@ -33,6 +33,10 @@ export class VoiceManager {
     this.send = opts.send;
     this.onState = opts.onState;
     this.onNotify = opts.onNotify ?? (() => {}); // transient user messages (toasts)
+    // A room's presence went 0 -> 1: someone opened a call. The controller
+    // drops a system line into the room's first text channel.
+    this.onCallStarted = opts.onCallStarted ?? (() => {});
+    this.muted = false; // my mic, track.enabled-level — peers hear silence
     this.iceServers = opts.iceServers ?? DEFAULT_ICE;
     this.active = null; // {server, channel, stream}
     this.ring = null; // incoming direct call awaiting our answer: {server, room, from}
@@ -73,6 +77,7 @@ export class VoiceManager {
     const state = {
       active: this.active ? { server: this.active.server, channel: this.active.channel } : null,
       listenOnly: this.active ? !!this.listenOnly : false,
+      muted: this.active ? !!this.muted : false,
       // Who has a live screen share in my current room (me included), and
       // whose display stream has actually arrived (a share announcement
       // lands before the renegotiated video track does).
@@ -204,7 +209,17 @@ export class VoiceManager {
     const key = this.key(server, channel);
     if (!this.presence.has(key)) this.presence.set(key, new Set());
     const set = this.presence.get(key);
+    if (present && set.size === 0) this.onCallStarted(server, channel, name);
     present ? set.add(name) : set.delete(name);
+  }
+
+  /** Mute/unmute my mic without renegotiating: the track keeps flowing,
+      disabled tracks carry silence. */
+  setMuted(muted) {
+    this.muted = !!muted;
+    const stream = this.active?.stream;
+    if (stream) for (const t of stream.getAudioTracks()) t.enabled = !this.muted;
+    this.publish();
   }
 
   /** Mic if available; otherwise a silent WebAudio track — joining
@@ -283,6 +298,7 @@ export class VoiceManager {
   async join(server, channel) {
     if (this.active) await this.leave();
     const stream = await this.captureAudio();
+    this.muted = false; // every call starts open-mic; muting is a per-call act
     this.active = { server, channel, stream };
     this.addMeter(this.me, stream); // show my own level even before anyone joins
     this.track(server, channel, this.me, true);

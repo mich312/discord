@@ -2,7 +2,62 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import Seal from './Seal.jsx';
 import { describeRetention } from '../lib/controller.js';
 import { nameHue } from '../lib/avatar.js';
-import { Lock, Paperclip, Clock, Wave, Gamepad } from './icons.jsx';
+import { Lock, Paperclip, Clock, Wave, Gamepad, Check, Plus } from './icons.jsx';
+
+// The reaction palette: small on purpose. Reactions ride MLS like any
+// message and live on the stored message; kept-history skips them.
+const EMOJI = ['👍', '🔥', '😂', '❤️', '💀', '😮'];
+
+function Reactions({ message, me, onReact }) {
+  const [picking, setPicking] = useState(false);
+  const reacts = message.reacts ?? {};
+  const entries = Object.entries(reacts).filter(([, who]) => who.length);
+  if (!entries.length && !onReact) return null;
+  const target = { sender: message.sender, ts: message.ts };
+  return (
+    <span className={entries.length ? 'reacts' : 'reacts empty'}>
+      {entries.map(([emo, who]) => (
+        <button
+          key={emo}
+          className={who.includes(me) ? 'react on' : 'react'}
+          title={who.join(', ')}
+          data-testid={`react-${emo}`}
+          onClick={() => onReact?.(target, emo)}
+        >
+          {emo} {who.length}
+        </button>
+      ))}
+      {onReact && (
+        <span className="react-add-wrap">
+          <button
+            className="react react-add"
+            title="add reaction"
+            data-testid="react-add"
+            onClick={() => setPicking((v) => !v)}
+          >
+            <Plus size={11} />
+          </button>
+          {picking && (
+            <span className="react-picker" data-testid="react-picker">
+              {EMOJI.map((emo) => (
+                <button
+                  key={emo}
+                  className="react-pick"
+                  onClick={() => {
+                    setPicking(false);
+                    onReact(target, emo);
+                  }}
+                >
+                  {emo}
+                </button>
+              ))}
+            </span>
+          )}
+        </span>
+      )}
+    </span>
+  );
+}
 
 function timeOf(ts) {
   return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -167,6 +222,7 @@ export default function Messages({
   onVoiceJoin,
   onOpenStage,
   onLaunchGame,
+  onReact,
 }) {
   const [draft, setDraft] = useState('');
   const scroller = useRef(null);
@@ -267,6 +323,11 @@ export default function Messages({
               <Seal name={item.sender} size={34} title={item.sender} />
               <div className="msg-head">
                 <span className={item.sender === me ? 'sender self' : 'sender'}>{item.sender}</span>
+                {(server.verified ?? []).includes(item.sender) && (
+                  <span className="sender-check" title="safety number checked on this device">
+                    <Check size={10} />
+                  </span>
+                )}
                 <time>{timeOf(item.ts)}</time>
               </div>
               {item.lines.map((m, i) => (
@@ -285,6 +346,7 @@ export default function Messages({
                     <span className="text">{m.text}</span>
                   )}
                   {i > 0 && <time>{timeOf(m.ts)}</time>}
+                  <Reactions message={m} me={me} onReact={server.restored ? null : onReact} />
                 </div>
               ))}
             </div>
@@ -330,6 +392,7 @@ export default function Messages({
             placeholder={`Message #${channel}`}
             data-testid="composer"
           />
+          <span className="send-hint mono" aria-hidden="true">↩ send</span>
         </form>
         <div className="composer-note">
           <Lock size={11} />

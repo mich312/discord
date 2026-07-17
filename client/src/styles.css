@@ -666,6 +666,9 @@ kbd {
 .member-presence { font: 500 var(--text-xs) var(--mono); color: var(--ok); }
 .section-label.member-group { padding-top: 10px; }
 .section-label.member-group.live .overline { color: var(--ok); }
+.section-label.member-group.playing .overline { color: var(--accent-ink); }
+.member-count.live { color: var(--ok); }
+.member-presence .game { color: var(--accent-ink); font-weight: 600; }
 .member-list.in-call { flex: 0 0 auto; }
 .member.speaking .seal-avatar { box-shadow: 0 0 0 2px var(--ok), 0 0 10px var(--ok-soft); }
 
@@ -1824,6 +1827,71 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
   color: var(--ink-mute);
 }
 
+/* reactions: pills under a message line */
+.reacts { display: flex; gap: 6px; margin-top: 5px; flex-wrap: wrap; align-items: center; }
+/* no reactions yet: the add button floats beside the timestamp on hover
+   instead of reserving a row under every message */
+.reacts.empty { position: absolute; right: 34px; top: 1px; margin: 0; }
+.reacts.empty .react.react-add { background: none; border-color: transparent; }
+.react {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  background: var(--raised);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-pill);
+  padding: 2px 9px;
+  font-size: var(--text-sm);
+  color: var(--ink-dim);
+  cursor: pointer;
+  transition: border-color var(--fast) var(--ease), background var(--fast) var(--ease);
+}
+.react:hover { border-color: var(--hairline-strong); }
+.react.on { background: var(--accent-soft); border-color: var(--accent); color: var(--ink); }
+.react-add-wrap { position: relative; display: inline-flex; }
+.react.react-add { padding: 2px 7px; color: var(--ink-mute); opacity: 0; }
+.msg-line:hover .react.react-add, .react.react-add:focus-visible,
+.react-add-wrap:has(.react-picker) .react.react-add { opacity: 1; }
+@media (hover: none) { .react.react-add { opacity: 1; } }
+.react-picker {
+  position: absolute;
+  bottom: calc(100% + 6px);
+  left: 0;
+  z-index: 10;
+  display: flex;
+  gap: 2px;
+  padding: 5px 7px;
+  background: var(--raised);
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--r-pill);
+  box-shadow: var(--overlay-shadow);
+}
+.react-pick {
+  background: none;
+  border: none;
+  border-radius: var(--r-sm);
+  font-size: 16px;
+  padding: 3px 5px;
+  cursor: pointer;
+}
+.react-pick:hover { background: var(--hover); }
+
+/* verified check beside the sender name */
+.sender-check { display: inline-grid; place-items: center; color: var(--ok); }
+
+/* composer: quiet keyboard hint */
+.send-hint {
+  flex-shrink: 0;
+  padding: 0 10px;
+  font-size: var(--text-xs);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-mute);
+  opacity: 0;
+  transition: opacity var(--fast) var(--ease);
+}
+.composer:focus-within .send-hint { opacity: 1; }
+
 /* the conversation header's call affordance */
 .pane-call { margin-left: 12px; flex-shrink: 0; padding: 5px 12px; }
 .pane-call.live { color: var(--ok); border-color: var(--ok); }
@@ -1916,6 +1984,27 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
   color: var(--ink-mute);
 }
 
+.hub-rsvp { display: flex; align-items: center; gap: 14px; margin-top: 14px; }
+.hub-going {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  font: 600 var(--text-xs) var(--mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+}
+.hub-going-stack { display: flex; }
+.hub-going-stack .seal-avatar { margin-right: -7px; box-shadow: 0 0 0 2px var(--panel); }
+.hub-going-stack .seal-avatar:last-child { margin-right: 2px; }
+.shelf-overline { display: flex !important; align-items: baseline; }
+.shelf-meta {
+  margin-left: auto;
+  color: var(--ink-mute);
+  letter-spacing: 0.1em;
+}
+.shelf-live { color: var(--ok); }
+
 /* ------------------------------------------------------------- game shelf -- */
 /* The hub's centerpiece: pointers to games living on other servers. Covers
    carry each game's derived hue — the one place the chrome allows a wash of
@@ -1960,6 +2049,9 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
   position: absolute;
   top: 8px;
   left: 8px;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
   font: 600 9px var(--mono);
   text-transform: uppercase;
   letter-spacing: 0.1em;
@@ -1968,6 +2060,26 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
   border-radius: var(--r-pill);
   padding: 3px 8px;
 }
+.game-kind.live { color: var(--ok); }
+.game-kind.live::before {
+  content: '';
+  width: 5px;
+  height: 5px;
+  border-radius: var(--r-pill);
+  background: var(--ok);
+  box-shadow: 0 0 6px var(--ok);
+}
+.game-cover-mark.glyph { font-size: 40px; }
+.game-who {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--text-xs);
+  color: var(--ink-dim);
+}
+.game-who-stack { display: flex; }
+.game-who-stack .seal-avatar { margin-right: -7px; box-shadow: 0 0 0 2px var(--panel); }
+.game-who-stack .seal-avatar:last-child { margin-right: 2px; }
 .game-remove {
   position: absolute;
   top: 6px;
@@ -2037,6 +2149,8 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
   transition: border-color var(--fast) var(--ease);
 }
 .game-add-form input:focus, .game-add-form select:focus { border-color: var(--ink-dim); outline: none; }
+.game-add-row { display: grid; grid-template-columns: 1fr 52px; gap: 8px; }
+.game-add-glyph { text-align: center; font-size: 16px; }
 .game-add-form .row { margin-top: 2px; }
 
 /* ------------------------------------------------------------- game stage -- */
@@ -2072,6 +2186,42 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
 }
 .game-dock .scroll { padding: 10px 14px; }
 .game-dock .composer-note { padding: 4px 12px 10px; }
+.dock-tabs { display: flex; gap: 4px; padding: 10px 10px 0; }
+.dock-tab {
+  flex: 1;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  padding: 7px 0;
+  background: none;
+  border: none;
+  border-radius: var(--r-sm);
+  font: 650 var(--text-sm) var(--sans);
+  color: var(--ink-mute);
+  cursor: pointer;
+}
+.dock-tab:hover { color: var(--ink-dim); }
+.dock-tab.on { background: var(--raised); color: var(--ink); }
+.dock-crew { padding: 10px 14px; display: flex; flex-direction: column; gap: 8px; }
+.dock-crew-row { display: flex; align-items: center; gap: 9px; min-width: 0; }
+.dock-crew-row .seal-avatar { transition: filter 0.12s ease; }
+.dock-crew-row.speaking .seal-avatar { filter: drop-shadow(0 0 4px var(--ok)); }
+.dock-crew-name { font: 600 var(--text-sm) var(--mono); white-space: nowrap; }
+.dock-crew-state {
+  margin-left: auto;
+  font-size: var(--text-xs);
+  color: var(--ink-mute);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.game-voice-ctl { display: flex; gap: 6px; align-items: center; }
+.voice-join.muted-on { color: var(--danger); }
+.call-btn.muted-on { color: var(--danger); border-color: var(--danger); }
+.call-btn.invite-seat { color: var(--accent-ink); border-color: var(--accent-ink); }
+.call-btn.invite-seat:hover { background: var(--accent-soft); }
+
 .game-voice-strip {
   flex-shrink: 0;
   border-top: 1px solid var(--hairline);

@@ -23,9 +23,12 @@ export function normalizeGame(g) {
   const url = String(g.url ?? '').slice(0, GAME_URL_MAX).trim();
   const kind = KINDS.has(g.kind) ? g.kind : 'activity';
   const note = String(g.note ?? '').slice(0, GAME_NOTE_MAX).trim();
+  // Cover mark: a short glyph/emoji the registrar picked (♞, 🏰, …).
+  // Bounded hard — it renders big on the cover, never as markup.
+  const glyph = String(g.glyph ?? '').trim().slice(0, 4);
   if (!id || !name || !url) return null;
   if (kind === 'activity' && !activitySrc(url)) return null;
-  return { id, name, url, kind, ...(note ? { note } : {}) };
+  return { id, name, url, kind, ...(note ? { note } : {}), ...(glyph ? { glyph } : {}) };
 }
 
 export function normalizeGames(list) {
@@ -71,4 +74,42 @@ export function normalizeGameRef(g) {
 
 export function makeGameId(now = Date.now()) {
   return `g${now.toString(36)}${Math.floor(Math.random() * 46656).toString(36)}`;
+}
+
+// ---------------------------------------------------------------------------
+// Device-local memory of the shelf: when did THIS device last launch each
+// game. Deliberately not shared — it needs no protocol and never lies.
+const LAST_PLAYED_KEY = 'quorum-last-played';
+
+export function lastPlayed(gameId) {
+  try {
+    return JSON.parse(localStorage.getItem(LAST_PLAYED_KEY) ?? '{}')[gameId] ?? null;
+  } catch {
+    return null;
+  }
+}
+
+export function markPlayed(gameId, now = Date.now()) {
+  try {
+    const map = JSON.parse(localStorage.getItem(LAST_PLAYED_KEY) ?? '{}');
+    map[gameId] = now;
+    localStorage.setItem(LAST_PLAYED_KEY, JSON.stringify(map));
+  } catch {
+    // private mode etc. — the card just shows nothing
+  }
+}
+
+/** A presence claim as received: which game (if any) a member is in right
+    now. Fresh for four hours, then treated as expired by readers. */
+export const PRESENCE_TTL = 4 * 3600e3;
+
+export function normalizePresence(p, now = Date.now()) {
+  if (!p || typeof p !== 'object') return { playing: null, ts: now };
+  const playing = normalizeGameRef(p.playing);
+  return { playing, ts: now };
+}
+
+export function freshPresence(entry, now = Date.now()) {
+  if (!entry?.playing) return null;
+  return now - entry.ts < PRESENCE_TTL ? entry.playing : null;
 }

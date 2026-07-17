@@ -45,6 +45,7 @@ export default function CallStage({
   onSend,
   onShare,
   onStopShare,
+  onToggleMute,
   onLeave,
   onClose,
 }) {
@@ -88,6 +89,16 @@ export default function CallStage({
         </span>
         <span className="sealed-note">media is peer-to-peer — the relay carries only sealed signals</span>
         <div className="stage-actions">
+          {onToggleMute && !voice.listenOnly && (
+            <button
+              className={voice.muted ? 'call-btn muted-on' : 'call-btn'}
+              title={voice.muted ? 'unmute your mic' : 'mute your mic'}
+              data-testid="stage-mute"
+              onClick={onToggleMute}
+            >
+              {voice.muted ? '🔇 unmute' : '🎙 mute'}
+            </button>
+          )}
           {iShare ? (
             <button className="call-btn decline" data-testid="share-stop" onClick={onStopShare}>
               <Screen size={14} /> stop sharing

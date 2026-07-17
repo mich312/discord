@@ -43,12 +43,17 @@ const servers = [
     linkJoined: ['charlie'],
     chanMeta: { 'pit-wall': { topic: 'live timing chatter during sessions' } },
     roles: { alice: 'admin' },
+    presence: {
+      bob: { playing: { id: 'g1', name: 'Hex Gambit', kind: 'activity' }, ts: now - 41 * 60e3 },
+      dana: { playing: { id: 'g1', name: 'Hex Gambit', kind: 'activity' }, ts: now - 41 * 60e3 },
+    },
+    rsvps: { bob: { at: now + 52 * H, ts: now - 3 * H }, dana: { at: now + 52 * H, ts: now - 2 * H }, marek: { at: now + 52 * H, ts: now - H } },
     overview: {
       games: [
-        { id: 'g1', name: 'Hex Gambit', url: '/games/hexgambit.html', kind: 'activity', note: 'bundled demo — local two-player chess' },
-        { id: 'g2', name: 'Craftworld', url: 'mc.raceteam.example:25565', kind: 'server', note: 'survival, keep-inventory off' },
-        { id: 'g3', name: 'Tanks! Night Ops', url: 'https://tanks.arcade.example/room/race-team', kind: 'activity' },
-        { id: 'g4', name: 'Factory Floor', url: 'factorio.raceteam.example:34197', kind: 'server' },
+        { id: 'g1', name: 'Hex Gambit', url: '/games/hexgambit.html', kind: 'activity', note: 'bundled demo — local two-player chess', glyph: '♞' },
+        { id: 'g2', name: 'Craftworld', url: 'mc.raceteam.example:25565', kind: 'server', note: 'survival, keep-inventory off', glyph: '⛏' },
+        { id: 'g3', name: 'Tanks! Night Ops', url: 'https://tanks.arcade.example/room/race-team', kind: 'activity', glyph: '⌖' },
+        { id: 'g4', name: 'Factory Floor', url: 'factorio.raceteam.example:34197', kind: 'server', glyph: '⚙' },
       ],
       blurb:
         'Pit crew HQ for the season. Race weekends run out of #logistics; #pit-wall is live timing only.',
@@ -80,7 +85,7 @@ const servers = [
 ];
 
 const messages = [
-  { sender: 'bob', text: 'scrutineering passed — we are P4 on the grid', ts: now - 26 * H },
+  { sender: 'bob', text: 'scrutineering passed — we are P4 on the grid', ts: now - 26 * H, reacts: { '🔥': ['alice', 'dana', 'charlie'], '😤': ['dana'] } },
   { sender: 'bob', text: 'stewards want the wing endplate photos before nine', ts: now - 26 * H + 40e3 },
   { sender: 'alice', text: 'on it. tyre pressures from this morning still good?', ts: now - 25.6 * H },
   { system: true, text: 'charlie joined via invite link — unverified until someone checks their safety number', ts: now - 25 * H },
@@ -89,7 +94,7 @@ const messages = [
   { sender: 'alice', file: { name: 'tyre-temps.png', mime: 'image/png', size: 48213 }, ts: now - 3 * H + 30e3 },
   { sender: 'bob', game: { id: 'g1', name: 'Hex Gambit', kind: 'activity' }, ts: now - 2.5 * H },
   { sender: 'alice', text: 'left front is the one to watch', ts: now - 3 * H + 55e3 },
-  { sender: 'dana', text: 'trailer leaves at 6am sharp — pack the spare diffuser tonight', ts: now - 2.2 * H },
+  { sender: 'dana', text: 'trailer leaves at 6am sharp — pack the spare diffuser tonight', ts: now - 2.2 * H, reacts: { '👍': ['alice', 'bob'] } },
   { sender: 'bob', file: { name: 'stint-plan.pdf', mime: 'application/pdf', size: 182044 }, ts: now - 1.1 * H },
   { sender: 'bob', text: 'plan B if it rains: box on lap 14 and go long', ts: now - 1.1 * H + 20e3 },
 ];
@@ -289,6 +294,8 @@ function PreviewShell({ empty = false, banner = false, modal = null, palette = f
             voice={voice}
             onVoiceJoin={noop}
             onVoiceLeave={noop}
+            onToggleMute={noop}
+            onInviteSeat={noop}
             onClose={() => {
               setLiveGame(null);
               setActive({ ...active, channel: null });
@@ -304,6 +311,7 @@ function PreviewShell({ empty = false, banner = false, modal = null, palette = f
             onSend={noop}
             onShare={noop}
             onStopShare={noop}
+            onToggleMute={noop}
             onLeave={noop}
             onClose={noop}
           />
@@ -328,6 +336,7 @@ function PreviewShell({ empty = false, banner = false, modal = null, palette = f
                   setActive({ ...active, channel: activeServer.channels[0] });
                   setLiveGame(g);
                 }}
+                onReact={noop}
               />
             ) : (
               <Overview
@@ -348,6 +357,7 @@ function PreviewShell({ empty = false, banner = false, modal = null, palette = f
                   setActive({ ...active, channel: activeServer.channels[0] });
                   setLiveGame(g);
                 }}
+                onRsvp={noop}
                 onSave={(ov) => setOverviews((o) => ({ ...o, [activeServer.id]: ov }))}
                 onAddNotice={(text) =>
                   setNoticesBy((by) => ({

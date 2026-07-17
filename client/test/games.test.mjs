@@ -70,3 +70,22 @@ test('gameHost names where the game actually lives', () => {
   assert.equal(gameHost({ kind: 'activity', url: '/games/hexgambit.html' }), 'bundled with this app');
   assert.equal(gameHost({ kind: 'server', url: 'mc.example.net:25565' }), 'mc.example.net:25565');
 });
+
+test('glyphs are kept, bounded, optional', () => {
+  const g = normalizeGame({ id: 'g', name: 'x', url: 'https://x.example', glyph: ' ♞ ' });
+  assert.equal(g.glyph, '♞');
+  const long = normalizeGame({ id: 'g', name: 'x', url: 'https://x.example', glyph: 'abcdefgh' });
+  assert.equal(long.glyph, 'abcd');
+  assert.equal('glyph' in normalizeGame({ id: 'g', name: 'x', url: 'https://x.example' }), false);
+});
+
+test('presence claims are whitelisted and expire', async () => {
+  const { normalizePresence, freshPresence, PRESENCE_TTL } = await import('../src/lib/games.js');
+  const NOW = 1_800_000_000_000;
+  const p = normalizePresence({ playing: { id: 'g1', name: 'Hex', kind: 'activity', url: 'https://evil' } }, NOW);
+  assert.deepEqual(p.playing, { id: 'g1', name: 'Hex', kind: 'activity' }); // url never rides along
+  assert.deepEqual(freshPresence(p, NOW + PRESENCE_TTL - 1), p.playing);
+  assert.equal(freshPresence(p, NOW + PRESENCE_TTL + 1), null);
+  assert.equal(normalizePresence({ playing: null }, NOW).playing, null);
+  assert.equal(normalizePresence('junk', NOW).playing, null);
+});

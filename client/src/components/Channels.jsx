@@ -52,7 +52,7 @@ export default function Channels({
         </li>
       </ul>
       <div className="section-label">
-        <span className="overline"><span className="idx">02</span>rooms</span>
+        <span className="overline">rooms</span>
         {canManage && (
           <button className="ghost" title="new room" data-testid="new-channel" onClick={() => setAdding(true)}>
             <Plus size={13} />
@@ -121,7 +121,7 @@ export default function Channels({
         )}
       </ul>
       <div className="section-label">
-        <span className="overline"><span className="idx">03</span>voice</span>
+        <span className="overline">voice</span>
         {canManage && (
           <button
             className="ghost"

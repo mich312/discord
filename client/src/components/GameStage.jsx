@@ -1,9 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import Seal from './Seal.jsx';
 import VoiceMeter from './VoiceMeter.jsx';
-import { gameHost } from '../lib/games.js';
-import { activitySrc } from '../lib/games.js';
-import { X, Lock, External, Gamepad, Wave } from './icons.jsx';
+import { activitySrc, freshPresence, gameHost } from '../lib/games.js';
+import { X, Lock, External, Gamepad, Wave, Users, LinkGlyph } from './icons.jsx';
 
 function timeOf(ts) {
   return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -26,9 +25,13 @@ export default function GameStage({
   voice,
   onVoiceJoin,
   onVoiceLeave,
+  onToggleMute,
+  onInviteSeat,
   onClose,
 }) {
   const [draft, setDraft] = useState('');
+  const [tab, setTab] = useState('chat'); // chat | crew
+  const [invited, setInvited] = useState(false);
   const scroller = useRef(null);
 
   useEffect(() => {
@@ -58,6 +61,20 @@ export default function GameStage({
           runs on {gameHost(game)} — that host sees its own traffic, never your chat
         </span>
         <div className="stage-actions">
+          {canSend && onInviteSeat && (
+            <button
+              className="call-btn invite-seat"
+              title="drop a join card into the room"
+              data-testid="game-invite-seat"
+              onClick={() => {
+                onInviteSeat();
+                setInvited(true);
+                setTimeout(() => setInvited(false), 1800);
+              }}
+            >
+              <LinkGlyph size={13} /> {invited ? 'card sent' : 'invite seat'}
+            </button>
+          )}
           <a
             className="call-btn"
             title="open in its own tab"
@@ -88,10 +105,44 @@ export default function GameStage({
           </div>
         )}
         <aside className="game-dock" data-testid="game-dock">
-          <div className="stage-chat-head">
-            <span>#{channel}</span>
-            <span className="muted">the room rides along</span>
+          <div className="dock-tabs" role="tablist">
+            <button
+              className={tab === 'chat' ? 'dock-tab on' : 'dock-tab'}
+              role="tab"
+              aria-selected={tab === 'chat'}
+              data-testid="dock-tab-chat"
+              onClick={() => setTab('chat')}
+            >
+              #{channel}
+            </button>
+            <button
+              className={tab === 'crew' ? 'dock-tab on' : 'dock-tab'}
+              role="tab"
+              aria-selected={tab === 'crew'}
+              data-testid="dock-tab-crew"
+              onClick={() => setTab('crew')}
+            >
+              <Users size={12} /> crew · {server.members.length}
+            </button>
           </div>
+          {tab === 'crew' ? (
+            <div className="scroll dock-crew" data-testid="dock-crew">
+              {server.members.map((m) => {
+                const inThisCall = participants.includes(m);
+                const p = freshPresence(server.presence?.[m]);
+                const speaking = voice?.speaking?.includes(m);
+                return (
+                  <div key={m} className={speaking ? 'dock-crew-row speaking' : 'dock-crew-row'}>
+                    <Seal name={m} size={22} title={m} />
+                    <span className="dock-crew-name">{m === me ? `${m} · you` : m}</span>
+                    <span className="dock-crew-state">
+                      {inThisCall ? 'in the call' : p ? `playing ${p.name}` : ''}
+                    </span>
+                  </div>
+                );
+              })}
+            </div>
+          ) : (
           <div className="scroll" ref={scroller} data-testid="game-chat-scroll">
             {messages.length === 0 && (
               <div className="stage-chat-empty muted">
@@ -115,7 +166,8 @@ export default function GameStage({
               )
             )}
           </div>
-          {canSend && (
+          )}
+          {tab === 'chat' && canSend && (
             <form
               className="stage-composer"
               onSubmit={(e) => {
@@ -141,9 +193,21 @@ export default function GameStage({
                 <span className="overline live">
                   <Wave size={11} /> {voice.active.channel} — {participants.length} live
                 </span>
-                <button className="voice-join leave" data-testid="game-voice-leave" onClick={onVoiceLeave}>
-                  leave
-                </button>
+                <span className="game-voice-ctl">
+                  {onToggleMute && !voice.listenOnly && (
+                    <button
+                      className={voice.muted ? 'voice-join muted-on' : 'voice-join'}
+                      title={voice.muted ? 'unmute your mic' : 'mute your mic'}
+                      data-testid="game-voice-mute"
+                      onClick={onToggleMute}
+                    >
+                      {voice.muted ? 'unmute' : 'mute'}
+                    </button>
+                  )}
+                  <button className="voice-join leave" data-testid="game-voice-leave" onClick={onVoiceLeave}>
+                    leave
+                  </button>
+                </span>
               </div>
               <ul className="game-voice-row">
                 {participants.map((p) => {

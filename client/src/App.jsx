@@ -19,6 +19,7 @@ import { callChatChannel } from './lib/controller.js';
 import Settings from './components/Settings.jsx';
 import Seal from './components/Seal.jsx';
 import { Key, Bell, ShieldCheck, LinkGlyph, Sun, QuorumGlyph, Gear } from './components/icons.jsx';
+import { markPlayed } from './lib/games.js';
 
 const initial = {
   phase: 'loading', // loading | onboarding | ready
@@ -250,10 +251,28 @@ export default function App() {
     setStage(false);
     setGame(g);
     setDrawer(null);
+    markPlayed(g.id);
     if (announce && !activeServer?.restored) {
       controllerRef.current?.sendGameCard(server, ch, g).catch(() => {});
     }
   };
+
+  // Rich presence follows the game state: whenever a game opens or closes
+  // (from any path — back button, room click, circle switch), tell the
+  // circle it was launched in. Ephemeral; peers expire it on their own.
+  const playingRef = useRef(null);
+  useEffect(() => {
+    const c = controllerRef.current;
+    if (!c) return;
+    const prev = playingRef.current;
+    if (game && server && !activeServer?.restored) {
+      playingRef.current = { server, game };
+      c.setPlaying(server, game).catch(() => {});
+    } else if (!game && prev) {
+      playingRef.current = null;
+      c.setPlaying(prev.server, null).catch(() => {});
+    }
+  }, [game]);
 
   const closeGame = () => {
     setGame(null);
@@ -502,6 +521,10 @@ export default function App() {
                 .catch((e) => dispatch({ type: 'toast', text: `voice: ${e.message}` }))
             }
             onVoiceLeave={() => controllerRef.current.voice.leave()}
+            onToggleMute={() => controllerRef.current.voice.setMuted(!state.voice.muted)}
+            onInviteSeat={() =>
+              controllerRef.current.sendGameCard(server, channel, game).catch(() => {})
+            }
             onClose={closeGame}
           />
         ) : activeServer && stage && state.voice.active ? (
@@ -522,6 +545,7 @@ export default function App() {
                 .catch((e) => dispatch({ type: 'toast', text: `screen share: ${e.message}` }))
             }
             onStopShare={() => controllerRef.current.voice.stopShare()}
+            onToggleMute={() => controllerRef.current.voice.setMuted(!state.voice.muted)}
             onLeave={() => controllerRef.current.voice.leave()}
             onClose={closeStage}
           />
@@ -554,6 +578,11 @@ export default function App() {
                 }
                 onOpenStage={openStage}
                 onLaunchGame={(g) => launchGame(g, { announce: false })}
+                onReact={(target, emo) =>
+                  controllerRef.current
+                    .react(server, channel, target, emo)
+                    .catch((e) => dispatch({ type: 'toast', text: e.message }))
+                }
               />
             ) : (
               <Overview
@@ -572,6 +601,11 @@ export default function App() {
                     .catch((e) => dispatch({ type: 'toast', text: `voice: ${e.message}` }))
                 }
                 onLaunchGame={launchGame}
+                onRsvp={(at, going) =>
+                  controllerRef.current
+                    .rsvp(server, at, going)
+                    .catch((e) => dispatch({ type: 'toast', text: e.message }))
+                }
                 onSave={(ov) =>
                   controllerRef.current
                     .setOverview(server, ov)

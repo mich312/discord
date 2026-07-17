@@ -1,7 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import Seal from './Seal.jsx';
 import { describeAgo, describeUntil, canRemoveNotice } from '../lib/overview.js';
-import { gameHost, makeGameId, normalizeGame } from '../lib/games.js';
+import { freshPresence, gameHost, lastPlayed, makeGameId, normalizeGame } from '../lib/games.js';
 import { nameHue } from '../lib/avatar.js';
 import { Hash, Wave, Lock, LinkGlyph, Plus, X, ArrowRight, Gamepad, External, Copy } from './icons.jsx';
 
@@ -141,10 +141,12 @@ function EditForm({ overview, onSave, onCancel }) {
 // One game on the shelf. The cover carries the game's own hue (derived from
 // its name, like a member's orb); actions differ by kind — web games launch
 // embedded, server games hand over the address.
-function GameCard({ game, canManage, onLaunch, onRemove }) {
+function GameCard({ game, players, canManage, onLaunch, onRemove }) {
   const [copied, setCopied] = useState(false);
   const hue = nameHue(game.name);
   const host = gameHost(game);
+  const played = lastPlayed(game.id);
+  const live = players.length > 0;
   const copyAddress = async () => {
     try {
       await navigator.clipboard.writeText(game.url);
@@ -163,8 +165,17 @@ function GameCard({ game, canManage, onLaunch, onRemove }) {
         }}
       >
         <span className="game-grain" aria-hidden="true" />
-        <span className="game-cover-mark">{game.name.slice(0, 1).toUpperCase()}</span>
-        <span className="game-kind">{game.kind === 'server' ? 'game server' : 'web game'}</span>
+        <span className={game.glyph ? 'game-cover-mark glyph' : 'game-cover-mark'}>
+          {game.glyph ?? game.name.slice(0, 1).toUpperCase()}
+        </span>
+        {live ? (
+          <span className="game-kind live" data-testid={`game-live-${game.id}`}>
+            live · {players.slice(0, 2).join(' & ')}
+            {players.length > 2 ? ` +${players.length - 2}` : ''}
+          </span>
+        ) : (
+          <span className="game-kind">{game.kind === 'server' ? 'game server' : 'web game'}</span>
+        )}
         {canManage && (
           <button
             className="ghost game-remove"
@@ -179,9 +190,21 @@ function GameCard({ game, canManage, onLaunch, onRemove }) {
       <div className="game-body">
         <span className="game-name">{game.name}</span>
         <span className="game-host mono" title="this host sees its own traffic — never your chat">
-          {host}
+          {game.kind === 'server' ? '⛭' : '◈'} {host}
         </span>
         {game.note && <span className="game-note">{game.note}</span>}
+        {live ? (
+          <span className="game-who">
+            <span className="game-who-stack">
+              {players.slice(0, 3).map((p) => (
+                <Seal key={p} name={p} size={20} title={p} />
+              ))}
+            </span>
+            {players.length === 1 ? `${players[0]} is in` : `${players.length} playing right now`}
+          </span>
+        ) : played ? (
+          <span className="game-who muted">last played {describeAgo(played)}</span>
+        ) : null}
         <div className="game-actions">
           {game.kind === 'server' ? (
             <button className="button primary" data-testid={`game-copy-${game.id}`} onClick={copyAddress}>
@@ -215,13 +238,14 @@ function AddGameForm({ onAdd, onCancel }) {
   const [name, setName] = useState('');
   const [url, setUrl] = useState('');
   const [kind, setKind] = useState('activity');
+  const [glyph, setGlyph] = useState('');
   return (
     <form
       className="game-add-form"
       data-testid="game-add-form"
       onSubmit={(e) => {
         e.preventDefault();
-        const game = normalizeGame({ id: makeGameId(), name, url, kind });
+        const game = normalizeGame({ id: makeGameId(), name, url, kind, glyph });
         if (!game) return;
         onAdd(game);
       }}
@@ -233,12 +257,22 @@ function AddGameForm({ onAdd, onCancel }) {
         placeholder="game name"
         data-testid="game-add-name"
       />
-      <input
-        value={url}
-        onChange={(e) => setUrl(e.target.value)}
-        placeholder={kind === 'server' ? 'address — mc.example.net:25565' : 'https:// where it lives'}
-        data-testid="game-add-url"
-      />
+      <div className="game-add-row">
+        <input
+          value={url}
+          onChange={(e) => setUrl(e.target.value)}
+          placeholder={kind === 'server' ? 'address — mc.example.net:25565' : 'https:// where it lives'}
+          data-testid="game-add-url"
+        />
+        <input
+          className="game-add-glyph"
+          value={glyph}
+          onChange={(e) => setGlyph(e.target.value)}
+          placeholder="♞"
+          title="cover mark — one emoji or glyph (optional)"
+          data-testid="game-add-glyph"
+        />
+      </div>
       <select value={kind} onChange={(e) => setKind(e.target.value)} data-testid="game-add-kind">
         <option value="activity">web game — plays embedded here</option>
         <option value="server">game server — join with its own client</option>
@@ -266,6 +300,7 @@ export default function Overview({
   onSelectChannel,
   onVoiceJoin,
   onLaunchGame,
+  onRsvp,
   onSave,
   onAddNotice,
   onRemoveNotice,
@@ -295,6 +330,20 @@ export default function Overview({
   const overview = server.overview ?? null;
   const event = overview?.event ?? null;
   const games = overview?.games ?? [];
+  // Live claims: game id -> member handles playing it right now.
+  const playingBy = {};
+  for (const [handle, entry] of Object.entries(server.presence ?? {})) {
+    const g = freshPresence(entry, now);
+    if (g) (playingBy[g.id] ??= []).push(handle);
+  }
+  const liveGames = games.filter((g) => (playingBy[g.id] ?? []).length > 0).length;
+  // Who said "I'm in" for THIS event (answers are keyed to its timestamp).
+  const going = event
+    ? Object.entries(server.rsvps ?? {})
+        .filter(([, v]) => v.at === event.at)
+        .map(([handle]) => handle)
+    : [];
+  const iAmIn = going.includes(me);
   const saveGames = (next) => onSave({ ...(overview ?? {}), games: next });
   const notices = server.notices ?? [];
   const voiceRooms = server.voiceChannels ?? ['lounge'];
@@ -388,6 +437,27 @@ export default function Overview({
                     </span>
                     {event.note && <> — {event.note}</>}
                   </p>
+                  {canSend && (
+                    <div className="hub-rsvp">
+                      <button
+                        className={iAmIn ? 'button live' : 'button primary'}
+                        data-testid="rsvp-toggle"
+                        onClick={() => onRsvp(event.at, !iAmIn)}
+                      >
+                        {iAmIn ? '✓ you\u2019re in' : '▶ I\u2019m in'}
+                      </button>
+                      {going.length > 0 && (
+                        <span className="hub-going" data-testid="rsvp-going">
+                          <span className="hub-going-stack">
+                            {going.slice(0, 5).map((p) => (
+                              <Seal key={p} name={p} size={20} title={p} />
+                            ))}
+                          </span>
+                          {going.length} going
+                        </span>
+                      )}
+                    </div>
+                  )}
                 </div>
                 {(() => {
                   const d = event.at - now;
@@ -410,9 +480,14 @@ export default function Overview({
             )}
 
             <section className="overview-section shelf-section">
-              <span className="overline">
+              <span className="overline shelf-overline">
                 <span>on the shelf</span>
-                {games.length > 0 && <span className="idx">{games.length}</span>}
+                {games.length > 0 && (
+                  <span className="shelf-meta">
+                    {games.length} game{games.length === 1 ? '' : 's'}
+                    {liveGames > 0 && <span className="shelf-live"> · {liveGames} live</span>}
+                  </span>
+                )}
               </span>
               {games.length > 0 || canManage ? (
                 <ul className="game-shelf" data-testid="game-shelf">
@@ -420,6 +495,7 @@ export default function Overview({
                     <GameCard
                       key={g.id}
                       game={g}
+                      players={playingBy[g.id] ?? []}
                       canManage={canManage}
                       onLaunch={() => onLaunchGame(g)}
                       onRemove={() => saveGames(games.filter((x) => x.id !== g.id))}
