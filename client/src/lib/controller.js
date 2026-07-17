@@ -16,6 +16,11 @@
 //                                   carries per-channel topic/retention and —
 //                                   when history is on — the channel history
 //                                   key, so joining IS how the key is shared.
+//   {k:'overview', ov}            — the circle's landing page changed:
+//                                   {blurb, links:[{label,url}]}. Rides
+//                                   inside MLS like everything else, so the
+//                                   relay never learns what a circle says
+//                                   about itself
 //   {k:'chan', ch}                — a channel was created
 //   {k:'chanset', ch, meta}       — a channel's settings changed (topic,
 //                                   auto-delete, history on/off + its key)
@@ -310,6 +315,7 @@ export class Controller {
       channels: prior?.channels ?? ['general'],
       voiceChannels: prior?.voiceChannels ?? ['lounge'],
       chanMeta: prior?.chanMeta ?? {},
+      overview: prior?.overview,
       hcursor: prior?.hcursor ?? {},
       verified: prior?.verified,
       members,
@@ -369,6 +375,7 @@ export class Controller {
               channels: record.channels,
               voiceChannels: record.voiceChannels ?? ['lounge'],
               chanMeta: record.chanMeta ?? {},
+              overview: record.overview ?? null,
             });
           }
         } else {
@@ -422,6 +429,16 @@ export class Controller {
           for (const ch of content.voiceChannels) if (!rooms.includes(ch)) rooms.push(ch);
           record.voiceChannels = rooms;
         }
+        // Gap-fill the landing page the same way: a joiner has none, and
+        // explicit edits arrive as their own `overview` events. Adopting it
+        // re-parks the backup so the page survives a vault restore.
+        if (content.overview !== undefined && record.overview == null) {
+          const adopted = normalizeOverview(content.overview);
+          if (adopted) {
+            record.overview = adopted;
+            this.scheduleBackup();
+          }
+        }
         // Gap-fill channel settings (a joiner has none): explicit changes
         // arrive as their own `chanset` events, so never clobber here.
         if (content.chanMeta) {
@@ -450,6 +467,16 @@ export class Controller {
         );
         await this.applyRetention(record, content.ch);
         this.backfillHistory(record).catch((e) => console.warn(`history: ${e.message}`));
+        this.scheduleBackup();
+        break;
+      }
+      case 'overview': {
+        // The circle's landing page changed. Same advisory admin gate as
+        // `chanset`: MLS can't enforce roles, so ignore senders we know are
+        // not admins and fail open while roles are still syncing.
+        if (record.roles?.[sender] && record.roles[sender] !== 'admin') break;
+        record.overview = normalizeOverview(content.ov);
+        await this.addSystemMessage(record.id, `circle overview updated by ${sender}`);
         this.scheduleBackup();
         break;
       }
@@ -653,6 +680,19 @@ export class Controller {
     await this.db.serverPut(record);
     this.dispatch({ type: 'servers', servers: this.snapshotServers() });
     this.dispatch({ type: 'refreshMessages' });
+    this.scheduleBackup();
+  }
+
+  /** Replace the circle's landing page (blurb + pinned links). The UI gates
+      this to admins; inside the group it is a visible, announced change like
+      channel settings — the roster's own eyes are the enforcement. */
+  async setOverview(serverId, overview) {
+    const record = this.servers.get(serverId);
+    record.overview = normalizeOverview(overview);
+    await this.sendContent(serverId, { k: 'overview', ov: record.overview });
+    await this.addSystemMessage(serverId, 'circle overview updated by you');
+    await this.db.serverPut(record);
+    this.dispatch({ type: 'servers', servers: this.snapshotServers() });
     this.scheduleBackup();
   }
 
@@ -885,6 +925,7 @@ export class Controller {
       channels: record.channels,
       voiceChannels: record.voiceChannels ?? ['lounge'],
       chanMeta: record.chanMeta ?? {},
+      overview: record.overview ?? null,
     });
     await this.db.serverPut(record);
     this.dispatch({ type: 'servers', servers: this.snapshotServers() });
@@ -958,6 +999,7 @@ export class Controller {
         channels: r.channels,
         voiceChannels: r.voiceChannels ?? ['lounge'],
         chanMeta: r.chanMeta ?? {},
+        overview: r.overview ?? null,
       }));
     if (!servers.length) return;
     const payload = await sealBackup(identity, { v: 1, servers });
@@ -981,6 +1023,7 @@ export class Controller {
         channels: s.channels?.length ? s.channels : ['general'],
         voiceChannels: s.voiceChannels ?? ['lounge'],
         chanMeta: s.chanMeta ?? {},
+        overview: normalizeOverview(s.overview),
         members: [],
         epoch: 0,
         lastSeq: 0,
@@ -1296,6 +1339,7 @@ export class Controller {
       channels: prior?.channels ?? ['general'],
       voiceChannels: prior?.voiceChannels,
       chanMeta: prior?.chanMeta ?? {},
+      overview: prior?.overview,
       hcursor: prior?.hcursor ?? {},
       verified: prior?.verified,
       members,
@@ -1386,6 +1430,26 @@ export function isCallChat(channel) {
 
 export function callChatChannel(room) {
   return `voice:${room}`;
+}
+
+// Landing-page content is authored by whoever the group trusts as admin,
+// but it still crosses devices — whitelist its fields and bound its size so
+// a hostile envelope can't smuggle extra structure or megabytes into every
+// member's record (and backup).
+const OVERVIEW_BLURB_MAX = 4000;
+const OVERVIEW_LINKS_MAX = 12;
+function normalizeOverview(ov) {
+  if (!ov || typeof ov !== 'object') return null;
+  const blurb = typeof ov.blurb === 'string' ? ov.blurb.slice(0, OVERVIEW_BLURB_MAX).trim() : '';
+  const links = (Array.isArray(ov.links) ? ov.links : [])
+    .slice(0, OVERVIEW_LINKS_MAX)
+    .map((l) => ({
+      label: String(l?.label ?? '').slice(0, 120).trim(),
+      url: String(l?.url ?? '').slice(0, 2048).trim(),
+    }))
+    .filter((l) => l.url);
+  if (!blurb && links.length === 0) return null;
+  return { blurb, links };
 }
 
 /** Human-readable summary of a channel's settings for system messages. */

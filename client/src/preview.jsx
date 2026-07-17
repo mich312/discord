@@ -3,7 +3,7 @@
 // if App's shell changes, keep this in step. Views:
 //   /preview.html?view=app            main surface, carbon
 //   /preview.html?view=app&theme=paper
-//   /preview.html?view=onboarding | invited | empty | banner
+//   /preview.html?view=onboarding | invited | empty | banner | overview
 //   /preview.html?view=modal-safety | modal-invite | modal-secure | modal-identity
 //   /preview.html?view=palette | call | call-share
 import React, { useState } from 'react';
@@ -14,6 +14,7 @@ import CommandPalette from './components/CommandPalette.jsx';
 import Rail from './components/Rail.jsx';
 import Channels from './components/Channels.jsx';
 import Messages from './components/Messages.jsx';
+import Overview from './components/Overview.jsx';
 import Members from './components/Members.jsx';
 import Modal from './components/Modal.jsx';
 import Onboarding from './components/Onboarding.jsx';
@@ -39,6 +40,16 @@ const servers = [
     members: ['alice', 'bob', 'charlie', 'dana'],
     verified: ['bob'],
     linkJoined: ['charlie'],
+    chanMeta: { 'pit-wall': { topic: 'live timing chatter during sessions' } },
+    roles: { alice: 'admin' },
+    overview: {
+      blurb:
+        'Pit crew HQ for the season. Race weekends run out of #logistics; #pit-wall is live timing only.\n\nNew here? Read the stint sheet before Friday practice.',
+      links: [
+        { label: 'stint sheet', url: 'https://example.com/stints' },
+        { label: 'tyre pressure log', url: 'https://example.com/tyres' },
+      ],
+    },
   },
   {
     id: 'srv-photo',
@@ -154,9 +165,14 @@ const modals = {
   },
 };
 
-function PreviewShell({ empty = false, banner = false, modal = null, palette = false, stage = null }) {
+function PreviewShell({ empty = false, banner = false, modal = null, palette = false, stage = null, landing = false }) {
   const me = 'alice';
-  const [active, setActive] = useState({ server: empty ? null : 'srv-race', channel: 'general' });
+  // channel: null means the circle's overview page, same as App.jsx.
+  const [active, setActive] = useState({
+    server: empty ? null : 'srv-race',
+    channel: landing ? null : 'general',
+  });
+  const [overviews, setOverviews] = useState({});
   const [openModal, setOpenModal] = useState(modal);
   const [paletteOpen, setPaletteOpen] = useState(palette);
   const [drawer, setDrawer] = useState(null); // narrow screens: null | 'nav' | 'roster'
@@ -194,7 +210,7 @@ function PreviewShell({ empty = false, banner = false, modal = null, palette = f
             servers={list}
             active={active.server}
             onSelect={(id) => {
-              setActive({ server: id, channel: 'general' });
+              setActive({ server: id, channel: null }); // land on the overview
               setDrawer(null);
             }}
             onCreate={noop}
@@ -239,18 +255,29 @@ function PreviewShell({ empty = false, banner = false, modal = null, palette = f
           />
         ) : activeServer ? (
           <>
-            <Messages
-              server={activeServer}
-              channel={active.channel}
-              me={me}
-              messages={messages}
-              onSend={noop}
-              onSendFile={noop}
-              fetchFile={async (f) => {
-                if ((f.mime ?? '').startsWith('image/')) return PNG;
-                throw new Error('preview: no blob store');
-              }}
-            />
+            {active.channel ? (
+              <Messages
+                server={activeServer}
+                channel={active.channel}
+                me={me}
+                messages={messages}
+                onSend={noop}
+                onSendFile={noop}
+                fetchFile={async (f) => {
+                  if ((f.mime ?? '').startsWith('image/')) return PNG;
+                  throw new Error('preview: no blob store');
+                }}
+              />
+            ) : (
+              <Overview
+                server={{ ...activeServer, overview: overviews[activeServer.id] ?? activeServer.overview }}
+                canManage={activeServer.roles?.[me] === 'admin'}
+                voice={voice}
+                onSelectChannel={(ch) => setActive({ ...active, channel: ch })}
+                onVoiceJoin={noop}
+                onSave={(ov) => setOverviews((o) => ({ ...o, [activeServer.id]: ov }))}
+              />
+            )}
             <Members server={activeServer} me={me} onAdd={noop} onMember={() => setOpenModal(modals['modal-safety'])} />
           </>
         ) : (
@@ -297,6 +324,7 @@ function PreviewShell({ empty = false, banner = false, modal = null, palette = f
 function pick() {
   if (view === 'onboarding' || view === 'invited') return <Onboarding controller={mockController} />;
   if (view === 'empty') return <PreviewShell empty />;
+  if (view === 'overview') return <PreviewShell landing />;
   if (view === 'banner') return <PreviewShell banner />;
   if (view === 'palette') return <PreviewShell palette />;
   if (view === 'call') return <PreviewShell stage={stageVoice([])} />;

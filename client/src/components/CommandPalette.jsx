@@ -22,9 +22,9 @@ export default function CommandPalette({ servers, active, actions, onNavigate, o
     const circles = servers.map((s) => ({
       id: `circle:${s.id}`,
       label: s.name,
-      hint: s.id === active ? 'current circle' : 'switch circle',
+      hint: s.id === active ? 'current circle — overview' : 'circle overview',
       glyph: <CircleGlyph />,
-      run: () => onNavigate(s.id, s.channels[0]),
+      run: () => onNavigate(s.id, null), // land on the circle's overview page
     }));
     const all = [...rooms, ...circles, ...actions];
     const q = query.trim().toLowerCase();

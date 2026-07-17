@@ -1,6 +1,7 @@
 // Client e2e: the full user journey in two real browsers.
 //   1. alice onboards (identity + forced recovery-key export), creates a
-//      server and a channel
+//      server and a channel, and customizes the circle's overview landing
+//      page (blurb + pinned link) that every joiner should inherit
 //   2. bob onboards; alice adds him by handle; encrypted chat both ways in
 //      two channels
 //   3. bob reloads — MLS state comes back from IndexedDB: history is intact
@@ -95,6 +96,23 @@ try {
   await alice.press('[data-testid=new-server-name]', 'Enter');
   await alice.waitForSelector('[data-testid=server-name]');
   await alice.waitForSelector('[data-testid=channel-general]');
+  // A fresh circle lands on its overview page — the landing zone.
+  await alice.waitForSelector('[data-testid=overview-pane]');
+
+  console.log('2b. alice customizes the landing page (blurb + pinned link)');
+  await alice.click('[data-testid=overview-edit]');
+  await alice.fill(
+    '[data-testid=overview-blurb-input]',
+    'Pit crew HQ — race weekends, logistics, tyre talk.'
+  );
+  await alice.click('[data-testid=overview-add-link]');
+  await alice.fill('[data-testid=overview-link-label-0]', 'stint sheet');
+  await alice.fill('[data-testid=overview-link-url-0]', 'https://example.com/stints');
+  await alice.click('[data-testid=overview-save]');
+  await alice.waitForSelector('text=Pit crew HQ', { timeout: 10000 });
+  await alice.waitForSelector('[data-testid=overview-link]');
+  // Into the first room to post.
+  await alice.click('[data-testid=channel-general]');
   await alice.fill('[data-testid=composer]', 'first message — should be invisible to bob later');
   await alice.press('[data-testid=composer]', 'Enter');
 
@@ -120,8 +138,16 @@ try {
   if (!bobMembers.includes('alice') || !bobMembers.includes('bob')) {
     throw new Error(`bob's member list wrong: ${bobMembers}`);
   }
+  // bob landed on the overview page; alice's customization reached him via
+  // the encrypted meta rebroadcast that follows every add.
+  await bob.waitForSelector('[data-testid=overview-pane]');
+  await bob.waitForSelector('text=Pit crew HQ', { timeout: 10000 });
+  if (await bob.locator('[data-testid=overview-edit]').count()) {
+    throw new Error('non-admin bob should not see the overview customize button');
+  }
 
   console.log('5. encrypted chat, both directions');
+  await bob.click('[data-testid=channel-general]'); // off the landing page, into the room
   await alice.fill('[data-testid=composer]', 'welcome to the team, bob');
   await alice.press('[data-testid=composer]', 'Enter');
   await bob.waitForSelector('text=welcome to the team, bob', { timeout: 10000 });
@@ -183,6 +209,8 @@ try {
     () => document.querySelector('[data-testid=conn-dot]')?.classList.contains('online'),
     { timeout: 15000 }
   );
+  // A reload lands on the overview page; open the room to check history.
+  await bob.click('[data-testid=channel-general]');
   // History survived:
   await bob.waitForSelector('text=welcome to the team, bob', { timeout: 10000 });
   // Ratchets survived — live traffic still decrypts, both directions:
@@ -234,10 +262,14 @@ try {
     () => document.querySelector('[data-testid=server-name]')?.textContent === 'Race Team',
     { timeout: 15000 }
   );
+  // The landing page reaches the link joiner too (invite-owner rebroadcast).
+  await charlie.waitForSelector('[data-testid=overview-pane]');
+  await charlie.waitForSelector('text=Pit crew HQ', { timeout: 15000 });
   // Existing members see the join and the unverified badge.
   await alice.waitForSelector('text=charlie joined via invite link', { timeout: 15000 });
   await alice.waitForSelector('.badge-unverified', { timeout: 5000 });
   // Chat flows to and from the link joiner.
+  await charlie.click('[data-testid=channel-general]');
   await charlie.fill('[data-testid=composer]', 'found my way in via the link');
   await charlie.press('[data-testid=composer]', 'Enter');
   await alice.waitForSelector('text=found my way in via the link', { timeout: 10000 });
@@ -622,6 +654,10 @@ try {
     () => document.querySelector('[data-testid=server-name]')?.textContent === 'Race Team',
     { timeout: 15000 }
   );
+  // …landing on the overview page, whose content also came back from the
+  // encrypted backup.
+  await pwPage.waitForSelector('[data-testid=overview-pane]', { timeout: 10000 });
+  await pwPage.waitForSelector('text=Pit crew HQ', { timeout: 10000 });
   // Wrong password must fail without leaking the vault.
   const pw2Ctx = await browser.newContext();
   const pw2 = await pw2Ctx.newPage();
@@ -709,7 +745,9 @@ try {
   await charlie.waitForSelector('text=checking in from the phone', { timeout: 10000 });
   await alice.setViewportSize({ width: 1280, height: 720 });
 
-  console.log('\nPASS: full client journey — onboarding, E2EE chat, channels,');
+  console.log('\nPASS: full client journey — onboarding, the customizable circle');
+  console.log('      overview landing page (admin-edited, meta-rebroadcast to');
+  console.log('      joiners, restored from backup), E2EE chat, channels,');
   console.log('      IndexedDB persistence, recovery, invite-link external-commit');
   console.log('      join with unverified badge, localStorage identity survival,');
   console.log('      plain key export/import, encrypted attachments, safety');

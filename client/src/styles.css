@@ -1177,6 +1177,138 @@ kbd {
 .add-member input:focus { border-color: var(--ink-dim); }
 .members .fineprint { padding: 0 14px; }
 
+/* ---------------------------------------------------------------- overview -- */
+/* The circle's landing zone: a cover page in the conversation slot. */
+.channel-list.overview-entry { padding: 12px 8px 0; flex-shrink: 0; overflow: visible; }
+
+.overview-scroll { padding: 0 24px 24px; }
+
+.overview-hero {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  padding: 26px 0 20px;
+  border-bottom: 1px solid var(--hairline);
+}
+.overview-hero .seal-avatar { flex-shrink: 0; }
+.overview-title { flex: 1; min-width: 0; }
+.overview-title h2 { font-size: var(--text-xl); font-weight: 650; letter-spacing: -0.015em; }
+.overview-stats {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  margin-top: 5px;
+  font-size: var(--text-xs);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ink-mute);
+}
+.overview-customize { flex-shrink: 0; }
+
+.overview-section { padding: 20px 0 2px; max-width: 74ch; }
+.overview-section > .overline { display: block; margin-bottom: 10px; }
+
+.overview-blurb { white-space: pre-wrap; line-height: 1.65; max-width: 66ch; }
+.overview-blurb.placeholder { font-style: italic; }
+
+.overview-links { list-style: none; padding: 0; display: grid; gap: 6px; }
+.overview-link {
+  display: flex;
+  align-items: baseline;
+  gap: 9px;
+  padding: 8px 12px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--r);
+  background: var(--panel);
+  color: var(--ink);
+  text-decoration: none;
+  min-width: 0;
+  transition: border-color var(--fast) var(--ease), background var(--fast) var(--ease);
+}
+a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover); }
+.overview-link svg { color: var(--accent-ink); flex-shrink: 0; align-self: center; }
+.overview-link .label { font-weight: 550; }
+.overview-link .url {
+  color: var(--ink-mute);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+  margin-left: auto;
+}
+.overview-link.inert { color: var(--ink-dim); }
+.overview-link.inert svg { color: var(--ink-mute); }
+
+.overview-rooms { list-style: none; padding: 0; display: grid; gap: 4px; }
+.overview-room {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  width: 100%;
+  padding: 8px 12px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--r);
+  background: var(--panel);
+  color: var(--ink-dim);
+  text-align: left;
+  min-width: 0;
+  transition: border-color var(--fast) var(--ease), background var(--fast) var(--ease),
+    color var(--fast) var(--ease);
+}
+.overview-room:hover { border-color: var(--ink-mute); background: var(--hover); color: var(--ink); }
+.overview-room .glyph { color: var(--ink-mute); display: grid; place-items: center; flex-shrink: 0; }
+.overview-room:hover .glyph { color: var(--accent-ink); }
+.overview-room .room { font-weight: 550; font-size: 13px; }
+.overview-room .topic {
+  font-size: var(--text-sm);
+  color: var(--ink-mute);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  min-width: 0;
+}
+.overview-room .go {
+  margin-left: auto;
+  color: var(--ink-mute);
+  display: grid;
+  place-items: center;
+  font: 600 var(--text-xs) var(--mono);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+}
+.overview-room:hover .go { color: var(--accent-ink); }
+
+.overview-edit-form { display: grid; gap: 8px; max-width: 66ch; }
+.overview-field-label {
+  font: 600 var(--text-xs) var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.12em;
+  color: var(--ink-mute);
+  margin-top: 6px;
+}
+.overview-edit-form textarea,
+.overview-link-edit input {
+  width: 100%;
+  background: var(--well);
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--r);
+  padding: 9px 11px;
+  transition: border-color var(--fast) var(--ease);
+}
+.overview-edit-form textarea { resize: vertical; line-height: 1.55; }
+.overview-edit-form textarea:focus,
+.overview-link-edit input:focus { border-color: var(--ink-dim); outline: none; }
+.overview-link-edit {
+  display: grid;
+  grid-template-columns: minmax(90px, 1fr) 2fr auto;
+  gap: 6px;
+  align-items: center;
+}
+.overview-add-link { justify-self: start; }
+.overview-edit-actions { display: flex; gap: 8px; margin-top: 6px; }
+
+.overview-foot { max-width: 66ch; padding-bottom: 8px; }
+
 /* ------------------------------------------------------------ empty state -- */
 .empty-state {
   flex: 1;

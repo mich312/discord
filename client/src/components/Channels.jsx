@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import Seal from './Seal.jsx';
 import VoiceMeter from './VoiceMeter.jsx';
-import { Hash, Wave, Plus, Gear, Clock } from './icons.jsx';
+import { Hash, Wave, Plus, Gear, Clock, CircleGlyph } from './icons.jsx';
 
 // Rooms and voice tables of the active circle. Channel names travel inside
 // the encryption, so even this sidebar is knowledge the relay never has.
@@ -27,6 +27,22 @@ export default function Channels({
 
   return (
     <aside className="channels">
+      {/* The circle's landing page — where clicking the circle drops you.
+          activeChannel === null means "on the overview". */}
+      <ul className="channel-list overview-entry">
+        <li>
+          <button
+            className={activeChannel == null ? 'channel active' : 'channel'}
+            data-testid="channel-overview"
+            onClick={() => onSelect(null)}
+          >
+            <span className="glyph">
+              <CircleGlyph size={13} />
+            </span>
+            overview
+          </button>
+        </li>
+      </ul>
       <div className="section-label">
         <span className="overline"><span className="idx">02</span>rooms</span>
         {canManage && (
