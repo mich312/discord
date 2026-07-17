@@ -38,6 +38,7 @@ COPY --from=rust-build /src/target/release/relay /usr/local/bin/relay
 COPY --from=client-build /src/client/dist /app/public
 ENV CLIENT_DIR=/app/public \
     BLOB_DIR=/data/blobs \
+    VAPID_KEY_FILE=/data/vapid.key \
     RELAY_PORT=80 \
     RELAY_BIND=0.0.0.0
 VOLUME /data

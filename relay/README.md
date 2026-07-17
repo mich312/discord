@@ -76,10 +76,16 @@ browser PushSubscription. When traffic lands for a member with no live
 connection (a group message, or a Welcome stored offline), the relay
 sends an aes128gcm-encrypted push carrying only what it already knows —
 the group id, never content. Dead endpoints are dropped on 404/410.
-Set `VAPID_PRIVATE_KEY` (base64url raw P-256 scalar) in production; an
-ephemeral key is generated (and subscriptions die on restart) otherwise.
-A malformed key logs an error and falls back to an ephemeral key rather
-than aborting startup — push degrades, but the relay stays up.
+The VAPID key must not change across restarts: browsers bind a
+subscription to the advertised key, and the push service rejects
+everything — new registrations included — once it rotates. Resolution
+order: `VAPID_PRIVATE_KEY` (base64url raw P-256 scalar) if set; else an
+auto-generated key persisted at `VAPID_KEY_FILE` (the container image
+points this at the data volume, so it survives restarts with no operator
+action); else — neither available, e.g. a bare dev run — a per-process
+ephemeral key, and subscriptions die on restart. A malformed
+`VAPID_PRIVATE_KEY` logs an error and falls back to the persisted/ephemeral
+key rather than aborting startup — push degrades, but the relay stays up.
 
 ## Accounts
 

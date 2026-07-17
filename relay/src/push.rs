@@ -20,14 +20,25 @@ pub struct PushService {
 }
 
 impl PushService {
-    /// Key from `VAPID_PRIVATE_KEY` (base64url raw scalar), or an ephemeral
-    /// one — fine for dev; subscriptions die with the key, so set the env
-    /// var in production.
+    /// Resolve the VAPID key in priority order:
+    ///   1. `VAPID_PRIVATE_KEY` (base64url raw scalar) — an explicit,
+    ///      host-portable operator override.
+    ///   2. An auto-managed key persisted at `VAPID_KEY_FILE` (set in the
+    ///      container image to a path on the data volume). Generated once and
+    ///      reused on every restart, so push subscriptions survive redeploys
+    ///      even when the operator never sets `VAPID_PRIVATE_KEY`.
+    ///   3. A freshly generated ephemeral key — only when neither is available
+    ///      (dev, tests, in-memory runs). Dies with the process.
+    ///
+    /// The key never rotating across restarts is what keeps push working:
+    /// browsers bind a subscription to the advertised `applicationServerKey`
+    /// (this key's public half), and the push service rejects everything —
+    /// registrations included — once that key changes underneath them.
     ///
     /// A malformed `VAPID_PRIVATE_KEY` never aborts startup: push is an
     /// auxiliary "nudge offline devices" feature, so we log a loud error and
-    /// fall back to an ephemeral key rather than crash-looping the whole
-    /// relay (messaging, groups, blobs) over a misconfigured push key.
+    /// fall back to the persisted/ephemeral key rather than crash-looping the
+    /// whole relay (messaging, groups, blobs) over a misconfigured push key.
     pub fn from_env() -> Self {
         let (private_b64, secret) = Self::load_key();
         let public_b64 =
@@ -35,26 +46,52 @@ impl PushService {
         Self { private_b64, public_b64, client: HyperWebPushClient::new() }
     }
 
-    /// Resolve the VAPID key, falling back to a freshly generated ephemeral
-    /// key when the env var is unset or invalid.
     fn load_key() -> (String, p256::SecretKey) {
+        // 1. Operator-supplied key wins — explicit and portable across hosts.
         match std::env::var("VAPID_PRIVATE_KEY") {
-            Ok(v) => match Self::parse_key(&v) {
+            Ok(v) if !v.trim().is_empty() => match Self::parse_key(&v) {
                 // Store the trimmed key so `send`'s `from_base64` sees exactly
                 // what `parse_key` validated (no stray whitespace/newline).
                 Ok(secret) => return (v.trim().to_string(), secret),
                 Err(e) => tracing::error!(
-                    "VAPID_PRIVATE_KEY is set but invalid ({e}); falling back to an \
-                     ephemeral key. Expected base64url (no padding) of a 32-byte raw \
-                     P-256 scalar. Existing push subscriptions will not work until \
-                     this is fixed."
+                    "VAPID_PRIVATE_KEY is set but invalid ({e}); ignoring it. Expected \
+                     base64url (no padding) of a 32-byte raw P-256 scalar. Falling back \
+                     to the on-disk key (or an ephemeral one)."
                 ),
             },
-            Err(_) => tracing::warn!(
-                "VAPID_PRIVATE_KEY not set — generated ephemeral key (push \
-                 subscriptions will not survive restarts)"
-            ),
+            _ => {}
         }
+
+        // 2. Auto-managed, persisted key — durable across restarts without any
+        //    operator action. Only active when VAPID_KEY_FILE points somewhere
+        //    (the container image sets it to the data volume); dev and tests
+        //    leave it unset and stay ephemeral, exactly as before.
+        if let Some(path) = Self::key_file_path() {
+            if let Some(secret) = Self::read_key_file(&path) {
+                return (URL_SAFE_NO_PAD.encode(secret.to_bytes()), secret);
+            }
+            let key = p256::SecretKey::random(&mut rand::rngs::OsRng);
+            let b64 = URL_SAFE_NO_PAD.encode(key.to_bytes());
+            match Self::write_key_file(&path, &b64) {
+                Ok(()) => tracing::info!(
+                    "Generated a new VAPID key and persisted it to {} — push \
+                     subscriptions will now survive restarts.",
+                    path.display()
+                ),
+                Err(e) => tracing::error!(
+                    "Generated a VAPID key but could not persist it to {} ({e}); it will \
+                     rotate on the next restart. Set VAPID_PRIVATE_KEY to a durable key.",
+                    path.display()
+                ),
+            }
+            return (b64, key);
+        }
+
+        // 3. Nothing to persist to: ephemeral (unchanged dev/test behavior).
+        tracing::warn!(
+            "VAPID_PRIVATE_KEY not set and no VAPID_KEY_FILE — generated an ephemeral \
+             key (push subscriptions will not survive restarts)"
+        );
         let key = p256::SecretKey::random(&mut rand::rngs::OsRng);
         let b64 = URL_SAFE_NO_PAD.encode(key.to_bytes());
         (b64, key)
@@ -65,6 +102,48 @@ impl PushService {
             .decode(private_b64.trim())
             .map_err(|e| format!("bad base64url: {e}"))?;
         p256::SecretKey::from_slice(&bytes).map_err(|e| format!("not a valid P-256 scalar: {e}"))
+    }
+
+    /// Where the auto-managed key lives, or `None` to stay ephemeral. Blank is
+    /// treated as unset so `VAPID_KEY_FILE=` doesn't point at "".
+    fn key_file_path() -> Option<std::path::PathBuf> {
+        match std::env::var("VAPID_KEY_FILE") {
+            Ok(v) if !v.trim().is_empty() => Some(std::path::PathBuf::from(v.trim())),
+            _ => None,
+        }
+    }
+
+    /// Read and validate a persisted key. `None` (regenerate) when the file is
+    /// absent — the first-run case — or holds something that isn't a key.
+    fn read_key_file(path: &std::path::Path) -> Option<p256::SecretKey> {
+        let contents = std::fs::read_to_string(path).ok()?;
+        match Self::parse_key(&contents) {
+            Ok(secret) => Some(secret),
+            Err(e) => {
+                tracing::error!(
+                    "VAPID key file {} is not a usable key ({e}); regenerating it.",
+                    path.display()
+                );
+                None
+            }
+        }
+    }
+
+    /// Persist the base64url scalar, creating parent dirs and tightening perms
+    /// — the private scalar is a server secret sitting on the data volume.
+    fn write_key_file(path: &std::path::Path, private_b64: &str) -> std::io::Result<()> {
+        if let Some(parent) = path.parent() {
+            if !parent.as_os_str().is_empty() {
+                std::fs::create_dir_all(parent)?;
+            }
+        }
+        std::fs::write(path, private_b64)?;
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let _ = std::fs::set_permissions(path, std::fs::Permissions::from_mode(0o600));
+        }
+        Ok(())
     }
 
     /// Send `payload` to one subscription. Returns Ok(false) when the
@@ -113,5 +192,43 @@ mod tests {
         // Trailing whitespace (a stray newline from `$(cat key)`) is tolerated.
         let parsed = PushService::parse_key(&format!("{b64}\n")).expect("valid key");
         assert_eq!(parsed.to_bytes(), key.to_bytes());
+    }
+
+    #[test]
+    fn key_file_round_trips_and_survives_reload() {
+        let mut path = std::env::temp_dir();
+        path.push(format!("quorum-vapid-roundtrip-{}.key", std::process::id()));
+        let _ = std::fs::remove_file(&path);
+
+        let key = p256::SecretKey::random(&mut rand::rngs::OsRng);
+        let b64 = URL_SAFE_NO_PAD.encode(key.to_bytes());
+        PushService::write_key_file(&path, &b64).expect("persist key");
+
+        // A "restart" reads the same scalar back — the whole point: the
+        // advertised applicationServerKey must not change across boots.
+        let reloaded = PushService::read_key_file(&path).expect("reload a valid key");
+        assert_eq!(reloaded.to_bytes(), key.to_bytes());
+
+        #[cfg(unix)]
+        {
+            use std::os::unix::fs::PermissionsExt;
+            let mode = std::fs::metadata(&path).unwrap().permissions().mode();
+            assert_eq!(mode & 0o777, 0o600, "private key file must be 0600");
+        }
+        let _ = std::fs::remove_file(&path);
+    }
+
+    #[test]
+    fn read_key_file_regenerates_on_absent_or_garbage() {
+        let mut missing = std::env::temp_dir();
+        missing.push(format!("quorum-vapid-absent-{}.key", std::process::id()));
+        let _ = std::fs::remove_file(&missing);
+        assert!(PushService::read_key_file(&missing).is_none(), "absent -> regenerate");
+
+        let mut garbage = std::env::temp_dir();
+        garbage.push(format!("quorum-vapid-garbage-{}.key", std::process::id()));
+        std::fs::write(&garbage, "not a key!!!").unwrap();
+        assert!(PushService::read_key_file(&garbage).is_none(), "garbage -> regenerate");
+        let _ = std::fs::remove_file(&garbage);
     }
 }
