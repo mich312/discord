@@ -188,6 +188,12 @@ export default function App() {
       .then((messages) => dispatch({ type: 'messages', messages }));
   }, [server, channel, state.messagesRev]);
 
+  // Whatever is on screen is read: keep the device-local seen marker in
+  // step so the home base's unread counts mean "since you last looked".
+  useEffect(() => {
+    if (server && channel) controllerRef.current?.markSeen(server, channel);
+  }, [server, channel, state.messages]);
+
   // Auto-dismiss toasts.
   useEffect(() => {
     if (!state.toast) return;
@@ -473,8 +479,12 @@ export default function App() {
             ) : (
               <Overview
                 server={activeServer}
+                me={state.me}
                 canManage={canManage && !activeServer.restored}
+                canSend={!activeServer.restored}
                 voice={state.voice}
+                digestKey={`${activeServer.lastSeq}:${state.messagesRev}`}
+                loadDigest={(id) => controllerRef.current.channelDigest(id)}
                 onSelectChannel={(ch) => dispatch({ type: 'select', server, channel: ch })}
                 onVoiceJoin={(ch) =>
                   controllerRef.current.voice
@@ -485,6 +495,16 @@ export default function App() {
                 onSave={(ov) =>
                   controllerRef.current
                     .setOverview(server, ov)
+                    .catch((e) => dispatch({ type: 'toast', text: e.message }))
+                }
+                onAddNotice={(text) =>
+                  controllerRef.current
+                    .addNotice(server, text)
+                    .catch((e) => dispatch({ type: 'toast', text: e.message }))
+                }
+                onRemoveNotice={(id) =>
+                  controllerRef.current
+                    .removeNotice(server, id)
                     .catch((e) => dispatch({ type: 'toast', text: e.message }))
                 }
               />

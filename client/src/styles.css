@@ -1178,16 +1178,17 @@ kbd {
 .members .fineprint { padding: 0 14px; }
 
 /* ---------------------------------------------------------------- overview -- */
-/* The circle's landing zone: a cover page in the conversation slot. */
+/* The circle's home base: up next, catch up, noticeboard — a briefing,
+   not a brochure, in the conversation slot. */
 .channel-list.overview-entry { padding: 12px 8px 0; flex-shrink: 0; overflow: visible; }
 
 .overview-scroll { padding: 0 24px 24px; }
 
 .overview-hero {
   display: flex;
-  align-items: center;
+  align-items: flex-start;
   gap: 16px;
-  padding: 26px 0 20px;
+  padding: 24px 0 18px;
   border-bottom: 1px solid var(--hairline);
 }
 .overview-hero .seal-avatar { flex-shrink: 0; }
@@ -1208,8 +1209,37 @@ kbd {
 .overview-section { padding: 20px 0 2px; max-width: 74ch; }
 .overview-section > .overline { display: block; margin-bottom: 10px; }
 
-.overview-blurb { white-space: pre-wrap; line-height: 1.65; max-width: 66ch; }
-.overview-blurb.placeholder { font-style: italic; }
+.overview-blurb {
+  white-space: pre-wrap;
+  line-height: 1.6;
+  max-width: 66ch;
+  margin-top: 8px;
+  font-size: var(--text-sm);
+  color: var(--ink-dim);
+}
+.overview-blurb.placeholder { font-style: italic; margin-top: 0; font-size: var(--text-base); }
+
+/* up next: the one block that earns the accent */
+.overview-upnext {
+  margin: 20px 0 0;
+  padding: 14px 16px;
+  max-width: 74ch;
+  border: 1px solid var(--hairline);
+  border-left: 2px solid var(--accent);
+  background: var(--panel);
+}
+.overview-upnext .wm-tag {
+  display: block;
+  font: 600 var(--text-xs) var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.14em;
+  color: var(--accent-ink);
+  margin-bottom: 8px;
+}
+.upnext-body { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
+.upnext-title { font-size: var(--text-lg); font-weight: 650; letter-spacing: -0.01em; }
+.upnext-when { font-size: var(--text-xs); color: var(--ink-mute); text-transform: uppercase; letter-spacing: 0.08em; }
+.upnext-note { margin-top: 6px; font-size: var(--text-sm); color: var(--ink-dim); line-height: 1.5; }
 
 .overview-links { list-style: none; padding: 0; display: grid; gap: 6px; }
 .overview-link {
@@ -1239,6 +1269,7 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
 .overview-link.inert { color: var(--ink-dim); }
 .overview-link.inert svg { color: var(--ink-mute); }
 
+/* catch up: per-room unread + latest line */
 .overview-rooms { list-style: none; padding: 0; display: grid; gap: 4px; }
 .overview-room {
   display: flex;
@@ -1258,17 +1289,37 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
 .overview-room:hover { border-color: var(--ink-mute); background: var(--hover); color: var(--ink); }
 .overview-room .glyph { color: var(--ink-mute); display: grid; place-items: center; flex-shrink: 0; }
 .overview-room:hover .glyph { color: var(--accent-ink); }
-.overview-room .room { font-weight: 550; font-size: 13px; }
-.overview-room .topic {
+.overview-room .room { font-weight: 550; font-size: 13px; flex-shrink: 0; }
+.overview-room.has-unread { color: var(--ink); border-color: var(--hairline-strong); }
+.overview-room.voice.live .glyph { color: var(--ok); }
+.unread-badge {
+  flex-shrink: 0;
+  font: 600 var(--text-xs) var(--mono);
+  background: var(--accent);
+  color: var(--on-accent);
+  padding: 0 6px;
+  border-radius: var(--r);
+  line-height: 16px;
+}
+.overview-room .last {
   font-size: var(--text-sm);
   color: var(--ink-mute);
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
   min-width: 0;
+  flex: 1;
+}
+.overview-room.has-unread .last { color: var(--ink-dim); }
+.overview-room .when {
+  flex-shrink: 0;
+  font-size: var(--text-xs);
+  color: var(--ink-mute);
+  text-transform: uppercase;
+  letter-spacing: 0.06em;
 }
 .overview-room .go {
-  margin-left: auto;
+  flex-shrink: 0;
   color: var(--ink-mute);
   display: grid;
   place-items: center;
@@ -1278,7 +1329,54 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
 }
 .overview-room:hover .go { color: var(--accent-ink); }
 
+/* noticeboard */
+.notice-composer { display: flex; gap: 8px; margin-bottom: 12px; }
+.notice-composer input {
+  flex: 1;
+  background: var(--well);
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--r);
+  padding: 8px 11px;
+  font-size: 13px;
+  transition: border-color var(--fast) var(--ease);
+}
+.notice-composer input:focus { border-color: var(--ink-dim); }
+.overview-notices { list-style: none; padding: 0; display: grid; gap: 6px; }
+.notice {
+  display: flex;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 9px 12px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--r);
+  background: var(--panel);
+}
+.notice .seal-avatar { margin-top: 2px; flex-shrink: 0; }
+.notice-body { flex: 1; min-width: 0; display: grid; gap: 2px; }
+.notice-head {
+  font-size: var(--text-xs);
+  color: var(--ink-mute);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+}
+.notice-text { line-height: 1.5; overflow-wrap: anywhere; }
+.notice-remove { flex-shrink: 0; opacity: 0; padding: 2px 5px; }
+.notice:hover .notice-remove, .notice-remove:focus-visible { opacity: 1; }
+@media (hover: none) { .notice-remove { opacity: 1; } }
+.overview-empty-note { font-size: var(--text-sm); line-height: 1.55; max-width: 60ch; }
+
 .overview-edit-form { display: grid; gap: 8px; max-width: 66ch; }
+.overview-event-edit { display: grid; grid-template-columns: 1fr auto; gap: 6px; }
+.overview-event-edit input, .overview-edit-form > input {
+  width: 100%;
+  background: var(--well);
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--r);
+  padding: 9px 11px;
+  transition: border-color var(--fast) var(--ease);
+}
+.overview-event-edit input:focus, .overview-edit-form > input:focus { border-color: var(--ink-dim); outline: none; }
+.overview-event-edit input[type='datetime-local'] { color-scheme: inherit; font-size: 13px; }
 .overview-field-label {
   font: 600 var(--text-xs) var(--mono);
   text-transform: uppercase;

@@ -27,8 +27,8 @@ export default function Channels({
 
   return (
     <aside className="channels">
-      {/* The circle's landing page — where clicking the circle drops you.
-          activeChannel === null means "on the overview". */}
+      {/* The circle's home base — where clicking the circle drops you.
+          activeChannel === null means "on the home base". */}
       <ul className="channel-list overview-entry">
         <li>
           <button
@@ -39,7 +39,7 @@ export default function Channels({
             <span className="glyph">
               <CircleGlyph size={13} />
             </span>
-            overview
+            home base
           </button>
         </li>
       </ul>

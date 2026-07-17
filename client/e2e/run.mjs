@@ -1,7 +1,8 @@
 // Client e2e: the full user journey in two real browsers.
 //   1. alice onboards (identity + forced recovery-key export), creates a
-//      server and a channel, and customizes the circle's overview landing
-//      page (blurb + pinned link) that every joiner should inherit
+//      server and a channel, and sets up the circle's home base (next
+//      event, blurb, pinned link, a noticeboard pin) that every joiner
+//      should inherit
 //   2. bob onboards; alice adds him by handle; encrypted chat both ways in
 //      two channels
 //   3. bob reloads — MLS state comes back from IndexedDB: history is intact
@@ -99,8 +100,15 @@ try {
   // A fresh circle lands on its overview page — the landing zone.
   await alice.waitForSelector('[data-testid=overview-pane]');
 
-  console.log('2b. alice customizes the landing page (blurb + pinned link)');
+  console.log('2b. alice sets up the home base (event + blurb + link + notice)');
   await alice.click('[data-testid=overview-edit]');
+  const eventAt = new Date(Date.now() + 52 * 3600 * 1000);
+  const pad2 = (n) => String(n).padStart(2, '0');
+  await alice.fill('[data-testid=overview-event-title]', 'Qualifying at Spa');
+  await alice.fill(
+    '[data-testid=overview-event-at]',
+    `${eventAt.getFullYear()}-${pad2(eventAt.getMonth() + 1)}-${pad2(eventAt.getDate())}T${pad2(eventAt.getHours())}:${pad2(eventAt.getMinutes())}`
+  );
   await alice.fill(
     '[data-testid=overview-blurb-input]',
     'Pit crew HQ — race weekends, logistics, tyre talk.'
@@ -111,6 +119,19 @@ try {
   await alice.click('[data-testid=overview-save]');
   await alice.waitForSelector('text=Pit crew HQ', { timeout: 10000 });
   await alice.waitForSelector('[data-testid=overview-link]');
+  // The up-next block is live with a sane countdown.
+  await alice.waitForSelector('text=Qualifying at Spa', { timeout: 10000 });
+  const countdown = (await alice.textContent('[data-testid=overview-countdown]')).trim();
+  if (!/^in \d+ (days|h)$/.test(countdown)) {
+    throw new Error(`unexpected countdown label: "${countdown}"`);
+  }
+  // And the noticeboard takes a pin.
+  await alice.fill(
+    '[data-testid=overview-notice-input]',
+    'Trailer leaves 6am Saturday — pack the spare diffuser'
+  );
+  await alice.click('[data-testid=overview-notice-post]');
+  await alice.waitForSelector('[data-testid=overview-notice]', { timeout: 10000 });
   // Into the first room to post.
   await alice.click('[data-testid=channel-general]');
   await alice.fill('[data-testid=composer]', 'first message — should be invisible to bob later');
@@ -138,16 +159,25 @@ try {
   if (!bobMembers.includes('alice') || !bobMembers.includes('bob')) {
     throw new Error(`bob's member list wrong: ${bobMembers}`);
   }
-  // bob landed on the overview page; alice's customization reached him via
-  // the encrypted meta rebroadcast that follows every add.
+  // bob landed on the home base; alice's setup reached him via the
+  // encrypted meta rebroadcast that follows every add.
   await bob.waitForSelector('[data-testid=overview-pane]');
   await bob.waitForSelector('text=Pit crew HQ', { timeout: 10000 });
+  await bob.waitForSelector('text=Qualifying at Spa', { timeout: 10000 });
+  await bob.waitForSelector('text=Trailer leaves 6am Saturday', { timeout: 10000 });
   if (await bob.locator('[data-testid=overview-edit]').count()) {
-    throw new Error('non-admin bob should not see the overview customize button');
+    throw new Error('non-admin bob should not see the customize button');
   }
 
+  console.log('4b. the noticeboard belongs to the roster: non-admin bob pins');
+  await bob.fill('[data-testid=overview-notice-input]', 'brakes bedded in, car is ready');
+  await bob.click('[data-testid=overview-notice-post]');
+  await alice.click('[data-testid=channel-overview]');
+  await alice.waitForSelector('text=brakes bedded in', { timeout: 10000 });
+  await alice.click('[data-testid=channel-general]');
+
   console.log('5. encrypted chat, both directions');
-  await bob.click('[data-testid=channel-general]'); // off the landing page, into the room
+  await bob.click('[data-testid=channel-general]'); // off the home base, into the room
   await alice.fill('[data-testid=composer]', 'welcome to the team, bob');
   await alice.press('[data-testid=composer]', 'Enter');
   await bob.waitForSelector('text=welcome to the team, bob', { timeout: 10000 });
@@ -170,6 +200,27 @@ try {
   await alice.press('[data-testid=composer]', 'Enter');
   await bob.click('[data-testid=channel-logistics]');
   await bob.waitForSelector('text=trailer leaves at 6am', { timeout: 10000 });
+
+  console.log('6a. home base catch-up: unread badge counts what landed while away');
+  await alice.click('[data-testid=channel-overview]');
+  await bob.fill('[data-testid=composer]', 'one more pallet to load');
+  await bob.press('[data-testid=composer]', 'Enter');
+  // The badge appears live while alice sits on the home base…
+  await alice.waitForSelector('[data-testid=overview-unread-logistics]', { timeout: 10000 });
+  // …and reading the room clears it.
+  await alice.click('[data-testid=overview-room-logistics]');
+  await alice.waitForSelector('text=one more pallet to load', { timeout: 10000 });
+  await alice.click('[data-testid=channel-overview]');
+  await alice.waitForFunction(
+    () =>
+      document
+        .querySelector('[data-testid=overview-room-logistics]')
+        ?.textContent.includes('one more pallet'),
+    { timeout: 10000 }
+  );
+  if (await alice.locator('[data-testid=overview-unread-logistics]').count()) {
+    throw new Error('unread badge should clear after reading the room');
+  }
 
   console.log('6b. admin renames + deletes a channel (via settings); non-admins cannot');
   // bob is not an admin: no create button, no per-channel settings gear.
@@ -262,9 +313,12 @@ try {
     () => document.querySelector('[data-testid=server-name]')?.textContent === 'Race Team',
     { timeout: 15000 }
   );
-  // The landing page reaches the link joiner too (invite-owner rebroadcast).
+  // The home base reaches the link joiner too (invite-owner rebroadcast):
+  // blurb, event, and the noticeboard.
   await charlie.waitForSelector('[data-testid=overview-pane]');
   await charlie.waitForSelector('text=Pit crew HQ', { timeout: 15000 });
+  await charlie.waitForSelector('text=Qualifying at Spa', { timeout: 15000 });
+  await charlie.waitForSelector('text=Trailer leaves 6am Saturday', { timeout: 15000 });
   // Existing members see the join and the unverified badge.
   await alice.waitForSelector('text=charlie joined via invite link', { timeout: 15000 });
   await alice.waitForSelector('.badge-unverified', { timeout: 5000 });
@@ -654,10 +708,12 @@ try {
     () => document.querySelector('[data-testid=server-name]')?.textContent === 'Race Team',
     { timeout: 15000 }
   );
-  // …landing on the overview page, whose content also came back from the
-  // encrypted backup.
+  // …landing on the home base, which also came back from the encrypted
+  // backup — blurb, event, and the noticeboard included.
   await pwPage.waitForSelector('[data-testid=overview-pane]', { timeout: 10000 });
   await pwPage.waitForSelector('text=Pit crew HQ', { timeout: 10000 });
+  await pwPage.waitForSelector('text=Qualifying at Spa', { timeout: 10000 });
+  await pwPage.waitForSelector('text=Trailer leaves 6am Saturday', { timeout: 10000 });
   // Wrong password must fail without leaking the vault.
   const pw2Ctx = await browser.newContext();
   const pw2 = await pw2Ctx.newPage();
@@ -745,9 +801,10 @@ try {
   await charlie.waitForSelector('text=checking in from the phone', { timeout: 10000 });
   await alice.setViewportSize({ width: 1280, height: 720 });
 
-  console.log('\nPASS: full client journey — onboarding, the customizable circle');
-  console.log('      overview landing page (admin-edited, meta-rebroadcast to');
-  console.log('      joiners, restored from backup), E2EE chat, channels,');
+  console.log('\nPASS: full client journey — onboarding, the circle home base');
+  console.log('      (next-event countdown, unread catch-up, roster noticeboard;');
+  console.log('      meta-rebroadcast to joiners, restored from backup), E2EE');
+  console.log('      chat, channels,');
   console.log('      IndexedDB persistence, recovery, invite-link external-commit');
   console.log('      join with unverified badge, localStorage identity survival,');
   console.log('      plain key export/import, encrypted attachments, safety');

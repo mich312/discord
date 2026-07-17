@@ -44,12 +44,21 @@ const servers = [
     roles: { alice: 'admin' },
     overview: {
       blurb:
-        'Pit crew HQ for the season. Race weekends run out of #logistics; #pit-wall is live timing only.\n\nNew here? Read the stint sheet before Friday practice.',
+        'Pit crew HQ for the season. Race weekends run out of #logistics; #pit-wall is live timing only.',
       links: [
         { label: 'stint sheet', url: 'https://example.com/stints' },
         { label: 'tyre pressure log', url: 'https://example.com/tyres' },
       ],
+      event: {
+        title: 'Qualifying — Round 4, Spa',
+        at: now + 52 * H,
+        note: 'Trailer leaves 6am. Pack the spare diffuser tonight.',
+      },
     },
+    notices: [
+      { id: 'n1', text: 'Scrutineering forms due Thursday — hand them to dana.', ts: now - 5 * H, author: 'dana' },
+      { id: 'n2', text: 'New tyre pressure targets pinned in #pit-wall.', ts: now - 26 * H, author: 'bob' },
+    ],
   },
   {
     id: 'srv-photo',
@@ -82,6 +91,19 @@ const PNG = Uint8Array.from(
   atob('iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEklEQVR42mNk+M9QzwAEjDAGACCDAv8cI7IoAAAAAElFTkSuQmCC'),
   (c) => c.charCodeAt(0)
 );
+
+// Home-base catch-up mock: what channelDigest() would compute locally.
+const digestMock = {
+  'srv-race': [
+    { channel: 'general', unread: 0, last: { sender: 'bob', text: 'plan B if it rains: box on lap 14 and go long', ts: now - 1.1 * H } },
+    { channel: 'logistics', unread: 3, last: { sender: 'dana', text: 'trailer leaves at 6am sharp — pack the spare diffuser tonight', ts: now - 2.2 * H } },
+    { channel: 'pit-wall', unread: 0, last: null },
+  ],
+  'srv-photo': [
+    { channel: 'general', unread: 0, last: null },
+    { channel: 'critique', unread: 1, last: { sender: 'edda', text: 'new darkroom scans are up', ts: now - 8 * H } },
+  ],
+};
 
 const voice = {
   active: { server: 'srv-race', channel: 'lounge' },
@@ -173,6 +195,7 @@ function PreviewShell({ empty = false, banner = false, modal = null, palette = f
     channel: landing ? null : 'general',
   });
   const [overviews, setOverviews] = useState({});
+  const [noticesBy, setNoticesBy] = useState({});
   const [openModal, setOpenModal] = useState(modal);
   const [paletteOpen, setPaletteOpen] = useState(palette);
   const [drawer, setDrawer] = useState(null); // narrow screens: null | 'nav' | 'roster'
@@ -270,12 +293,37 @@ function PreviewShell({ empty = false, banner = false, modal = null, palette = f
               />
             ) : (
               <Overview
-                server={{ ...activeServer, overview: overviews[activeServer.id] ?? activeServer.overview }}
+                server={{
+                  ...activeServer,
+                  overview: overviews[activeServer.id] ?? activeServer.overview,
+                  notices: noticesBy[activeServer.id] ?? activeServer.notices ?? [],
+                }}
+                me={me}
                 canManage={activeServer.roles?.[me] === 'admin'}
+                canSend
                 voice={voice}
+                digestKey="preview"
+                loadDigest={async (id) => digestMock[id] ?? []}
                 onSelectChannel={(ch) => setActive({ ...active, channel: ch })}
                 onVoiceJoin={noop}
                 onSave={(ov) => setOverviews((o) => ({ ...o, [activeServer.id]: ov }))}
+                onAddNotice={(text) =>
+                  setNoticesBy((by) => ({
+                    ...by,
+                    [activeServer.id]: [
+                      { id: `p${Date.now()}`, text, ts: Date.now(), author: me },
+                      ...(by[activeServer.id] ?? activeServer.notices ?? []),
+                    ],
+                  }))
+                }
+                onRemoveNotice={(id) =>
+                  setNoticesBy((by) => ({
+                    ...by,
+                    [activeServer.id]: (by[activeServer.id] ?? activeServer.notices ?? []).filter(
+                      (n) => n.id !== id
+                    ),
+                  }))
+                }
               />
             )}
             <Members server={activeServer} me={me} onAdd={noop} onMember={() => setOpenModal(modals['modal-safety'])} />
