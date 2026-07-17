@@ -345,6 +345,17 @@ h2{font-size:26px;letter-spacing:-.02em;font-weight:800;margin:0}
       Identical information design to Afterdark’s chat — only the material changes. Pick the mood, keep the bones.</span></div>
   </section>
 
+  <section class="dir" id="avatarlab">
+    <div class="dir-head">
+      <span class="dir-num">SIDE QUEST</span>
+      <h2>Generated avatars — three non-pixel takes</h2>
+    </div>
+    <p class="dir-sub">The current app derives a blocky identicon from each handle — right instinct
+    (no uploaded photos to moderate, deterministic, private), wrong look (GitHub). Three alternatives,
+    each still computed purely from the handle, shown at full and roster size:</p>
+    <div id="lab"></div>
+  </section>
+
   <section class="notes">
     <div class="kicker">how it would actually work</div>
     <h2>Concept notes — games that live on other servers</h2>
@@ -1127,4 +1138,121 @@ addEventListener('DOMContentLoaded',mountAll);
   </div>
 </div>
 </template>
+
+<script>
+// ---------------------------------------------------------------- avatars --
+// Three deterministic avatar generators. Everything derives from the handle:
+// hash -> PRNG -> geometry. Colors reuse each member's established hue pair.
+const CREW_COLORS = {
+  alice:  ['#ff5470', '#ff9a6b'],
+  bob:    ['#4f7cff', '#6fd3ff'],
+  dana:   ['#9d6bff', '#e08bff'],
+  marek:  ['#2fbf8f', '#9ef0c0'],
+  edda:   ['#f2a33c', '#ffd36b'],
+  charlie:['#ef6fae', '#ff9ad5'],
+};
+function hashStr(s){let h=2166136261;for(let i=0;i<s.length;i++){h^=s.charCodeAt(i);h=Math.imul(h,16777619)}return h>>>0}
+function prng(seed){let a=seed||1;return()=>{a=Math.imul(a^(a>>>15),a|1);a^=a+Math.imul(a^(a>>>7),a|61);return((a^(a>>>14))>>>0)/4294967296}}
+let gid=0;
+
+// 1 · STAR SEAL — a tiny constellation on a dark disc; the member's own
+// star sign. Ties to the product: sealed circles, safety-number stars.
+function starSeal(name,size){
+  const [c1,c2]=CREW_COLORS[name]??['#8a8a94','#c0c0c8'];
+  const r=prng(hashStr('seal:'+name)),id='g'+(gid++);
+  // Small renditions boost star size, ring weight and sky tint so the seal
+  // stays legible and keeps its hue in a 24px roster row.
+  const small=size<=28, k=small?1.7:1;
+  const n=4+Math.floor(r()*3);const pts=[];
+  for(let i=0;i<n;i++){
+    const a=(i/n)*Math.PI*2+r()*1.1, rad=5+r()*9;
+    pts.push([20+Math.cos(a)*rad,20+Math.sin(a)*rad]);
+  }
+  const anchor=Math.floor(r()*n);
+  const line=pts.map(p=>p[0].toFixed(1)+','+p[1].toFixed(1)).join(' ');
+  const stars=pts.map((p,i)=>i===anchor
+    ?`<circle cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="${(4.4*k).toFixed(1)}" fill="${c2}" opacity=".28"/>`+
+     `<circle cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="${(2.4*k).toFixed(1)}" fill="${c2}"/>`
+    :`<circle cx="${p[0].toFixed(1)}" cy="${p[1].toFixed(1)}" r="${((1.1+r()*0.8)*k).toFixed(1)}" fill="#fff" opacity=".92"/>`).join('');
+  return `<svg width="${size}" height="${size}" viewBox="0 0 40 40" role="img" aria-label="${name}">
+    <defs><radialGradient id="${id}" cx="35%" cy="30%" r="80%">
+      <stop offset="0%" stop-color="#23232a"/><stop offset="100%" stop-color="#131317"/></radialGradient></defs>
+    <circle cx="20" cy="20" r="19.2" fill="url(#${id})" stroke="${c1}" stroke-width="${small?2.6:1.6}"/>
+    <circle cx="20" cy="20" r="18" fill="${c1}" opacity="${small?'.2':'.1'}"/>
+    <polyline points="${line}" fill="none" stroke="${c1}" stroke-width="${small?1.8:1}" opacity=".6" stroke-linejoin="round"/>
+    ${stars}</svg>`;
+}
+
+// 2 · CREW FACE — an abstract little face on the member's gradient disc.
+// Friendly, reads at any size; features (eyes, mouth, tilt) vary by hash.
+function crewFace(name,size){
+  const [c1,c2]=CREW_COLORS[name]??['#8a8a94','#c0c0c8'];
+  const r=prng(hashStr('face:'+name)),id='g'+(gid++);
+  const tilt=(r()*16-8).toFixed(1), fx=(r()*4-2).toFixed(1);
+  const eyeY=15+r()*4, dx=4.5+r()*2.2, eyeR=(1.7+r()*1.1).toFixed(1);
+  const wink=r()<0.22, mouthKind=Math.floor(r()*3), mw=(3.5+r()*3).toFixed(1), my=(eyeY+7+r()*3).toFixed(1);
+  const ink='rgba(10,10,12,.82)';
+  const eye=(x)=>`<circle cx="${x.toFixed(1)}" cy="${eyeY.toFixed(1)}" r="${eyeR}" fill="${ink}"/>`;
+  const winkEye=(x)=>`<rect x="${(x-2.2).toFixed(1)}" y="${(eyeY-0.7).toFixed(1)}" width="4.4" height="1.6" rx=".8" fill="${ink}"/>`;
+  const mouth = mouthKind===0
+    ?`<path d="M ${20-mw+ +fx} ${my} Q ${20+ +fx} ${+my+4.5} ${20+ +mw*1+ +fx} ${my}" fill="none" stroke="${ink}" stroke-width="1.8" stroke-linecap="round"/>`
+    :mouthKind===1
+    ?`<circle cx="${(20+ +fx).toFixed(1)}" cy="${my}" r="2.1" fill="${ink}"/>`
+    :`<rect x="${(20-mw+ +fx).toFixed(1)}" y="${(+my-0.9).toFixed(1)}" width="${(2*mw).toFixed(1)}" height="1.8" rx=".9" fill="${ink}"/>`;
+  return `<svg width="${size}" height="${size}" viewBox="0 0 40 40" role="img" aria-label="${name}">
+    <defs><linearGradient id="${id}" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="${c1}"/><stop offset="100%" stop-color="${c2}"/></linearGradient></defs>
+    <circle cx="20" cy="20" r="20" fill="url(#${id})"/>
+    <g transform="rotate(${tilt} 20 20) translate(${fx} 0)">
+      ${wink?winkEye(20-dx):eye(20-dx)}${eye(20+dx)}${mouth}</g></svg>`;
+}
+
+// 3 · FACET — a cut gem in the member's colors on a dark disc; the shape
+// (vertex count, cut angles) is the identity.
+function facet(name,size){
+  const [c1,c2]=CREW_COLORS[name]??['#8a8a94','#c0c0c8'];
+  const r=prng(hashStr('gem:'+name)),id='g'+(gid++);
+  const n=5+Math.floor(r()*3), rot=r()*Math.PI*2, pts=[];
+  for(let i=0;i<n;i++){
+    const a=rot+(i/n)*Math.PI*2, rad=11+r()*5.5;
+    pts.push([20+Math.cos(a)*rad,20+Math.sin(a)*rad]);
+  }
+  const poly=pts.map(p=>p[0].toFixed(1)+','+p[1].toFixed(1)).join(' ');
+  const lines=pts.map(p=>`<line x1="20" y1="20" x2="${p[0].toFixed(1)}" y2="${p[1].toFixed(1)}" stroke="#fff" stroke-width=".8" opacity=".22"/>`).join('');
+  return `<svg width="${size}" height="${size}" viewBox="0 0 40 40" role="img" aria-label="${name}">
+    <defs><linearGradient id="${id}" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0%" stop-color="${c1}"/><stop offset="100%" stop-color="${c2}"/></linearGradient></defs>
+    <circle cx="20" cy="20" r="19.2" fill="#141418" stroke="rgba(255,255,255,.1)" stroke-width="1"/>
+    <polygon points="${poly}" fill="url(#${id})"/>${lines}</svg>`;
+}
+
+// ------------------------------------------------------------ avatar lab --
+const STYLES=[
+  ['Star seal','a constellation per handle — sealed-circle lore, quiet at rest, the anchor star carries the member’s hue',starSeal],
+  ['Crew face','an abstract face on the member’s gradient — friendliest, reads at every size',crewFace],
+  ['Facet','a cut gem per handle — geometric identity without pixels',facet],
+];
+addEventListener('DOMContentLoaded',()=>{
+  const lab=document.getElementById('lab');if(!lab)return;
+  const names=Object.keys(CREW_COLORS);
+  lab.innerHTML=STYLES.map(([t,d,fn])=>`
+    <div style="display:flex;align-items:center;gap:22px;flex-wrap:wrap;background:var(--w-panel);
+      border:1px solid var(--w-edge);border-radius:12px;padding:16px 20px;margin-bottom:12px">
+      <div style="min-width:220px;max-width:260px"><div style="font-weight:800">${t}</div>
+        <div style="color:var(--w-dim);font-size:12.5px">${d}</div></div>
+      <div style="display:flex;gap:10px;align-items:center">${names.map(n=>fn(n,44)).join('')}</div>
+      <div style="display:flex;gap:6px;align-items:center;opacity:.95">${names.map(n=>fn(n,24)).join('')}</div>
+    </div>`).join('');
+  // Apply the chosen style inside every mounted mock frame: each .av span's
+  // letter identifies the member (unique initials in this crew).
+  const CHOSEN=starSeal;
+  const byInitial={};Object.keys(CREW_COLORS).forEach(n=>byInitial[n[0].toUpperCase()]=n);
+  document.querySelectorAll('.mock .av').forEach(el=>{
+    const name=byInitial[(el.textContent||'').trim()];if(!name)return;
+    const size=el.classList.contains('s40')?40:el.classList.contains('s32')?32:el.classList.contains('s28')?28:24;
+    el.style.background='none';el.innerHTML=CHOSEN(name,size);
+    el.style.overflow='hidden';el.firstElementChild.style.display='block';
+  });
+});
+</script>
 </body></html>

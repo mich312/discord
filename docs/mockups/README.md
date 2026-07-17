@@ -23,3 +23,10 @@ Directions:
   brass accent, serif display. Same layout skeleton, different skin.
 
 These are static mockups only — no product code changed.
+
+## Avatars
+
+Generated avatars stay (deterministic from the handle, no uploads), but the
+blocky identicon is replaced. Three candidates in `avatar-lab.png` — the
+mockups apply **star seals**: a small constellation per handle on a
+hue-tinted night sky, size-aware so it stays legible at roster size.
