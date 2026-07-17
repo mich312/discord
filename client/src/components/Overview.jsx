@@ -1,16 +1,21 @@
 import React, { useEffect, useState } from 'react';
 import Seal from './Seal.jsx';
 import { describeAgo, describeUntil, canRemoveNotice } from '../lib/overview.js';
-import { Hash, Wave, Lock, LinkGlyph, Plus, X, ArrowRight } from './icons.jsx';
+import { freshPresence, gameHost, lastPlayed, makeGameId, normalizeGame } from '../lib/games.js';
+import { nameHue } from '../lib/avatar.js';
+import { Hash, Wave, Lock, LinkGlyph, Plus, X, ArrowRight, Gamepad, External, Copy } from './icons.jsx';
 
-// The circle's home base: what you land on when you pick a circle. Not a
-// brochure — a briefing. Three questions, answered at a glance:
-//   · what's coming up   — the next team event, with a live countdown
+// The circle's game hub: what you land on when you pick a circle. Not a
+// brochure — a briefing, with the shelf front and center:
+//   · what's coming up   — the next game night, with a live countdown
+//   · what's on the shelf — the games this circle plays, living on their
+//                          own servers; web games launch embedded here
 //   · what did I miss    — per-room unread counts + the latest line,
 //                          computed from this device's own store
 //   · what should I know — a noticeboard the whole roster pins to
-// Plus the admin-written cover (blurb + pinned links) underneath.
 // Every word travels inside the MLS encryption; the relay reads none of it.
+// What the relay CAN'T hide: connecting to a game shows that game's host
+// your traffic — the shelf says so instead of pretending otherwise.
 
 // Only ever link out to http(s) — anything else renders as inert text, so
 // a pinned "javascript:" or "data:" URL can't become a click target.
@@ -119,7 +124,7 @@ function EditForm({ overview, onSave, onCancel }) {
       </button>
       <div className="row overview-edit-actions">
         <button className="button primary" type="submit" data-testid="overview-save">
-          save home base
+          save changes
         </button>
         <button className="button" type="button" onClick={onCancel}>
           cancel
@@ -129,6 +134,157 @@ function EditForm({ overview, onSave, onCancel }) {
         Everyone in the roster sees this page. Links open only if they start with
         https:// — everything else stays plain text.
       </p>
+    </form>
+  );
+}
+
+// One game on the shelf. The cover carries the game's own hue (derived from
+// its name, like a member's orb); actions differ by kind — web games launch
+// embedded, server games hand over the address.
+function GameCard({ game, players, canManage, onLaunch, onRemove }) {
+  const [copied, setCopied] = useState(false);
+  const hue = nameHue(game.name);
+  const host = gameHost(game);
+  const played = lastPlayed(game.id);
+  const live = players.length > 0;
+  const copyAddress = async () => {
+    try {
+      await navigator.clipboard.writeText(game.url);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1800);
+    } catch {
+      // clipboard denied — the address is printed on the card regardless
+    }
+  };
+  return (
+    <li className="game-card" data-testid={`game-card-${game.id}`}>
+      <div
+        className="game-cover"
+        style={{
+          background: `linear-gradient(135deg, hsl(${hue} 45% 22%), hsl(${(hue + 40) % 360} 60% 40%))`,
+        }}
+      >
+        <span className="game-grain" aria-hidden="true" />
+        <span className={game.glyph ? 'game-cover-mark glyph' : 'game-cover-mark'}>
+          {game.glyph ?? game.name.slice(0, 1).toUpperCase()}
+        </span>
+        {live ? (
+          <span className="game-kind live" data-testid={`game-live-${game.id}`}>
+            live · {players.slice(0, 2).join(' & ')}
+            {players.length > 2 ? ` +${players.length - 2}` : ''}
+          </span>
+        ) : (
+          <span className="game-kind">{game.kind === 'server' ? 'game server' : 'web game'}</span>
+        )}
+        {canManage && (
+          <button
+            className="ghost game-remove"
+            title="take off the shelf"
+            data-testid={`game-remove-${game.id}`}
+            onClick={onRemove}
+          >
+            <X size={12} />
+          </button>
+        )}
+      </div>
+      <div className="game-body">
+        <span className="game-name">{game.name}</span>
+        <span className="game-host mono" title="this host sees its own traffic — never your chat">
+          {game.kind === 'server' ? '⛭' : '◈'} {host}
+        </span>
+        {game.note && <span className="game-note">{game.note}</span>}
+        {live ? (
+          <span className="game-who">
+            <span className="game-who-stack">
+              {players.slice(0, 3).map((p) => (
+                <Seal key={p} name={p} size={20} title={p} />
+              ))}
+            </span>
+            {players.length === 1 ? `${players[0]} is in` : `${players.length} playing right now`}
+          </span>
+        ) : played ? (
+          <span className="game-who muted">last played {describeAgo(played)}</span>
+        ) : null}
+        <div className="game-actions">
+          {game.kind === 'server' ? (
+            <button className="button primary" data-testid={`game-copy-${game.id}`} onClick={copyAddress}>
+              <Copy size={13} />
+              {copied ? 'copied' : 'copy address'}
+            </button>
+          ) : (
+            <>
+              <button className="button primary" data-testid={`game-launch-${game.id}`} onClick={onLaunch}>
+                <Gamepad size={13} />
+                launch
+              </button>
+              <a
+                className="button"
+                title="open in its own tab"
+                href={game.url}
+                target="_blank"
+                rel="noreferrer noopener"
+              >
+                <External size={13} />
+              </a>
+            </>
+          )}
+        </div>
+      </div>
+    </li>
+  );
+}
+
+function AddGameForm({ onAdd, onCancel }) {
+  const [name, setName] = useState('');
+  const [url, setUrl] = useState('');
+  const [kind, setKind] = useState('activity');
+  const [glyph, setGlyph] = useState('');
+  return (
+    <form
+      className="game-add-form"
+      data-testid="game-add-form"
+      onSubmit={(e) => {
+        e.preventDefault();
+        const game = normalizeGame({ id: makeGameId(), name, url, kind, glyph });
+        if (!game) return;
+        onAdd(game);
+      }}
+    >
+      <input
+        autoFocus
+        value={name}
+        onChange={(e) => setName(e.target.value)}
+        placeholder="game name"
+        data-testid="game-add-name"
+      />
+      <div className="game-add-row">
+        <input
+          value={url}
+          onChange={(e) => setUrl(e.target.value)}
+          placeholder={kind === 'server' ? 'address — mc.example.net:25565' : 'https:// where it lives'}
+          data-testid="game-add-url"
+        />
+        <input
+          className="game-add-glyph"
+          value={glyph}
+          onChange={(e) => setGlyph(e.target.value)}
+          placeholder="♞"
+          title="cover mark — one emoji or glyph (optional)"
+          data-testid="game-add-glyph"
+        />
+      </div>
+      <select value={kind} onChange={(e) => setKind(e.target.value)} data-testid="game-add-kind">
+        <option value="activity">web game — plays embedded here</option>
+        <option value="server">game server — join with its own client</option>
+      </select>
+      <div className="row">
+        <button className="button primary" type="submit" data-testid="game-add-save">
+          put it on the shelf
+        </button>
+        <button className="button" type="button" onClick={onCancel}>
+          cancel
+        </button>
+      </div>
     </form>
   );
 }
@@ -143,11 +299,14 @@ export default function Overview({
   loadDigest,
   onSelectChannel,
   onVoiceJoin,
+  onLaunchGame,
+  onRsvp,
   onSave,
   onAddNotice,
   onRemoveNotice,
 }) {
   const [editing, setEditing] = useState(false);
+  const [addingGame, setAddingGame] = useState(false);
   const [draft, setDraft] = useState('');
   const [digest, setDigest] = useState([]);
   // Countdown and "x min ago" labels drift; tick them along while open.
@@ -170,6 +329,22 @@ export default function Overview({
 
   const overview = server.overview ?? null;
   const event = overview?.event ?? null;
+  const games = overview?.games ?? [];
+  // Live claims: game id -> member handles playing it right now.
+  const playingBy = {};
+  for (const [handle, entry] of Object.entries(server.presence ?? {})) {
+    const g = freshPresence(entry, now);
+    if (g) (playingBy[g.id] ??= []).push(handle);
+  }
+  const liveGames = games.filter((g) => (playingBy[g.id] ?? []).length > 0).length;
+  // Who said "I'm in" for THIS event (answers are keyed to its timestamp).
+  const going = event
+    ? Object.entries(server.rsvps ?? {})
+        .filter(([, v]) => v.at === event.at)
+        .map(([handle]) => handle)
+    : [];
+  const iAmIn = going.includes(me);
+  const saveGames = (next) => onSave({ ...(overview ?? {}), games: next });
   const notices = server.notices ?? [];
   const voiceRooms = server.voiceChannels ?? ['lounge'];
   const byChannel = Object.fromEntries(digest.map((d) => [d.channel, d]));
@@ -187,19 +362,35 @@ export default function Overview({
       <header className="pane-head">
         <span className="room-name">
           <span className="glyph">
-            <Lock size={13} />
+            <Gamepad size={14} />
           </span>
-          home base
+          game hub
         </span>
         <span className="sealed-note">
-          the circle&rsquo;s own page — sealed like everything else, the relay never reads it
+          sealed like everything else — the relay never learns what you play
         </span>
+        {canManage && !editing && (
+          <span className="pane-actions">
+            <button className="button" data-testid="overview-edit" onClick={() => setEditing(true)}>
+              customize
+            </button>
+            {!addingGame && (
+              <button className="button" data-testid="game-add" onClick={() => setAddingGame(true)}>
+                <Plus size={13} />
+                register a game
+              </button>
+            )}
+          </span>
+        )}
       </header>
       <div className="scroll overview-scroll">
-        <section className="overview-hero">
-          <Seal name={server.name} size={56} title={server.name} />
-          <div className="overview-title">
-            <h2 data-testid="overview-name">{server.name}</h2>
+        {!editing && (
+          <section className="hub-about">
+            {overview?.blurb && (
+              <p className="overview-blurb" data-testid="overview-blurb">
+                {overview.blurb}
+              </p>
+            )}
             <div className="overview-stats mono">
               <span>{server.members.length} member{server.members.length === 1 ? '' : 's'}</span>
               <span>·</span>
@@ -209,22 +400,8 @@ export default function Overview({
               <span>·</span>
               <span>epoch {String(server.epoch).padStart(2, '0')}</span>
             </div>
-            {overview?.blurb && !editing && (
-              <p className="overview-blurb" data-testid="overview-blurb">
-                {overview.blurb}
-              </p>
-            )}
-          </div>
-          {canManage && !editing && (
-            <button
-              className="button overview-customize"
-              data-testid="overview-edit"
-              onClick={() => setEditing(true)}
-            >
-              customize
-            </button>
-          )}
-        </section>
+          </section>
+        )}
 
         {editing ? (
           <section className="overview-section">
@@ -233,7 +410,8 @@ export default function Overview({
               overview={overview}
               onSave={(ov) => {
                 setEditing(false);
-                onSave(ov);
+                // The form edits the written half; the shelf rides along.
+                onSave({ ...ov, games });
               }}
               onCancel={() => setEditing(false)}
             />
@@ -241,28 +419,127 @@ export default function Overview({
         ) : (
           <>
             {event && (
-              <section className="overview-upnext" data-testid="overview-event">
-                <span className="wm-tag">
-                  up next · <span data-testid="overview-countdown">{describeUntil(event.at, now)}</span>
-                </span>
-                <div className="upnext-body">
-                  <strong className="upnext-title">{event.title}</strong>
-                  <span className="upnext-when mono">
-                    {new Date(event.at).toLocaleString([], {
-                      weekday: 'short',
-                      month: 'short',
-                      day: 'numeric',
-                      hour: '2-digit',
-                      minute: '2-digit',
-                    })}
+              <section className="overview-upnext hub-hero" data-testid="overview-event">
+                <div className="hub-hero-body">
+                  <span className="wm-tag">
+                    up next · <span data-testid="overview-countdown">{describeUntil(event.at, now)}</span>
                   </span>
+                  <strong className="upnext-title hub-hero-title">{event.title}</strong>
+                  <p className="upnext-note">
+                    <span className="upnext-when mono">
+                      {new Date(event.at).toLocaleString([], {
+                        weekday: 'short',
+                        month: 'short',
+                        day: 'numeric',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                      })}
+                    </span>
+                    {event.note && <> — {event.note}</>}
+                  </p>
+                  {canSend && (
+                    <div className="hub-rsvp">
+                      <button
+                        className={iAmIn ? 'button live' : 'button primary'}
+                        data-testid="rsvp-toggle"
+                        onClick={() => onRsvp(event.at, !iAmIn)}
+                      >
+                        {iAmIn ? '✓ you\u2019re in' : '▶ I\u2019m in'}
+                      </button>
+                      {going.length > 0 && (
+                        <span className="hub-going" data-testid="rsvp-going">
+                          <span className="hub-going-stack">
+                            {going.slice(0, 5).map((p) => (
+                              <Seal key={p} name={p} size={20} title={p} />
+                            ))}
+                          </span>
+                          {going.length} going
+                        </span>
+                      )}
+                    </div>
+                  )}
                 </div>
-                {event.note && <p className="upnext-note">{event.note}</p>}
+                {(() => {
+                  const d = event.at - now;
+                  const [n, u] =
+                    d <= 0
+                      ? ['now', 'happening']
+                      : d < 2 * 3600e3
+                        ? [Math.max(1, Math.round(d / 60e3)), 'min to go']
+                        : d < 48 * 3600e3
+                          ? [Math.round(d / 3600e3), 'hours to go']
+                          : [Math.round(d / 86400e3), 'days to go'];
+                  return (
+                    <div className="hub-count" aria-hidden="true">
+                      <span className="n">{n}</span>
+                      <span className="u">{u}</span>
+                    </div>
+                  );
+                })()}
               </section>
             )}
 
+            <section className="overview-section shelf-section">
+              <span className="overline shelf-overline">
+                <span>on the shelf</span>
+                {games.length > 0 && (
+                  <span className="shelf-meta">
+                    {games.length} game{games.length === 1 ? '' : 's'}
+                    {liveGames > 0 && <span className="shelf-live"> · {liveGames} live</span>}
+                  </span>
+                )}
+              </span>
+              {games.length > 0 || canManage ? (
+                <ul className="game-shelf" data-testid="game-shelf">
+                  {games.map((g) => (
+                    <GameCard
+                      key={g.id}
+                      game={g}
+                      players={playingBy[g.id] ?? []}
+                      canManage={canManage}
+                      onLaunch={() => onLaunchGame(g)}
+                      onRemove={() => saveGames(games.filter((x) => x.id !== g.id))}
+                    />
+                  ))}
+                  {canManage && (
+                    <li className="game-card add-card">
+                      {addingGame ? (
+                        <AddGameForm
+                          onAdd={(game) => {
+                            setAddingGame(false);
+                            saveGames([...games, game]);
+                          }}
+                          onCancel={() => setAddingGame(false)}
+                        />
+                      ) : (
+                        <button
+                          className="add-card-btn"
+                          data-testid="game-add-tile"
+                          onClick={() => setAddingGame(true)}
+                        >
+                          <span className="add-card-plus">
+                            <Plus size={18} />
+                          </span>
+                          <span className="add-card-title">Register a game</span>
+                          <span className="add-card-sub">
+                            a URL is enough — it travels sealed, like a channel name
+                          </span>
+                        </button>
+                      )}
+                    </li>
+                  )}
+                </ul>
+              ) : (
+                <p className="muted overview-empty-note" data-testid="game-shelf-empty">
+                  No games yet. The shelf holds pointers to games living on other servers —
+                  web games launch right here with the room&rsquo;s chat and call beside them;
+                  native servers get an address card.
+                </p>
+              )}
+            </section>
+
             <section className="overview-section">
-              <span className="overline">catch up</span>
+              <span className="overline">while you were out</span>
               <ul className="overview-rooms">
                 {rooms.map((ch) => {
                   const d = byChannel[ch] ?? { unread: 0, last: null };

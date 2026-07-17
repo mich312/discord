@@ -5,7 +5,7 @@
 //   /preview.html?view=app&theme=paper
 //   /preview.html?view=onboarding | invited | empty | banner | overview
 //   /preview.html?view=modal-safety | modal-invite | modal-secure | modal-identity
-//   /preview.html?view=palette | call | call-share
+//   /preview.html?view=palette | call | call-share | game
 import React, { useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles.css';
@@ -19,6 +19,7 @@ import Members from './components/Members.jsx';
 import Modal from './components/Modal.jsx';
 import Onboarding from './components/Onboarding.jsx';
 import CallStage from './components/CallStage.jsx';
+import GameStage from './components/GameStage.jsx';
 import Seal from './components/Seal.jsx';
 import { Key, Bell, ShieldCheck, QuorumGlyph } from './components/icons.jsx';
 
@@ -42,7 +43,18 @@ const servers = [
     linkJoined: ['charlie'],
     chanMeta: { 'pit-wall': { topic: 'live timing chatter during sessions' } },
     roles: { alice: 'admin' },
+    presence: {
+      bob: { playing: { id: 'g1', name: 'Hex Gambit', kind: 'activity' }, ts: now - 41 * 60e3 },
+      dana: { playing: { id: 'g1', name: 'Hex Gambit', kind: 'activity' }, ts: now - 41 * 60e3 },
+    },
+    rsvps: { bob: { at: now + 52 * H, ts: now - 3 * H }, dana: { at: now + 52 * H, ts: now - 2 * H }, marek: { at: now + 52 * H, ts: now - H } },
     overview: {
+      games: [
+        { id: 'g1', name: 'Hex Gambit', url: '/games/hexgambit.html', kind: 'activity', note: 'bundled demo — local two-player chess', glyph: '♞' },
+        { id: 'g2', name: 'Craftworld', url: 'mc.raceteam.example:25565', kind: 'server', note: 'survival, keep-inventory off', glyph: '⛏' },
+        { id: 'g3', name: 'Tanks! Night Ops', url: 'https://tanks.arcade.example/room/race-team', kind: 'activity', glyph: '⌖' },
+        { id: 'g4', name: 'Factory Floor', url: 'factorio.raceteam.example:34197', kind: 'server', glyph: '⚙' },
+      ],
       blurb:
         'Pit crew HQ for the season. Race weekends run out of #logistics; #pit-wall is live timing only.',
       links: [
@@ -73,15 +85,16 @@ const servers = [
 ];
 
 const messages = [
-  { sender: 'bob', text: 'scrutineering passed — we are P4 on the grid', ts: now - 26 * H },
+  { sender: 'bob', text: 'scrutineering passed — we are P4 on the grid', ts: now - 26 * H, reacts: { '🔥': ['alice', 'dana', 'charlie'], '😤': ['dana'] } },
   { sender: 'bob', text: 'stewards want the wing endplate photos before nine', ts: now - 26 * H + 40e3 },
   { sender: 'alice', text: 'on it. tyre pressures from this morning still good?', ts: now - 25.6 * H },
   { system: true, text: 'charlie joined via invite link — unverified until someone checks their safety number', ts: now - 25 * H },
   { sender: 'charlie', text: 'found my way in via the link, reading up now', ts: now - 24.8 * H },
   { sender: 'alice', text: 'dropped 0.2 up front, track temp is way up', ts: now - 3 * H },
   { sender: 'alice', file: { name: 'tyre-temps.png', mime: 'image/png', size: 48213 }, ts: now - 3 * H + 30e3 },
+  { sender: 'bob', game: { id: 'g1', name: 'Hex Gambit', kind: 'activity' }, ts: now - 2.5 * H },
   { sender: 'alice', text: 'left front is the one to watch', ts: now - 3 * H + 55e3 },
-  { sender: 'dana', text: 'trailer leaves at 6am sharp — pack the spare diffuser tonight', ts: now - 2.2 * H },
+  { sender: 'dana', text: 'trailer leaves at 6am sharp — pack the spare diffuser tonight', ts: now - 2.2 * H, reacts: { '👍': ['alice', 'bob'] } },
   { sender: 'bob', file: { name: 'stint-plan.pdf', mime: 'application/pdf', size: 182044 }, ts: now - 1.1 * H },
   { sender: 'bob', text: 'plan B if it rains: box on lap 14 and go long', ts: now - 1.1 * H + 20e3 },
 ];
@@ -110,6 +123,14 @@ const voice = {
   listenOnly: false,
   connections: { bob: 'connected', dana: 'connecting…' },
   presence: { 'srv-race/lounge': ['alice', 'bob', 'dana'] },
+};
+
+// The same room seen from outside the call: others are live, I'm not.
+const voiceIdle = {
+  active: null,
+  listenOnly: false,
+  connections: {},
+  presence: { 'srv-race/lounge': ['bob', 'dana', 'marek'] },
 };
 
 // Stage previews: everyone in the lounge, dana mid-sentence, and (for
@@ -187,13 +208,15 @@ const modals = {
   },
 };
 
-function PreviewShell({ empty = false, banner = false, modal = null, palette = false, stage = null, landing = false }) {
+function PreviewShell({ empty = false, banner = false, modal = null, palette = false, stage = null, landing = false, game = null, idle = false }) {
+  const vc = idle ? voiceIdle : voice;
   const me = 'alice';
-  // channel: null means the circle's overview page, same as App.jsx.
+  // channel: null means the circle's hub page, same as App.jsx.
   const [active, setActive] = useState({
     server: empty ? null : 'srv-race',
-    channel: landing ? null : 'general',
+    channel: landing && !game ? null : 'general',
   });
+  const [liveGame, setLiveGame] = useState(game);
   const [overviews, setOverviews] = useState({});
   const [noticesBy, setNoticesBy] = useState({});
   const [openModal, setOpenModal] = useState(modal);
@@ -238,17 +261,21 @@ function PreviewShell({ empty = false, banner = false, modal = null, palette = f
             }}
             onCreate={noop}
           />
+          <div className="nav-col">
           {activeServer && (
             <Channels
               server={activeServer}
               activeChannel={active.channel}
               me={me}
+              unreads={Object.fromEntries(
+                (digestMock[activeServer.id] ?? []).map((d) => [d.channel, d.unread])
+              )}
               onSelect={(ch) => {
                 setActive({ ...active, channel: ch });
                 setDrawer(null);
               }}
               onCreate={noop}
-              voice={voice}
+              voice={vc}
               onVoiceJoin={noop}
               onVoiceLeave={noop}
             />
@@ -262,8 +289,28 @@ function PreviewShell({ empty = false, banner = false, modal = null, palette = f
             <button className="icon-btn" title="identity key"><Key size={14} /></button>
             <button className="icon-btn" title="alerts"><Bell size={14} /></button>
           </div>
+          </div>
         </nav>
-        {activeServer && stage ? (
+        {activeServer && liveGame && active.channel ? (
+          <GameStage
+            game={liveGame}
+            server={activeServer}
+            channel={active.channel}
+            me={me}
+            messages={callMessages}
+            canSend
+            onSend={noop}
+            voice={vc}
+            onVoiceJoin={noop}
+            onVoiceLeave={noop}
+            onToggleMute={noop}
+            onInviteSeat={noop}
+            onClose={() => {
+              setLiveGame(null);
+              setActive({ ...active, channel: null });
+            }}
+          />
+        ) : activeServer && stage ? (
           <CallStage
             voice={stage}
             manager={mockVoiceManager}
@@ -273,6 +320,7 @@ function PreviewShell({ empty = false, banner = false, modal = null, palette = f
             onSend={noop}
             onShare={noop}
             onStopShare={noop}
+            onToggleMute={noop}
             onLeave={noop}
             onClose={noop}
           />
@@ -290,6 +338,14 @@ function PreviewShell({ empty = false, banner = false, modal = null, palette = f
                   if ((f.mime ?? '').startsWith('image/')) return PNG;
                   throw new Error('preview: no blob store');
                 }}
+                voice={vc}
+                onVoiceJoin={noop}
+                onOpenStage={noop}
+                onLaunchGame={(g) => {
+                  setActive({ ...active, channel: activeServer.channels[0] });
+                  setLiveGame(g);
+                }}
+                onReact={noop}
               />
             ) : (
               <Overview
@@ -301,11 +357,16 @@ function PreviewShell({ empty = false, banner = false, modal = null, palette = f
                 me={me}
                 canManage={activeServer.roles?.[me] === 'admin'}
                 canSend
-                voice={voice}
+                voice={vc}
                 digestKey="preview"
                 loadDigest={async (id) => digestMock[id] ?? []}
                 onSelectChannel={(ch) => setActive({ ...active, channel: ch })}
                 onVoiceJoin={noop}
+                onLaunchGame={(g) => {
+                  setActive({ ...active, channel: activeServer.channels[0] });
+                  setLiveGame(g);
+                }}
+                onRsvp={noop}
                 onSave={(ov) => setOverviews((o) => ({ ...o, [activeServer.id]: ov }))}
                 onAddNotice={(text) =>
                   setNoticesBy((by) => ({
@@ -326,7 +387,7 @@ function PreviewShell({ empty = false, banner = false, modal = null, palette = f
                 }
               />
             )}
-            <Members server={activeServer} me={me} onAdd={noop} onMember={() => setOpenModal(modals['modal-safety'])} />
+            <Members server={activeServer} me={me} voice={vc} onAdd={noop} onMember={() => setOpenModal(modals['modal-safety'])} />
           </>
         ) : (
           <div className="empty-state">
@@ -373,9 +434,17 @@ function pick() {
   if (view === 'onboarding' || view === 'invited') return <Onboarding controller={mockController} />;
   if (view === 'empty') return <PreviewShell empty />;
   if (view === 'overview') return <PreviewShell landing />;
+  if (view === 'overview-idle') return <PreviewShell landing idle />;
   if (view === 'banner') return <PreviewShell banner />;
   if (view === 'palette') return <PreviewShell palette />;
   if (view === 'call') return <PreviewShell stage={stageVoice([])} />;
+  if (view === 'game')
+    return (
+      <PreviewShell
+        landing
+        game={{ id: 'g1', name: 'Hex Gambit', url: '/games/hexgambit.html', kind: 'activity' }}
+      />
+    );
   if (view === 'call-share') return <PreviewShell stage={stageVoice(['bob'])} />;
   if (modals[view]) return <PreviewShell modal={modals[view]} />;
   return <PreviewShell />;

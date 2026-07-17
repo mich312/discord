@@ -30,6 +30,21 @@
 //   {k:'file', ch, file}          — an attachment: {name,size,mime,blob,key};
 //                                   blob id points at relay disk, the AES key
 //                                   travels only inside this encrypted envelope
+//   {k:'pres', playing}           — ephemeral rich presence: the sender is
+//                                   in this game right now (or null = done).
+//                                   In-memory only, expires client-side;
+//                                   never persisted, never rebroadcast
+//   {k:'react', ch, to:{sender,ts},
+//    emo, op}                      — a reaction on one message (op add|del).
+//                                   emo is a short string rendered as text
+//   {k:'rsvp', at, going}          — answer to the hub's next-event card,
+//                                   keyed to the event's timestamp so stale
+//                                   answers die with the old event
+//   {k:'game', ch, game}          — "I opened this game from the shelf":
+//                                   {id,name,kind} renders as a join card.
+//                                   The card resolves against the circle's
+//                                   own registry — the payload itself never
+//                                   supplies a URL to launch
 import { b64, Relay } from './relay.js';
 import {
   generateHistoryId,
@@ -64,6 +79,7 @@ import {
   normalizeOverview,
   upsertNotice,
 } from './overview.js';
+import { freshPresence, normalizeGameRef, normalizePresence } from './games.js';
 
 const KP_TOPUP = 2; // fresh KeyPackages published per connect
 const INVITE_TTL_SECONDS = 7 * 24 * 3600;
@@ -162,6 +178,18 @@ export class Controller {
       send: (server, content) => this.sendEphemeral(server, content),
       onState: (state) => this.dispatch({ type: 'voice', state }),
       onNotify: (text) => this.dispatch({ type: 'toast', text }),
+      // First joiner in an empty room = a call started; say so in the
+      // room's first text channel so it reads like the event it is.
+      onCallStarted: (server, channel, name) => {
+        const record = this.servers.get(server);
+        if (!record) return;
+        const who = name === this.me ? 'you' : name;
+        this.addSystemMessage(
+          server,
+          `${who} started a call in ${channel}`,
+          record.channels[0] ?? 'general'
+        ).catch(() => {});
+      },
     });
     this.relay = new Relay({
       url: this.relayUrl,
@@ -432,6 +460,50 @@ export class Controller {
         });
         break;
       }
+      case 'game': {
+        // Same channel handling as chat; the ref is whitelisted and the
+        // Join affordance resolves against the shelf, never this payload.
+        const game = normalizeGameRef(content.game);
+        if (!game) break;
+        if (!isCallChat(content.ch) && !record.channels.includes(content.ch)) {
+          record.channels.push(content.ch);
+        }
+        await this.storeMessage({
+          server: record.id,
+          channel: content.ch,
+          sender,
+          game,
+          ts: Date.now(),
+        });
+        break;
+      }
+      case 'pres': {
+        // Ephemeral by design: kept in a controller-side map, expired by
+        // readers, never written to the record store or the backup.
+        this.setLivePresence(record.id, sender, normalizePresence(content));
+        break;
+      }
+      case 'react': {
+        const emo = String(content.emo ?? '').slice(0, 8).trim();
+        const to = content.to ?? {};
+        const op = content.op === 'del' ? 'del' : 'add';
+        if (!emo || !to.sender || !Number.isFinite(Number(to.ts))) break;
+        await this.applyReaction(record.id, String(content.ch ?? ''), {
+          sender: String(to.sender),
+          ts: Number(to.ts),
+        }, emo, op, sender);
+        this.dispatch({ type: 'refreshMessages' });
+        break;
+      }
+      case 'rsvp': {
+        const at = Number(content.at);
+        if (!Number.isFinite(at)) break;
+        const rsvps = { ...(record.rsvps ?? {}) };
+        if (content.going) rsvps[sender] = { at, ts: Date.now() };
+        else delete rsvps[sender];
+        record.rsvps = rsvps;
+        break;
+      }
       case 'meta': {
         record.name = content.name ?? record.name;
         for (const ch of content.channels ?? []) {
@@ -464,6 +536,18 @@ export class Controller {
             record.notices = merged;
             this.scheduleBackup();
           }
+        }
+        // Gap-fill RSVPs the same way (a joiner has none). Bounded and
+        // whitelisted: handle -> {at}. Existing local answers win.
+        if (content.rsvps && typeof content.rsvps === 'object') {
+          const mine = record.rsvps ?? {};
+          const merged = { ...mine };
+          for (const [handle, v] of Object.entries(content.rsvps).slice(0, 64)) {
+            const at = Number(v?.at);
+            if (!Number.isFinite(at) || merged[handle]) continue;
+            merged[String(handle).slice(0, 64)] = { at, ts: Number(v?.ts) || Date.now() };
+          }
+          record.rsvps = merged;
         }
         // Gap-fill channel settings (a joiner has none): explicit changes
         // arrive as their own `chanset` events, so never clobber here.
@@ -906,6 +990,84 @@ export class Controller {
     this.appendHistory(serverId, channel, message);
   }
 
+  /** Announce a game launch as a first-class message: renders as a join
+      card for everyone in the room. Only a reference travels — id, name,
+      kind — never a URL; joining resolves against the shelf. */
+  async sendGameCard(serverId, channel, game) {
+    const ref = normalizeGameRef(game);
+    if (!ref) return;
+    await this.sendContent(serverId, { k: 'game', ch: channel, game: ref });
+    const message = { server: serverId, channel, sender: this.me, game: ref, ts: Date.now() };
+    await this.storeMessage(message);
+    this.appendHistory(serverId, channel, message);
+  }
+
+  /** Ephemeral rich presence: tell the circle which game I'm in (or that
+      I left one). Riding MLS like everything else, the relay learns
+      nothing; peers keep it in memory only and expire it. */
+  async setPlaying(serverId, gameRef) {
+    if (!this.servers.get(serverId)) return;
+    const playing = gameRef ? normalizeGameRef(gameRef) : null;
+    this.setLivePresence(serverId, this.me, { playing, ts: Date.now() });
+    await this.sendContent(serverId, { k: 'pres', playing });
+  }
+
+  setLivePresence(serverId, handle, entry) {
+    if (!this.livePresence) this.livePresence = new Map();
+    const map = this.livePresence.get(serverId) ?? {};
+    map[handle] = entry;
+    this.livePresence.set(serverId, map);
+    this.dispatch({ type: 'servers', servers: this.snapshotServers() });
+  }
+
+  /** Toggle my reaction on one message. The reaction set lives on the
+      stored message; deduped per (member, emoji). */
+  async react(serverId, channel, target, emo) {
+    const record = this.servers.get(serverId);
+    if (!record) return;
+    const mine = await this.applyReaction(serverId, channel, target, emo, 'toggle', this.me);
+    this.dispatch({ type: 'refreshMessages' });
+    await this.sendContent(serverId, {
+      k: 'react',
+      ch: channel,
+      to: { sender: target.sender, ts: target.ts },
+      emo,
+      op: mine ? 'add' : 'del',
+    });
+  }
+
+  /** Mutate a stored message's reaction map. Returns whether `who` ends up
+      reacted (for toggle senders). Not written to kept-history — reactions
+      are decoration, the message is the record. */
+  async applyReaction(serverId, channel, target, emo, op, who) {
+    let present = false;
+    await this.db.msgPatch(serverId, channel, target.sender, target.ts, (m) => {
+      const reacts = { ...(m.reacts ?? {}) };
+      const set = new Set(reacts[emo] ?? []);
+      const want = op === 'toggle' ? !set.has(who) : op === 'add';
+      want ? set.add(who) : set.delete(who);
+      present = want;
+      if (set.size) reacts[emo] = [...set];
+      else delete reacts[emo];
+      return { ...m, reacts };
+    });
+    return present;
+  }
+
+  /** Answer the hub's next-event card. Keyed to the event timestamp, so
+      answers for a replaced event simply stop counting. */
+  async rsvp(serverId, at, going) {
+    const record = this.servers.get(serverId);
+    if (!record) return;
+    const rsvps = { ...(record.rsvps ?? {}) };
+    if (going) rsvps[this.me] = { at, ts: Date.now() };
+    else delete rsvps[this.me];
+    record.rsvps = rsvps;
+    await this.db.serverPut(record);
+    this.dispatch({ type: 'servers', servers: this.snapshotServers() });
+    await this.sendContent(serverId, { k: 'rsvp', at, going: !!going });
+  }
+
   /** Sender-side write into the channel's encrypted relay history log —
       only if this channel keeps history. Best-effort: the MLS message is
       the message; the log is a convenience copy. */
@@ -916,7 +1078,11 @@ export class Controller {
     const entry = {
       sender: message.sender,
       ts: message.ts,
-      ...(message.file ? { file: message.file } : { text: message.text }),
+      ...(message.file
+        ? { file: message.file }
+        : message.game
+          ? { game: message.game }
+          : { text: message.text }),
     };
     sealHistoryEntry(meta.hkey, entry)
       .then((payload) =>
@@ -971,12 +1137,17 @@ export class Controller {
         // Whitelist fields: an entry is authored by whoever holds the room
         // key, so it must never override where it lands (server/channel)
         // or dress itself up as a system line.
+        const gameRef = entry.game ? normalizeGameRef(entry.game) : null;
         const message = {
           server: record.id,
           channel,
           sender: String(entry.sender ?? ''),
           ts: Number(entry.ts) || 0,
-          ...(entry.file ? { file: entry.file } : { text: String(entry.text ?? '') }),
+          ...(entry.file
+            ? { file: entry.file }
+            : gameRef
+              ? { game: gameRef }
+              : { text: String(entry.text ?? '') }),
           fromHistory: true,
         };
         if (message.ts < cutoff || seen.has(messageFingerprint(message))) continue;
@@ -1037,6 +1208,7 @@ export class Controller {
       chanMeta: record.chanMeta ?? {},
       overview: record.overview ?? null,
       notices: record.notices ?? [],
+      rsvps: record.rsvps ?? {},
     });
     await this.db.serverPut(record);
     this.dispatch({ type: 'servers', servers: this.snapshotServers() });
@@ -1521,6 +1693,9 @@ export class Controller {
         members: [...r.members],
         roles: { ...(r.roles ?? {}) },
         notices: [...(r.notices ?? [])],
+        rsvps: { ...(r.rsvps ?? {}) },
+        // Live only: which game each member says they're in right now.
+        presence: { ...(this.livePresence?.get(r.id) ?? {}) },
       }));
   }
 

@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import Seal from './Seal.jsx';
 import VoiceMeter from './VoiceMeter.jsx';
-import { Hash, Wave, Plus, Gear, Clock, CircleGlyph } from './icons.jsx';
+import { Hash, Wave, Plus, Gear, Clock, Gamepad } from './icons.jsx';
 
 // Rooms and voice tables of the active circle. Channel names travel inside
 // the encryption, so even this sidebar is knowledge the relay never has.
@@ -10,6 +10,7 @@ export default function Channels({
   activeChannel,
   me,
   canManage,
+  unreads,
   onSelect,
   onSettings,
   onCreate,
@@ -27,8 +28,15 @@ export default function Channels({
 
   return (
     <aside className="channels">
-      {/* The circle's home base — where clicking the circle drops you.
-          activeChannel === null means "on the home base". */}
+      <div className="circle-head">
+        <div className="circle-head-name">{server.name}</div>
+        <div className="circle-head-meta mono">
+          {server.members.length} member{server.members.length === 1 ? '' : 's'} · epoch{' '}
+          {String(server.epoch).padStart(2, '0')} · sealed
+        </div>
+      </div>
+      {/* The circle's game hub — where clicking the circle drops you.
+          activeChannel === null means "on the hub". */}
       <ul className="channel-list overview-entry">
         <li>
           <button
@@ -37,14 +45,14 @@ export default function Channels({
             onClick={() => onSelect(null)}
           >
             <span className="glyph">
-              <CircleGlyph size={13} />
+              <Gamepad size={14} />
             </span>
-            home base
+            game hub
           </button>
         </li>
       </ul>
       <div className="section-label">
-        <span className="overline"><span className="idx">02</span>rooms</span>
+        <span className="overline">rooms</span>
         {canManage && (
           <button className="ghost" title="new room" data-testid="new-channel" onClick={() => setAdding(true)}>
             <Plus size={13} />
@@ -70,6 +78,11 @@ export default function Channels({
                     <Clock size={11} />
                   </span>
                 ) : null}
+                {ch !== activeChannel && (unreads?.[ch] ?? 0) > 0 && (
+                  <span className="unread-badge chan-unread" data-testid={`chan-unread-${ch}`}>
+                    {unreads[ch]}
+                  </span>
+                )}
               </button>
               {canManage && (
                 <button
@@ -108,7 +121,7 @@ export default function Channels({
         )}
       </ul>
       <div className="section-label">
-        <span className="overline"><span className="idx">03</span>voice</span>
+        <span className="overline">voice</span>
         {canManage && (
           <button
             className="ghost"
@@ -146,6 +159,11 @@ export default function Channels({
                       <Wave size={13} />
                     </span>
                     {ch}
+                    {participants.length > 0 && (
+                      <span className="live-chip" data-testid={`voice-live-${ch}`}>
+                        {participants.length} live
+                      </span>
+                    )}
                   </span>
                 )}
                 {joined ? (
@@ -159,11 +177,11 @@ export default function Channels({
                       leave
                     </button>
                   </>
-                ) : (
+                ) : participants.length === 0 ? (
                   <button className="voice-join" data-testid={`voice-join-${ch}`} onClick={() => onVoiceJoin(ch)}>
                     join
                   </button>
-                )}
+                ) : null}
                 {canManage && onVoiceSettings && (
                   <button
                     className="ghost chan-gear"
@@ -175,7 +193,30 @@ export default function Channels({
                   </button>
                 )}
               </div>
-              {participants.length > 0 && (
+              {participants.length > 0 && !joined && (
+                <div className="voice-live-card" data-testid={`voice-participants-${ch}`}>
+                  <span className="overline voice-live-label">live in {ch}</span>
+                  <span className="sr-only">{participants.join(', ')}</span>
+                  <div className="voice-live-row">
+                    <span className="voice-live-stack">
+                      {participants.slice(0, 4).map((p) => (
+                        <Seal key={p} name={p} size={24} title={p} />
+                      ))}
+                      {participants.length > 4 && (
+                        <span className="voice-live-more">+{participants.length - 4}</span>
+                      )}
+                    </span>
+                    <button
+                      className="voice-join-pill"
+                      data-testid={`voice-join-${ch}`}
+                      onClick={() => onVoiceJoin(ch)}
+                    >
+                      Join
+                    </button>
+                  </div>
+                </div>
+              )}
+              {participants.length > 0 && joined && (
                 <ul className="voice-participants" data-testid={`voice-participants-${ch}`}>
                   {participants.map((p) => {
                     const speaking = voice.speaking?.includes(p);

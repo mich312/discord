@@ -14,10 +14,12 @@ import Overview from './components/Overview.jsx';
 import Members from './components/Members.jsx';
 import CallPanel from './components/CallPanel.jsx';
 import CallStage from './components/CallStage.jsx';
+import GameStage from './components/GameStage.jsx';
 import { callChatChannel } from './lib/controller.js';
 import Settings from './components/Settings.jsx';
 import Seal from './components/Seal.jsx';
 import { Key, Bell, ShieldCheck, LinkGlyph, Sun, QuorumGlyph, Gear } from './components/icons.jsx';
+import { markPlayed } from './lib/games.js';
 
 const initial = {
   phase: 'loading', // loading | onboarding | ready
@@ -119,6 +121,9 @@ export default function App() {
   // in the call, the shared screen, and the call's own chat thread (the
   // active channel becomes `voice:<room>` so the message machinery follows).
   const [stage, setStage] = useState(false);
+  // A web game from the shelf, playing in the main pane with the room's
+  // chat (and the call, if one is on) docked beside it.
+  const [game, setGame] = useState(null);
   // Where to land when the stage closes — the text channel we came from.
   const stageReturn = useRef(null);
   const controllerRef = useRef(null);
@@ -129,7 +134,7 @@ export default function App() {
     // status bar) in step with the app surface.
     document
       .querySelector('meta[name="theme-color"]')
-      ?.setAttribute('content', theme === 'paper' ? '#e6e4dd' : '#0e0e0f');
+      ?.setAttribute('content', theme === 'paper' ? '#e9e6e0' : '#09090a');
     try {
       localStorage.setItem('quorum-theme', theme);
     } catch {
@@ -178,6 +183,9 @@ export default function App() {
     if (state.modal || paletteOpen) setDrawer(null);
   }, [state.modal, paletteOpen]);
 
+  // Device-local unread counts for the sidebar pills — same digest the
+  // hub uses, keyed on everything that can move it.
+  const [unreads, setUnreads] = useState({});
   // Load history whenever the active channel changes — or when stored
   // messages changed underneath us (history backfill, auto-delete prune).
   const { server, channel } = state.active;
@@ -189,10 +197,22 @@ export default function App() {
   }, [server, channel, state.messagesRev]);
 
   // Whatever is on screen is read: keep the device-local seen marker in
-  // step so the home base's unread counts mean "since you last looked".
+  // step so the hub's unread counts mean "since you last looked".
   useEffect(() => {
     if (server && channel) controllerRef.current?.markSeen(server, channel);
   }, [server, channel, state.messages]);
+
+  useEffect(() => {
+    if (!server) return void setUnreads({});
+    let alive = true;
+    controllerRef.current
+      ?.channelDigest(server)
+      .then((d) => alive && setUnreads(Object.fromEntries(d.map((x) => [x.channel, x.unread]))))
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [server, channel, state.messagesRev, state.messages]);
 
   // Auto-dismiss toasts.
   useEffect(() => {
@@ -212,10 +232,52 @@ export default function App() {
   const openStage = () => {
     const v = controllerRef.current?.voice?.active;
     if (!v) return;
+    // A running game keeps the pane — the call rides in its dock instead.
+    if (game) return;
     if (!stage) stageReturn.current = state.active;
     dispatch({ type: 'select', server: v.server, channel: callChatChannel(v.channel) });
     setStage(true);
     setDrawer(null);
+  };
+
+  // Launch a game from the shelf: the game takes the main pane, and the
+  // circle's first room docks beside it so the conversation rides along.
+  // Launching also drops a join card into that room — late arrivals get
+  // a one-tap way in, which is the whole point of a shared shelf.
+  const launchGame = (g, { announce = true } = {}) => {
+    const ch = channel ?? activeServer?.channels[0];
+    if (!ch) return;
+    dispatch({ type: 'select', server, channel: ch });
+    setStage(false);
+    setGame(g);
+    setDrawer(null);
+    markPlayed(g.id);
+    if (announce && !activeServer?.restored) {
+      controllerRef.current?.sendGameCard(server, ch, g).catch(() => {});
+    }
+  };
+
+  // Rich presence follows the game state: whenever a game opens or closes
+  // (from any path — back button, room click, circle switch), tell the
+  // circle it was launched in. Ephemeral; peers expire it on their own.
+  const playingRef = useRef(null);
+  useEffect(() => {
+    const c = controllerRef.current;
+    if (!c) return;
+    const prev = playingRef.current;
+    if (game && server && !activeServer?.restored) {
+      playingRef.current = { server, game };
+      c.setPlaying(server, game).catch(() => {});
+    } else if (!game && prev) {
+      playingRef.current = null;
+      c.setPlaying(prev.server, null).catch(() => {});
+    }
+  }, [game]);
+
+  const closeGame = () => {
+    setGame(null);
+    // Land back on the hub the game was launched from.
+    if (server) dispatch({ type: 'select', server, channel: null });
   };
 
   const closeStage = () => {
@@ -365,9 +427,10 @@ export default function App() {
             servers={state.servers}
             active={server}
             onSelect={(id) => {
-              // Picking a circle lands on its overview page, not a room.
+              // Picking a circle lands on its game hub, not a room.
               dispatch({ type: 'select', server: id, channel: null });
               setStage(false); // navigating away swaps the stage for the rooms
+              setGame(null);
               setDrawer(null);
             }}
             onCreate={async (name) => {
@@ -376,15 +439,18 @@ export default function App() {
               setDrawer(null);
             }}
           />
+          <div className="nav-col">
           {activeServer && (
             <Channels
               server={activeServer}
               activeChannel={channel}
               me={state.me}
+              unreads={unreads}
               canManage={canManage && !activeServer.restored}
               onSelect={(ch) => {
                 dispatch({ type: 'select', server, channel: ch });
                 setStage(false); // picking a text room dismisses the stage
+                setGame(null); // …and the game
                 setDrawer(null);
               }}
               onSettings={(ch) =>
@@ -433,8 +499,35 @@ export default function App() {
               <Gear size={14} />
             </button>
           </div>
+          </div>
         </nav>
-        {activeServer && stage && state.voice.active ? (
+        {activeServer && game && channel ? (
+          <GameStage
+            game={game}
+            server={activeServer}
+            channel={channel}
+            me={state.me}
+            messages={state.messages}
+            canSend={!activeServer.restored}
+            onSend={(text) =>
+              controllerRef.current
+                .sendChat(server, channel, text)
+                .catch((e) => dispatch({ type: 'toast', text: e.message }))
+            }
+            voice={state.voice}
+            onVoiceJoin={(ch) =>
+              controllerRef.current.voice
+                .join(server, ch)
+                .catch((e) => dispatch({ type: 'toast', text: `voice: ${e.message}` }))
+            }
+            onVoiceLeave={() => controllerRef.current.voice.leave()}
+            onToggleMute={() => controllerRef.current.voice.setMuted(!state.voice.muted)}
+            onInviteSeat={() =>
+              controllerRef.current.sendGameCard(server, channel, game).catch(() => {})
+            }
+            onClose={closeGame}
+          />
+        ) : activeServer && stage && state.voice.active ? (
           <CallStage
             voice={state.voice}
             manager={controllerRef.current.voice}
@@ -452,6 +545,7 @@ export default function App() {
                 .catch((e) => dispatch({ type: 'toast', text: `screen share: ${e.message}` }))
             }
             onStopShare={() => controllerRef.current.voice.stopShare()}
+            onToggleMute={() => controllerRef.current.voice.setMuted(!state.voice.muted)}
             onLeave={() => controllerRef.current.voice.leave()}
             onClose={closeStage}
           />
@@ -475,6 +569,20 @@ export default function App() {
                     .catch((e) => dispatch({ type: 'toast', text: e.message }))
                 }
                 fetchFile={(file) => controllerRef.current.fetchFile(file)}
+                voice={state.voice}
+                onVoiceJoin={(ch) =>
+                  controllerRef.current.voice
+                    .join(server, ch)
+                    .then(() => openStage())
+                    .catch((e) => dispatch({ type: 'toast', text: `voice: ${e.message}` }))
+                }
+                onOpenStage={openStage}
+                onLaunchGame={(g) => launchGame(g, { announce: false })}
+                onReact={(target, emo) =>
+                  controllerRef.current
+                    .react(server, channel, target, emo)
+                    .catch((e) => dispatch({ type: 'toast', text: e.message }))
+                }
               />
             ) : (
               <Overview
@@ -491,6 +599,12 @@ export default function App() {
                     .join(server, ch)
                     .then(() => openStage())
                     .catch((e) => dispatch({ type: 'toast', text: `voice: ${e.message}` }))
+                }
+                onLaunchGame={launchGame}
+                onRsvp={(at, going) =>
+                  controllerRef.current
+                    .rsvp(server, at, going)
+                    .catch((e) => dispatch({ type: 'toast', text: e.message }))
                 }
                 onSave={(ov) =>
                   controllerRef.current
@@ -513,6 +627,7 @@ export default function App() {
               server={activeServer}
               me={state.me}
               canManage={canManage}
+              voice={state.voice}
               onCall={(peer) => {
                 setDrawer(null);
                 controllerRef.current.voice
@@ -649,6 +764,7 @@ export default function App() {
             onNavigate={(srv, ch) => {
               dispatch({ type: 'select', server: srv, channel: ch });
               setStage(false);
+              setGame(null);
             }}
             onClose={() => setPaletteOpen(false)}
           />

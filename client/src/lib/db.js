@@ -45,6 +45,24 @@ function wrap(db) {
         req.onerror = () => reject(req.error);
       }),
     msgAdd: (message) => tx(db, 'messages', 'readwrite', (s) => s.add(message)),
+    /** Patch one message identified by (sender, ts) — reactions live on the
+        stored message, so late readers see them too. */
+    msgPatch: (server, channel, sender, ts, patch) =>
+      new Promise((resolve, reject) => {
+        const store = db.transaction('messages', 'readwrite').objectStore('messages');
+        const req = store.index('byChannel').openCursor([server, channel]);
+        req.onsuccess = () => {
+          const cur = req.result;
+          if (!cur) return resolve(false);
+          const v = cur.value;
+          if (!v.system && v.sender === sender && v.ts === ts) {
+            cur.update(patch(v));
+            return resolve(true);
+          }
+          cur.continue();
+        };
+        req.onerror = () => reject(req.error);
+      }),
     msgsFor: (server, channel) =>
       new Promise((resolve, reject) => {
         const req = db

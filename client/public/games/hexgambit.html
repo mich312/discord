@@ -1,0 +1,112 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Hex Gambit</title>
+<style>
+  /* A tiny bundled demo game so the shelf works out of the box: local
+     two-player chess on one board. It stands in for any web game living on
+     another server — same iframe, same contract (none). */
+  :root { color-scheme: dark; }
+  * { box-sizing: border-box; margin: 0; }
+  html, body { height: 100%; }
+  body {
+    background: radial-gradient(700px 420px at 50% 20%, rgba(255, 84, 112, 0.06), transparent 70%), #0a0a0b;
+    color: #f2f2f3;
+    font: 14px/1.5 ui-sans-serif, system-ui, sans-serif;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    padding: 16px;
+  }
+  .wrap { text-align: center; }
+  h1 {
+    font-size: 15px;
+    font-weight: 800;
+    letter-spacing: 0.16em;
+    text-transform: uppercase;
+    color: #ff5470;
+    margin-bottom: 4px;
+  }
+  .sub { color: #6d6d76; font-size: 11px; margin-bottom: 14px; font-family: ui-monospace, monospace; }
+  .board {
+    display: grid;
+    grid-template-columns: repeat(8, clamp(34px, 9.5vmin, 52px));
+    grid-auto-rows: clamp(34px, 9.5vmin, 52px);
+    border-radius: 10px;
+    overflow: hidden;
+    box-shadow: 0 24px 70px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.14);
+    margin: 0 auto;
+    user-select: none;
+  }
+  .sq { display: grid; place-items: center; font-size: clamp(22px, 6.4vmin, 34px); cursor: pointer; position: relative; }
+  .sq.l { background: #2b2b32; }
+  .sq.d { background: #161619; }
+  .sq.sel { box-shadow: inset 0 0 0 3px #ffb86b; }
+  .sq.last { box-shadow: inset 0 0 0 3px rgba(255, 84, 112, 0.55); }
+  .sq .w { color: #f3ede0; text-shadow: 0 2px 6px rgba(0, 0, 0, 0.6); }
+  .sq .b { color: #101318; text-shadow: 0 0 3px rgba(255, 255, 255, 0.45); }
+  .turn { margin-top: 14px; font: 600 11px ui-monospace, monospace; letter-spacing: 0.14em; text-transform: uppercase; color: #a1a1a9; }
+  .turn .dot { display: inline-block; width: 7px; height: 7px; border-radius: 99px; background: #3ddc84; margin-right: 6px; vertical-align: 1px; }
+</style>
+</head>
+<body>
+<div class="wrap">
+  <h1>Hex Gambit</h1>
+  <div class="sub">local two-player board — pass the mouse between moves</div>
+  <div class="board" id="board"></div>
+  <div class="turn" id="turn"><span class="dot"></span>white to move</div>
+</div>
+<script>
+  // Deliberately tiny: click a piece, click a destination. Any move is
+  // legal except capturing your own piece — it's a demo surface, not an
+  // engine. White = uppercase.
+  const START = 'rnbqkbnr/pppppppp/8/8/8/8/PPPPPPPP/RNBQKBNR';
+  const GLYPH = { k:'♚', q:'♛', r:'♜', b:'♝', n:'♞', p:'♟', K:'♔', Q:'♕', R:'♖', B:'♗', N:'♘', P:'♙' };
+  const cells = [];
+  let grid = START.split('/').map((row) => {
+    const out = [];
+    for (const ch of row) /\d/.test(ch) ? out.push(...Array(+ch).fill(null)) : out.push(ch);
+    return out;
+  });
+  let sel = null, last = null, white = true;
+  const isWhite = (p) => p === p.toUpperCase();
+  const boardEl = document.getElementById('board');
+  const turnEl = document.getElementById('turn');
+  for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
+    const el = document.createElement('div');
+    el.className = 'sq ' + ((r + c) % 2 ? 'd' : 'l');
+    el.addEventListener('click', () => click(r, c));
+    boardEl.appendChild(el);
+    cells.push(el);
+  }
+  function draw() {
+    for (let r = 0; r < 8; r++) for (let c = 0; c < 8; c++) {
+      const el = cells[r * 8 + c], p = grid[r][c];
+      el.innerHTML = p ? `<span class="${isWhite(p) ? 'w' : 'b'}">${GLYPH[p]}</span>` : '';
+      el.classList.toggle('sel', !!sel && sel[0] === r && sel[1] === c);
+      el.classList.toggle('last', !!last && last[0] === r && last[1] === c);
+    }
+    turnEl.innerHTML = `<span class="dot"></span>${white ? 'white' : 'black'} to move`;
+  }
+  function click(r, c) {
+    const p = grid[r][c];
+    if (sel) {
+      const [sr, sc] = sel;
+      const moving = grid[sr][sc];
+      if (sr === r && sc === c) { sel = null; return draw(); }
+      if (p && isWhite(p) === isWhite(moving)) { sel = [r, c]; return draw(); }
+      grid[r][c] = moving;
+      grid[sr][sc] = null;
+      last = [r, c];
+      sel = null;
+      white = !white;
+      return draw();
+    }
+    if (p && isWhite(p) === white) { sel = [r, c]; draw(); }
+  }
+  draw();
+</script>
+</body>
+</html>
