@@ -125,6 +125,14 @@ const voice = {
   presence: { 'srv-race/lounge': ['alice', 'bob', 'dana'] },
 };
 
+// The same room seen from outside the call: others are live, I'm not.
+const voiceIdle = {
+  active: null,
+  listenOnly: false,
+  connections: {},
+  presence: { 'srv-race/lounge': ['bob', 'dana', 'marek'] },
+};
+
 // Stage previews: everyone in the lounge, dana mid-sentence, and (for
 // view=call-share) bob presenting a synthetic screen drawn on a canvas.
 const stageVoice = (sharing) => ({
@@ -200,7 +208,8 @@ const modals = {
   },
 };
 
-function PreviewShell({ empty = false, banner = false, modal = null, palette = false, stage = null, landing = false, game = null }) {
+function PreviewShell({ empty = false, banner = false, modal = null, palette = false, stage = null, landing = false, game = null, idle = false }) {
+  const vc = idle ? voiceIdle : voice;
   const me = 'alice';
   // channel: null means the circle's hub page, same as App.jsx.
   const [active, setActive] = useState({
@@ -266,7 +275,7 @@ function PreviewShell({ empty = false, banner = false, modal = null, palette = f
                 setDrawer(null);
               }}
               onCreate={noop}
-              voice={voice}
+              voice={vc}
               onVoiceJoin={noop}
               onVoiceLeave={noop}
             />
@@ -291,7 +300,7 @@ function PreviewShell({ empty = false, banner = false, modal = null, palette = f
             messages={callMessages}
             canSend
             onSend={noop}
-            voice={voice}
+            voice={vc}
             onVoiceJoin={noop}
             onVoiceLeave={noop}
             onToggleMute={noop}
@@ -329,7 +338,7 @@ function PreviewShell({ empty = false, banner = false, modal = null, palette = f
                   if ((f.mime ?? '').startsWith('image/')) return PNG;
                   throw new Error('preview: no blob store');
                 }}
-                voice={voice}
+                voice={vc}
                 onVoiceJoin={noop}
                 onOpenStage={noop}
                 onLaunchGame={(g) => {
@@ -348,7 +357,7 @@ function PreviewShell({ empty = false, banner = false, modal = null, palette = f
                 me={me}
                 canManage={activeServer.roles?.[me] === 'admin'}
                 canSend
-                voice={voice}
+                voice={vc}
                 digestKey="preview"
                 loadDigest={async (id) => digestMock[id] ?? []}
                 onSelectChannel={(ch) => setActive({ ...active, channel: ch })}
@@ -378,7 +387,7 @@ function PreviewShell({ empty = false, banner = false, modal = null, palette = f
                 }
               />
             )}
-            <Members server={activeServer} me={me} voice={voice} onAdd={noop} onMember={() => setOpenModal(modals['modal-safety'])} />
+            <Members server={activeServer} me={me} voice={vc} onAdd={noop} onMember={() => setOpenModal(modals['modal-safety'])} />
           </>
         ) : (
           <div className="empty-state">
@@ -425,6 +434,7 @@ function pick() {
   if (view === 'onboarding' || view === 'invited') return <Onboarding controller={mockController} />;
   if (view === 'empty') return <PreviewShell empty />;
   if (view === 'overview') return <PreviewShell landing />;
+  if (view === 'overview-idle') return <PreviewShell landing idle />;
   if (view === 'banner') return <PreviewShell banner />;
   if (view === 'palette') return <PreviewShell palette />;
   if (view === 'call') return <PreviewShell stage={stageVoice([])} />;

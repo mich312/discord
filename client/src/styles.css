@@ -567,6 +567,7 @@ kbd {
 .channel .chan-flag + .chan-unread { margin-left: 6px; }
 .live-chip {
   margin-left: auto;
+  white-space: nowrap;
   display: inline-flex;
   align-items: center;
   gap: 5px;
@@ -582,6 +583,48 @@ kbd {
   border-radius: var(--r-pill);
   background: var(--ok);
   box-shadow: 0 0 8px var(--ok);
+}
+
+/* someone's live and you're not in yet: the sidebar's join card */
+.voice-live-card {
+  margin: 6px 8px 8px;
+  padding: 10px 12px;
+  background: var(--ok-soft);
+  border: 1px solid rgba(61, 220, 132, 0.25);
+  border-radius: var(--r);
+}
+[data-theme='paper'] .voice-live-card { border-color: rgba(47, 138, 87, 0.35); }
+.voice-live-label { color: var(--ok); display: block; margin-bottom: 8px; }
+.voice-live-row { display: flex; align-items: center; }
+.voice-live-stack { display: flex; align-items: center; }
+.voice-live-stack .seal-avatar { margin-right: -7px; box-shadow: 0 0 0 2px var(--panel); }
+.voice-live-more {
+  margin-left: 12px;
+  font: 600 var(--text-xs) var(--mono);
+  color: var(--ink-dim);
+}
+.voice-join-pill {
+  margin-left: auto;
+  background: var(--ok);
+  color: #06130b;
+  border: none;
+  border-radius: var(--r-pill);
+  padding: 5px 15px;
+  font: 700 12.5px var(--sans);
+  cursor: pointer;
+  transition: filter var(--fast) var(--ease);
+}
+.voice-join-pill:hover { filter: brightness(1.1); }
+[data-theme='paper'] .voice-join-pill { color: #fff; }
+
+.sr-only {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  margin: -1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 /* voice */

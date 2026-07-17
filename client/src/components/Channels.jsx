@@ -177,11 +177,11 @@ export default function Channels({
                       leave
                     </button>
                   </>
-                ) : (
+                ) : participants.length === 0 ? (
                   <button className="voice-join" data-testid={`voice-join-${ch}`} onClick={() => onVoiceJoin(ch)}>
                     join
                   </button>
-                )}
+                ) : null}
                 {canManage && onVoiceSettings && (
                   <button
                     className="ghost chan-gear"
@@ -193,7 +193,30 @@ export default function Channels({
                   </button>
                 )}
               </div>
-              {participants.length > 0 && (
+              {participants.length > 0 && !joined && (
+                <div className="voice-live-card" data-testid={`voice-participants-${ch}`}>
+                  <span className="overline voice-live-label">live in {ch}</span>
+                  <span className="sr-only">{participants.join(', ')}</span>
+                  <div className="voice-live-row">
+                    <span className="voice-live-stack">
+                      {participants.slice(0, 4).map((p) => (
+                        <Seal key={p} name={p} size={24} title={p} />
+                      ))}
+                      {participants.length > 4 && (
+                        <span className="voice-live-more">+{participants.length - 4}</span>
+                      )}
+                    </span>
+                    <button
+                      className="voice-join-pill"
+                      data-testid={`voice-join-${ch}`}
+                      onClick={() => onVoiceJoin(ch)}
+                    >
+                      Join
+                    </button>
+                  </div>
+                </div>
+              )}
+              {participants.length > 0 && joined && (
                 <ul className="voice-participants" data-testid={`voice-participants-${ch}`}>
                   {participants.map((p) => {
                     const speaking = voice.speaking?.includes(p);
