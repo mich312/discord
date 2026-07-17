@@ -1,0 +1,1130 @@
+<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"></head><body>
+<title>quorum — game hub concepts</title>
+<style>
+/* ==========================================================================
+   PRESENTATION WRAPPER — a quiet studio wall the mockups hang on.
+   The mockups themselves each carry their own token set (.dA / .dB).
+   ========================================================================== */
+:root{
+  --w-bg:#0a0a0d; --w-panel:#121218; --w-ink:#ecedf2; --w-dim:#9a9ba8;
+  --w-mute:#5f606e; --w-edge:rgba(255,255,255,.08); --w-acc:#ff5470;
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,"Helvetica Neue",Arial,sans-serif;
+  --mono:ui-monospace,"SF Mono","Cascadia Code",Menlo,Consolas,monospace;
+}
+html{background:var(--w-bg)}
+body{margin:0;background:var(--w-bg);color:var(--w-ink);font:15px/1.6 var(--sans);-webkit-font-smoothing:antialiased}
+.wrap{max-width:1240px;margin:0 auto;padding:48px 24px 96px}
+.kicker{font:600 11px/1 var(--mono);letter-spacing:.18em;text-transform:uppercase;color:var(--w-acc)}
+h1{font-size:clamp(28px,4.5vw,44px);line-height:1.05;letter-spacing:-.03em;font-weight:800;margin:14px 0 10px;text-wrap:balance}
+.lede{max-width:64ch;color:var(--w-dim);font-size:16px}
+.lede strong{color:var(--w-ink)}
+section.dir{margin-top:72px}
+.dir-head{display:flex;align-items:baseline;gap:16px;flex-wrap:wrap;border-top:1px solid var(--w-edge);padding-top:28px}
+.dir-num{font:700 12px/1 var(--mono);letter-spacing:.14em;color:var(--w-mute)}
+h2{font-size:26px;letter-spacing:-.02em;font-weight:800;margin:0}
+.dir-sub{color:var(--w-dim);max-width:70ch;margin:10px 0 20px}
+.tabs{display:flex;gap:8px;flex-wrap:wrap;margin:0 0 16px}
+.tab{border:1px solid var(--w-edge);background:var(--w-panel);color:var(--w-dim);border-radius:999px;
+  padding:7px 15px;font:600 12.5px/1 var(--sans);cursor:pointer;transition:all .15s ease}
+.tab:hover{color:var(--w-ink);border-color:rgba(255,255,255,.2)}
+.tab[aria-selected="true"]{background:var(--w-ink);color:#0a0a0d;border-color:var(--w-ink)}
+.tab:focus-visible{outline:2px solid var(--w-acc);outline-offset:2px}
+.stage{position:relative}
+.frame-wrap{position:relative;width:100%;border-radius:14px;overflow:hidden;
+  border:1px solid var(--w-edge);box-shadow:0 24px 80px rgba(0,0,0,.55);background:#000}
+.frame-wrap[hidden]{display:none}
+.mock{width:1440px;height:900px;transform-origin:0 0;position:absolute;top:0;left:0}
+.caption{display:flex;gap:10px;align-items:flex-start;color:var(--w-dim);font-size:13.5px;
+  margin:14px 2px 0;max-width:86ch}
+.caption b{color:var(--w-ink)}
+.cap-dot{flex:none;width:8px;height:8px;border-radius:99px;background:var(--w-acc);margin-top:6px}
+.notes{margin-top:80px;border-top:1px solid var(--w-edge);padding-top:28px}
+.notes h2{margin-bottom:6px}
+.note-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:14px;margin-top:22px}
+.note{background:var(--w-panel);border:1px solid var(--w-edge);border-radius:12px;padding:18px 18px 16px}
+.note h3{margin:0 0 8px;font-size:15px;letter-spacing:-.01em}
+.note p{margin:0;color:var(--w-dim);font-size:13.5px}
+.note .tag{font:600 10px/1 var(--mono);letter-spacing:.14em;text-transform:uppercase;color:var(--w-acc);display:block;margin-bottom:10px}
+.verdict{margin-top:34px;background:linear-gradient(135deg,rgba(255,84,112,.09),rgba(255,184,107,.05));
+  border:1px solid rgba(255,84,112,.25);border-radius:14px;padding:22px 24px}
+.verdict h3{margin:0 0 8px;font-size:17px}
+.verdict p{margin:0 0 10px;color:var(--w-dim)}
+.verdict p:last-child{margin:0}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+
+/* ==========================================================================
+   SHARED MOCKUP BONES — one skeleton, two skins. Each .mock sets tokens.
+   ========================================================================== */
+.mock{display:grid;grid-template-columns:72px 236px 1fr 268px;grid-template-rows:100%;
+  background:var(--bg);color:var(--ink);font:14px/1.5 var(--sans);text-align:left}
+.mock *{box-sizing:border-box}
+.mock .lbl{font:600 10px/1 var(--mono);letter-spacing:.16em;text-transform:uppercase;color:var(--mute)}
+
+/* --- skin A: AFTERDARK ---------------------------------------------------- */
+.dA{--bg:#0b0d13;--panel:#10131d;--raised:#161a27;--pop:#1c2132;--edge:rgba(148,163,215,.09);
+  --edge2:rgba(148,163,215,.16);--ink:#eef0f8;--dim:#98a0b8;--mute:#5c6379;
+  --acc:#ff5470;--acc-soft:rgba(255,84,112,.14);--glow:0 0 24px rgba(255,84,112,.35);
+  --amber:#ffb86b;--live:#3ddc84;--live-soft:rgba(61,220,132,.13);
+  --r-lg:16px;--r-md:12px;--r-sm:8px}
+.dA .display{font-weight:800;letter-spacing:-.035em}
+/* --- skin B: THE DEN ------------------------------------------------------ */
+.dB{--bg:#171209;--panel:#1f1810;--raised:#2a2015;--pop:#33281a;--edge:rgba(232,196,138,.1);
+  --edge2:rgba(232,196,138,.2);--ink:#f4ecdc;--dim:#c0ad8e;--mute:#83744f;
+  --acc:#e8a33d;--acc-soft:rgba(232,163,61,.16);--glow:0 0 24px rgba(232,163,61,.3);
+  --amber:#e8a33d;--live:#8fbf74;--live-soft:rgba(143,191,116,.15);
+  --r-lg:20px;--r-md:14px;--r-sm:10px}
+.dB .display{font-family:Charter,Georgia,'Times New Roman',serif;font-weight:700;letter-spacing:-.01em;font-style:italic}
+
+/* --- rail (circle switcher) --- */
+.rail{background:color-mix(in srgb,var(--bg) 60%,black);border-right:1px solid var(--edge);
+  display:flex;flex-direction:column;align-items:center;gap:12px;padding:14px 0}
+.rail .ring{width:44px;height:44px;border-radius:14px;display:grid;place-items:center;
+  font:800 15px/1 var(--sans);color:#fff;position:relative;cursor:pointer;opacity:.55}
+.dB .rail .ring{border-radius:16px}
+.rail .ring.on{opacity:1;box-shadow:0 0 0 2px var(--bg),0 0 0 4px var(--acc)}
+.rail .ring.on::before{content:"";position:absolute;left:-14px;width:4px;height:26px;border-radius:4px;background:var(--acc)}
+.rail .add{width:44px;height:44px;border-radius:14px;border:1.5px dashed var(--edge2);color:var(--mute);
+  display:grid;place-items:center;font-size:20px;background:none;cursor:pointer}
+.rail .spacer{flex:1}
+.rail .seal{width:34px;height:34px;border-radius:12px;background:var(--raised);border:1px solid var(--edge);
+  display:grid;place-items:center;font-size:15px}
+
+/* --- nav column --- */
+.nav{background:var(--panel);border-right:1px solid var(--edge);display:flex;flex-direction:column;min-height:0}
+.nav .circle-head{padding:18px 16px 14px;border-bottom:1px solid var(--edge)}
+.nav .circle-name{font-size:16.5px;font-weight:800;letter-spacing:-.02em;display:flex;align-items:center;gap:8px}
+.dB .nav .circle-name{font-family:Charter,Georgia,serif;font-style:italic;font-weight:700}
+.nav .circle-meta{color:var(--mute);font:500 11px/1.3 var(--mono);margin-top:5px;letter-spacing:.04em}
+.nav .grp{padding:16px 10px 4px}
+.nav .grp .lbl{padding:0 8px 8px;display:flex;justify-content:space-between;align-items:center}
+.nav a.item{display:flex;align-items:center;gap:9px;padding:7px 10px;border-radius:var(--r-sm);
+  color:var(--dim);text-decoration:none;font-weight:500;font-size:13.5px}
+.nav a.item:hover{background:var(--raised);color:var(--ink)}
+.nav a.item.on{background:var(--acc-soft);color:var(--ink);font-weight:700}
+.nav a.item.on .ico{color:var(--acc)}
+.nav .ico{width:16px;text-align:center;color:var(--mute);font-size:13px;flex:none}
+.nav .pill{margin-left:auto;background:var(--acc);color:#14060a;font:800 10.5px/1 var(--mono);
+  border-radius:99px;padding:3px 7px}
+.nav .live-chip{margin-left:auto;display:flex;align-items:center;gap:5px;font:700 10px/1 var(--mono);color:var(--live);letter-spacing:.08em}
+.nav .live-chip::before{content:"";width:6px;height:6px;border-radius:99px;background:var(--live);box-shadow:0 0 8px var(--live)}
+.nav .voice-now{margin:6px 10px 0;background:var(--live-soft);border:1px solid rgba(61,220,132,.25);
+  border-radius:var(--r-md);padding:10px 12px}
+.nav .voice-now .who{display:flex;align-items:center;margin-top:8px}
+.nav .voice-now .lbl{line-height:1.6;letter-spacing:.12em}
+.nav .voice-now .who .av{margin-right:-6px;box-shadow:0 0 0 2px var(--panel)}
+.nav .voice-now .join{margin-left:auto;background:var(--live);color:#06130b;border:none;border-radius:99px;
+  font:800 11px/1 var(--sans);padding:6px 12px;cursor:pointer}
+.nav .self{margin-top:auto;border-top:1px solid var(--edge);padding:12px 14px;display:flex;align-items:center;gap:10px}
+.nav .self .who{display:flex;flex-direction:column;gap:2px;min-width:0}
+.nav .self .hd{font-weight:700;font-size:13px}
+.nav .self .st{font:600 10px/1 var(--mono);letter-spacing:.1em;color:var(--live);text-transform:uppercase}
+.nav .self .ic{margin-left:auto;display:flex;gap:6px;color:var(--mute)}
+
+/* --- avatars --- */
+.av{border-radius:99px;display:inline-grid;place-items:center;color:#fff;font:800 12px/1 var(--sans);flex:none}
+.av.s24{width:24px;height:24px;font-size:10.5px}.av.s28{width:28px;height:28px;font-size:11px}
+.av.s32{width:32px;height:32px}.av.s40{width:40px;height:40px;font-size:15px}
+.av.talk{box-shadow:0 0 0 2.5px var(--live),0 0 14px rgba(61,220,132,.5)}
+
+/* --- main stage --- */
+.main{display:flex;flex-direction:column;min-width:0;min-height:0;background:var(--bg);position:relative}
+.mast{height:56px;flex:none;display:flex;align-items:center;gap:12px;padding:0 20px;border-bottom:1px solid var(--edge)}
+.mast .title{font-weight:800;font-size:15px;display:flex;align-items:center;gap:9px;white-space:nowrap}
+.mast .sub{color:var(--mute);font:500 11px/1 var(--mono);letter-spacing:.05em}
+.mast .right{margin-left:auto;display:flex;gap:8px;align-items:center}
+.btn{border:1px solid var(--edge2);background:var(--raised);color:var(--ink);border-radius:var(--r-sm);
+  padding:7px 13px;font:700 12.5px/1 var(--sans);cursor:pointer;display:inline-flex;align-items:center;gap:7px;white-space:nowrap}
+.btn.pri{background:var(--acc);border-color:var(--acc);color:#14060a;box-shadow:var(--glow)}
+.btn.live{background:var(--live);border-color:var(--live);color:#06130b}
+.btn.ghost{background:none}
+.scroll{flex:1;overflow:hidden;padding:16px 26px 10px;display:flex;flex-direction:column;gap:14px}
+.scroll>*{flex:none}
+
+/* --- crew column --- */
+.crew{background:var(--panel);border-left:1px solid var(--edge);display:flex;flex-direction:column;min-height:0}
+.crew .head{padding:18px 16px 10px;display:flex;align-items:baseline;justify-content:space-between}
+.crew .grp-lbl{padding:14px 16px 8px}
+.crew .m{display:flex;gap:10px;padding:7px 16px;align-items:center}
+.crew .m .who{min-width:0;display:flex;flex-direction:column;gap:1px}
+.crew .m .nm{font-weight:700;font-size:13px;display:flex;gap:6px;align-items:center}
+.crew .m .rp{color:var(--dim);font-size:11.5px;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:170px}
+.crew .m .rp .g{color:var(--amber);font-weight:600}
+.crew .m.off{opacity:.45}
+.badge{font:700 9px/1 var(--mono);letter-spacing:.1em;border-radius:4px;padding:2.5px 5px;text-transform:uppercase}
+.badge.you{background:var(--acc-soft);color:var(--acc)}
+.badge.vf{background:var(--live-soft);color:var(--live)}
+.badge.host{background:rgba(255,184,107,.14);color:var(--amber)}
+.crew .sealed{margin-top:auto;padding:14px 16px;border-top:1px solid var(--edge);color:var(--mute);font-size:11px;line-height:1.5}
+.crew .sealed b{color:var(--dim)}
+
+/* --- hub hero --- */
+.hero{border-radius:var(--r-lg);border:1px solid var(--edge2);position:relative;overflow:hidden;
+  padding:26px 28px 24px;background:
+    radial-gradient(600px 300px at 85% -20%,var(--acc-soft),transparent 70%),
+    linear-gradient(120deg,var(--raised),var(--panel))}
+.dB .hero{background:radial-gradient(600px 300px at 85% -20%,rgba(232,163,61,.18),transparent 70%),linear-gradient(120deg,var(--raised),var(--panel))}
+.hero .lbl{color:var(--acc)}
+.hero h1{margin:10px 0 6px;font-size:30px;line-height:1.05}
+.hero p{margin:0;color:var(--dim);font-size:13.5px;max-width:56ch}
+.hero .row{display:flex;gap:10px;margin-top:14px;align-items:center}
+.hero .count{position:absolute;right:28px;top:24px;text-align:right}
+.hero .count .n{font:800 34px/1 var(--mono);letter-spacing:-.02em;color:var(--ink);font-variant-numeric:tabular-nums}
+.hero .count .u{color:var(--mute);font:600 10px/1.6 var(--mono);letter-spacing:.14em;text-transform:uppercase}
+
+/* --- game shelf --- */
+.shelf-head{display:flex;align-items:baseline;gap:12px}
+.shelf-head .more{margin-left:auto;color:var(--mute);font:600 11px/1 var(--mono);letter-spacing:.1em}
+.shelf{display:grid;grid-template-columns:repeat(3,1fr);gap:16px}
+.gcard{border-radius:var(--r-lg);background:var(--panel);border:1px solid var(--edge);overflow:hidden;
+  display:flex;flex-direction:column;transition:transform .15s ease}
+.gcard:hover{transform:translateY(-2px);border-color:var(--edge2)}
+.cover{height:118px;position:relative;display:grid;place-items:center;overflow:hidden}
+.cover .glyph{font-size:52px;filter:drop-shadow(0 4px 18px rgba(0,0,0,.5))}
+.cover .grain{position:absolute;inset:0;background:
+  repeating-linear-gradient(45deg,rgba(255,255,255,.04) 0 2px,transparent 2px 14px)}
+.cover .live-tag{position:absolute;top:10px;left:10px;background:rgba(0,0,0,.55);backdrop-filter:blur(4px);
+  color:var(--live);font:700 9.5px/1 var(--mono);letter-spacing:.12em;padding:5px 8px;border-radius:99px;
+  display:flex;gap:5px;align-items:center}
+.cover .live-tag::before{content:"";width:5px;height:5px;border-radius:99px;background:var(--live)}
+.cover .live-tag.dead{color:#f0908a}.cover .live-tag.dead::before{background:#f0908a}
+.cover .live-tag.idle{color:var(--dim)}.cover .live-tag.idle::before{background:var(--dim)}
+.gbody{padding:11px 13px 12px;display:flex;flex-direction:column;gap:6px;flex:1}
+.gbody .gt{font-weight:800;font-size:14.5px;letter-spacing:-.01em}
+.gbody .gh{color:var(--mute);font:500 10.5px/1.4 var(--mono);letter-spacing:.02em;display:flex;gap:6px;align-items:center}
+.gbody .gwho{display:flex;align-items:center;gap:8px;color:var(--dim);font-size:11.5px;margin-top:auto}
+.gbody .gwho .av{margin-right:-8px;box-shadow:0 0 0 2px var(--panel)}
+.gbody .gwho .stack{display:flex;margin-right:6px}
+.gbody .act{display:flex;gap:8px;margin-top:6px}
+.gbody .act .btn{flex:1;justify-content:center;padding:8px 10px}
+
+/* --- catch-up rows --- */
+.rows{display:flex;flex-direction:column;gap:8px}
+.rowi{display:flex;align-items:center;gap:12px;background:var(--panel);border:1px solid var(--edge);
+  border-radius:var(--r-md);padding:9px 14px;font-size:13px;color:var(--dim)}
+.rowi .ch{font-weight:800;color:var(--ink);font-size:13px;flex:none}
+.rowi .n{background:var(--acc);color:#14060a;font:800 10.5px/1 var(--mono);border-radius:99px;padding:3px 7px;flex:none}
+.rowi .t{margin-left:auto;color:var(--mute);font:500 10.5px/1 var(--mono);flex:none}
+.rowi .txt{white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+
+/* --- messages --- */
+.msgs{flex:1;overflow:hidden;padding:22px 26px 0;display:flex;flex-direction:column;gap:4px;justify-content:flex-end}
+.day{display:flex;align-items:center;gap:14px;color:var(--mute);font:600 10px/1 var(--mono);
+  letter-spacing:.16em;text-transform:uppercase;margin:10px 0}
+.day::before,.day::after{content:"";flex:1;height:1px;background:var(--edge)}
+.mrow{display:flex;gap:13px;padding:7px 10px;border-radius:var(--r-md)}
+.mrow:hover{background:var(--panel)}
+.mrow .body{min-width:0;flex:1}
+.mrow .h{display:flex;align-items:baseline;gap:8px}
+.mrow .nm{font-weight:800;font-size:13.5px}
+.mrow .ts{color:var(--mute);font:500 10px/1 var(--mono)}
+.mrow p{margin:2px 0 0;color:var(--ink);font-size:13.8px;line-height:1.55}
+.mrow.cont{padding-top:0;padding-bottom:2px}
+.mrow.cont .gap{width:40px;flex:none}
+.reacts{display:flex;gap:6px;margin-top:6px}
+.react{background:var(--raised);border:1px solid var(--edge);border-radius:99px;padding:3px 9px;
+  font-size:11.5px;color:var(--dim);display:flex;gap:5px;align-items:center}
+.react.on{background:var(--acc-soft);border-color:var(--acc);color:var(--ink)}
+.sysline{display:flex;align-items:center;gap:8px;color:var(--mute);font:500 11px/1.4 var(--mono);padding:6px 10px}
+.invite-card{margin-top:8px;border:1px solid var(--edge2);border-radius:var(--r-md);overflow:hidden;
+  display:flex;max-width:460px;background:var(--panel)}
+.invite-card .art{width:96px;flex:none;display:grid;place-items:center;font-size:34px}
+.invite-card .ib{padding:12px 14px;display:flex;flex-direction:column;gap:3px;min-width:0}
+.invite-card .it{font-weight:800;font-size:13.5px}
+.invite-card .is{color:var(--mute);font:500 10.5px/1.4 var(--mono)}
+.invite-card .ir{display:flex;gap:8px;margin-top:8px}
+.file-card{margin-top:8px;display:inline-flex;gap:10px;align-items:center;border:1px solid var(--edge);
+  background:var(--raised);border-radius:var(--r-md);padding:10px 14px;font-size:13px}
+.file-card .fm{color:var(--mute);font:500 10.5px/1 var(--mono)}
+.composer{flex:none;margin:14px 26px 10px;background:var(--raised);border:1px solid var(--edge2);
+  border-radius:var(--r-md);display:flex;align-items:center;gap:10px;padding:12px 16px;color:var(--mute)}
+.composer .hint{margin-left:auto;font:500 10px/1 var(--mono)}
+.sealnote{flex:none;padding:0 28px 12px;color:var(--mute);font:500 10px/1.4 var(--mono);letter-spacing:.06em;
+  display:flex;gap:7px;align-items:center}
+.sealnote .dot{width:6px;height:6px;border-radius:99px;background:var(--live)}
+
+/* --- in-game stage --- */
+.game-stage{flex:1;display:grid;grid-template-columns:1fr 316px;min-height:0}
+.game-surface{position:relative;display:grid;place-items:center;background:
+  radial-gradient(800px 500px at 50% 30%,rgba(94,234,212,.06),transparent 70%),var(--bg)}
+.board-wrap{text-align:center}
+.board{display:grid;grid-template-columns:repeat(8,46px);grid-auto-rows:46px;border-radius:10px;overflow:hidden;
+  box-shadow:0 30px 80px rgba(0,0,0,.6),0 0 0 1px var(--edge2);margin:0 auto}
+.sq{display:grid;place-items:center;font-size:30px}
+.sq.l{background:#22303d}.sq.d{background:#141d26}
+.dB .sq.l{background:#3a4a3a}.dB .sq.d{background:#25301f}
+.sq .wp{color:#f3ede0;text-shadow:0 2px 6px rgba(0,0,0,.6)}
+.sq .bp{color:#10141c;text-shadow:0 0 3px rgba(255,255,255,.45),0 1px 1px rgba(255,255,255,.2)}
+.sq.hl{box-shadow:inset 0 0 0 3px var(--amber)}
+.sq.mv{position:relative}
+.sq.mv::after{content:"";width:12px;height:12px;border-radius:99px;background:var(--live);opacity:.8;position:absolute}
+.turnline{margin-top:16px;color:var(--dim);font:600 11px/1 var(--mono);letter-spacing:.12em;text-transform:uppercase;
+  display:flex;gap:10px;align-items:center;justify-content:center}
+.turnline .clock{background:var(--raised);border:1px solid var(--edge);border-radius:8px;padding:6px 10px;
+  font:700 13px/1 var(--mono);color:var(--ink);font-variant-numeric:tabular-nums}
+.game-topbar{position:absolute;top:0;left:0;right:0;display:flex;align-items:center;gap:12px;padding:12px 18px;
+  background:linear-gradient(rgba(0,0,0,.35),transparent)}
+.host-chip{display:flex;gap:7px;align-items:center;background:rgba(0,0,0,.5);backdrop-filter:blur(6px);
+  border:1px solid var(--edge);border-radius:99px;padding:6px 12px;font:600 10.5px/1 var(--mono);color:var(--dim);white-space:nowrap}
+.host-chip .dot{width:6px;height:6px;border-radius:99px;background:var(--live)}
+.game-dock{border-left:1px solid var(--edge);background:var(--panel);display:flex;flex-direction:column;min-height:0}
+.dock-tabs{display:flex;gap:4px;padding:12px 12px 0}
+.dock-tabs .dt{flex:1;text-align:center;padding:8px 0;border-radius:var(--r-sm);font:700 12px/1 var(--sans);
+  color:var(--mute);cursor:pointer;border:none;background:none}
+.dock-tabs .dt.on{background:var(--raised);color:var(--ink)}
+.dock-msgs{flex:1;overflow:hidden;padding:14px;display:flex;flex-direction:column;gap:12px}
+.dm{display:flex;gap:9px}
+.dm .body{min-width:0}
+.dm .nm{font-weight:800;font-size:12px}
+.dm .ts{color:var(--mute);font:500 9.5px/1 var(--mono);margin-left:6px}
+.dm p{margin:2px 0 0;font-size:12.5px;color:var(--dim);line-height:1.5}
+.voice-strip{flex:none;border-top:1px solid var(--edge);padding:12px 14px;background:var(--raised)}
+.voice-strip .vh{display:flex;justify-content:space-between;align-items:center;margin-bottom:10px}
+.voice-strip .row{display:flex;gap:10px;align-items:center}
+.voice-strip .vctl{margin-left:auto;display:flex;gap:6px}
+.cbtn{width:34px;height:34px;border-radius:99px;border:1px solid var(--edge2);background:var(--pop);
+  color:var(--ink);display:grid;place-items:center;cursor:pointer;font-size:14px}
+.cbtn.off{background:#e5484d;border-color:#e5484d;color:#fff}
+.dock-composer{flex:none;margin:0 14px 14px;background:var(--pop);border:1px solid var(--edge);
+  border-radius:var(--r-sm);padding:10px 12px;color:var(--mute);font-size:12.5px}
+</style>
+
+<div class="wrap">
+  <div class="kicker">quorum · design exploration nº2</div>
+  <h1>The circle becomes a game hub.</h1>
+  <p class="lede">Same encrypted bones — chat, calls, invite-only circles — but the center of gravity
+  moves to <strong>playing together</strong>: a shelf of games that live on other servers, launchable
+  into the room with your call and chat docked beside them. Two visual directions below, each with
+  full screens. Scroll for the concept notes and my recommendation at the end.</p>
+
+  <!-- ======================= DIRECTION A ======================= -->
+  <section class="dir" id="dirA">
+    <div class="dir-head">
+      <span class="dir-num">DIRECTION 01</span>
+      <h2>Afterdark — the private arcade</h2>
+    </div>
+    <p class="dir-sub">OLED-black with a blue cast, coral signal color, presence-green reserved for
+    “live right now”. Cover art carries the energy; chrome stays quiet and glassy. The mono voice of
+    old quorum survives — but demoted to captions, stats and the security whisper-lines, where it
+    belongs.</p>
+    <div class="tabs" role="tablist" data-stage="A">
+      <button class="tab" role="tab" aria-selected="true" data-show="A1">Game hub</button>
+      <button class="tab" role="tab" aria-selected="false" data-show="A2">In-game · chess night</button>
+      <button class="tab" role="tab" aria-selected="false" data-show="A3">Chat</button>
+    </div>
+    <div class="stage" id="stageA"></div>
+    <div class="caption" data-cap="A1"><span class="cap-dot"></span><span><b>The hub replaces “home base”.</b>
+      Tonight’s plan up top with a live countdown; the shelf shows every game the circle registered — web games
+      launch embedded, native servers (Minecraft, Factorio) show live status pulled by <i>your</i> client, never the relay.
+      Green means someone’s in it right now.</span></div>
+    <div class="caption" data-cap="A2" hidden><span class="cap-dot"></span><span><b>Launching pulls the room with you.</b>
+      The game (here a web chess game hosted on its own server) takes the stage; call controls and the room’s chat dock right.
+      The host chip is honest: quorum seals your chat and voice — the game server sees its own traffic.</span></div>
+    <div class="caption" data-cap="A3" hidden><span class="cap-dot"></span><span><b>Chat warms up.</b>
+      Round avatars, grouped messages, reactions — and the payoff feature: a game invite is a first-class message.
+      One tap and you’re on the board with the call still running.</span></div>
+  </section>
+
+  <!-- ======================= DIRECTION B ======================= -->
+  <section class="dir" id="dirB">
+    <div class="dir-head">
+      <span class="dir-num">DIRECTION 02</span>
+      <h2>The Den — game night at someone’s place</h2>
+    </div>
+    <p class="dir-sub">The other honest answer to “private circle that plays together”: not an arcade,
+    a den. Warm lamplight palette, brass accent, serif display like a well-worn club card. Same layout
+    bones as Afterdark — proof the structure works in more than one skin.</p>
+    <div class="tabs" role="tablist" data-stage="B">
+      <button class="tab" role="tab" aria-selected="true" data-show="B1">Game hub</button>
+      <button class="tab" role="tab" aria-selected="false" data-show="B2">Chat</button>
+    </div>
+    <div class="stage" id="stageB"></div>
+    <div class="caption" data-cap="B1"><span class="cap-dot"></span><span><b>Same hub, warmer room.</b>
+      Everything sits a little softer — bigger radii, lamplight gradients, serif voice. Good fit if the circles
+      are more board-game-night than ranked-ladder.</span></div>
+    <div class="caption" data-cap="B2" hidden><span class="cap-dot"></span><span><b>Chat in the Den.</b>
+      Identical information design to Afterdark’s chat — only the material changes. Pick the mood, keep the bones.</span></div>
+  </section>
+
+  <section class="notes">
+    <div class="kicker">how it would actually work</div>
+    <h2>Concept notes — games that live on other servers</h2>
+    <div class="note-grid">
+      <div class="note"><span class="tag">two kinds of game</span>
+        <h3>Activities vs. servers</h3>
+        <p>Web games (chess, cards, .io arcade) embed as a sandboxed iframe with a tiny postMessage
+        contract — identity, roster, who’s host — the same architecture as Discord’s Embedded App SDK
+        and Matrix widgets. Native servers (Minecraft, Factorio) get a status card instead: your client
+        pings the server directly for player count and latency, and “Join” deep-links or copies the address.</p></div>
+      <div class="note"><span class="tag">launch from the call</span>
+        <h3>Voice comes first</h3>
+        <p>Discord’s game <i>store</i> died; launching games from inside the call you’re already in is the
+        model that stuck (+1M game-launch days/month after they surfaced it better). The lounge call is the
+        ambient session — games start into it, survive it, and drop a “bob started X — Join” card into chat
+        for late arrivals.</p></div>
+      <div class="note"><span class="tag">sealed metadata</span>
+        <h3>The E2EE angle stays honest</h3>
+        <p>The game registry (names, URLs, cover colors) travels inside MLS like channel names — the relay
+        never learns what your circle plays. What changes: connecting to a game host reveals your IP and
+        traffic to <i>that host</i>. The UI says so on the card and in the game view, in the same honest voice
+        the app already uses.</p></div>
+      <div class="note"><span class="tag">presence</span>
+        <h3>Every status line is a button</h3>
+        <p>“playing Hex Gambit · 41 min” isn’t decoration — it ends in Join/Watch. For a 6-person circle,
+        presence-as-launch-affordance (Steam’s friends rail) is the single highest-leverage pattern:
+        the hub answers “who’s around and what are they doing” before you ask.</p></div>
+      <div class="note"><span class="tag">migration</span>
+        <h3>Additive, not big-bang</h3>
+        <p>Discord’s March 2025 relayout taught the lesson: users punish everything-at-once reskins. The hub
+        ships as a new tab replacing “home base”; chat keeps its muscle memory and gets restyled tokens only.
+        Both directions here share one layout skeleton — the skin is swappable.</p></div>
+      <div class="note"><span class="tag">joining</span>
+        <h3>Jackbox-grade entry</h3>
+        <p>Any running game is joinable in one tap from chat, the shelf, or a presence line. Lobbies show
+        each joiner’s avatar pop in; the host holds the only Start button. No installs, no forms — the circle
+        is already authenticated.</p></div>
+    </div>
+
+    <div class="verdict">
+      <h3>My take</h3>
+      <p><b>Lead with Afterdark.</b> It keeps quorum’s discipline (quiet chrome, mono captions for the
+      security whisper-lines, restraint) but finally gives the product warmth and a pulse — glow strictly
+      meaning “live”, cover art carrying the energy, coral instead of caution-tape yellow. It reads as
+      a place to <i>be</i>, not a terminal to operate.</p>
+      <p><b>The Den is the dark horse</b> — if your circles are more board-game-night than ranked-ladder,
+      its lamplight/brass mood is more distinctive than any arcade look; nobody else ships that. It’s also
+      cheap to keep: both directions are one token set apart, so it could simply be the second theme
+      (replacing “paper”).</p>
+      <p><b>Build order I’d suggest:</b> ① restyle tokens + chat (lowest risk, biggest felt change),
+      ② game hub page with server-status cards (no new protocol work — the client pings hosts directly),
+      ③ embedded activities with the postMessage contract, ④ invite cards + rich presence. Say the word and
+      I’ll start on ①+② as a real branch.</p>
+    </div>
+  </section>
+
+  <div id="frames" hidden></div>
+</div>
+<script>
+// Frames are defined in <template> tags appended below; this script mounts
+// them into their stage, scales the fixed 1440x900 mocks to fit, and wires tabs.
+function mountAll(){
+  document.querySelectorAll('template[data-frame]').forEach(t=>{
+    const id=t.dataset.frame, stage=document.getElementById('stage'+id[0]);
+    const wrapEl=document.createElement('div');
+    wrapEl.className='frame-wrap';wrapEl.id='f'+id;
+    if(!t.dataset.first) wrapEl.hidden=true;
+    wrapEl.appendChild(t.content.cloneNode(true));
+    stage.appendChild(wrapEl);
+  });
+  fit();
+}
+function fit(){
+  document.querySelectorAll('.frame-wrap').forEach(w=>{
+    const m=w.querySelector('.mock');if(!m)return;
+    const hidden=w.hidden;if(hidden){w.hidden=false;w.style.visibility='hidden';}
+    const s=w.clientWidth/1440;
+    m.style.transform='scale('+s+')';
+    w.style.height=(900*s)+'px';
+    if(hidden){w.hidden=true;w.style.visibility='';}
+  });
+}
+addEventListener('resize',fit);
+document.addEventListener('click',e=>{
+  const tab=e.target.closest('.tab');if(!tab)return;
+  const list=tab.closest('.tabs');const dir=list.dataset.stage;
+  list.querySelectorAll('.tab').forEach(t=>t.setAttribute('aria-selected',t===tab?'true':'false'));
+  const sec=list.closest('section');
+  sec.querySelectorAll('.frame-wrap').forEach(w=>w.hidden=(w.id!=='f'+tab.dataset.show));
+  sec.querySelectorAll('.caption').forEach(c=>c.hidden=(c.dataset.cap!==tab.dataset.show));
+  fit();
+});
+addEventListener('DOMContentLoaded',mountAll);
+</script>
+
+<!-- =================== FRAME A1 · AFTERDARK · GAME HUB =================== -->
+<template data-frame="A1" data-first="1">
+<div class="mock dA">
+  <div class="rail">
+    <div class="ring on" style="background:linear-gradient(135deg,#ff5470,#ff9a6b)">NS</div>
+    <div class="ring" style="background:linear-gradient(135deg,#475069,#2b3247)">DS</div>
+    <button class="add">+</button>
+    <div class="spacer"></div>
+    <div class="seal" title="sealed">🔒</div>
+  </div>
+
+  <div class="nav">
+    <div class="circle-head">
+      <div class="circle-name">The Night Shift</div>
+      <div class="circle-meta">6 members · epoch 31 · sealed</div>
+    </div>
+    <div class="grp">
+      <a class="item on" href="#"><span class="ico">◈</span> game hub</a>
+      <a class="item" href="#"><span class="ico">#</span> general <span class="pill">4</span></a>
+      <a class="item" href="#"><span class="ico">#</span> game-night</a>
+      <a class="item" href="#"><span class="ico">#</span> clips</a>
+    </div>
+    <div class="grp">
+      <div class="lbl">voice</div>
+      <a class="item" href="#"><span class="ico">◉</span> lounge <span class="live-chip">3 LIVE</span></a>
+      <div class="voice-now">
+        <div class="lbl" style="color:var(--live)">live in lounge</div>
+        <div class="who">
+          <span class="av s24" style="background:linear-gradient(135deg,#4f7cff,#6fd3ff)">B</span>
+          <span class="av s24" style="background:linear-gradient(135deg,#9d6bff,#e08bff)">D</span>
+          <span class="av s24" style="background:linear-gradient(135deg,#2fbf8f,#9ef0c0)">M</span>
+          <button class="join">Join</button>
+        </div>
+      </div>
+      <a class="item" href="#" style="margin-top:6px"><span class="ico">◉</span> war room</a>
+    </div>
+    <div class="self">
+      <span class="av s32" style="background:linear-gradient(135deg,#ff5470,#ff9a6b)">A</span>
+      <span class="who"><span class="hd">alice</span><span class="st">online</span></span>
+      <span class="ic">🎧 ⚙</span>
+    </div>
+  </div>
+
+  <div class="main">
+    <div class="mast">
+      <span class="title"><span style="color:var(--acc)">◈</span> Game hub</span>
+      <span class="sub">SEALED — THE RELAY NEVER LEARNS WHAT YOU PLAY</span>
+      <div class="right">
+        <button class="btn ghost">⌘K</button>
+        <button class="btn">＋ Register a game</button>
+      </div>
+    </div>
+    <div class="scroll" >
+      <div class="hero" style="padding:18px 24px 16px">
+        <div class="lbl">up next · game night</div>
+        <h1 class="display" style="font-size:24px;margin:6px 0 2px">Craftworld map tour, then Hex Gambit finals</h1>
+        <p>Saturday 21:00 — marek hosts. Winner of bob v. dana gets to name the new base.</p>
+        <div class="row">
+          <button class="btn pri">▶ I’m in</button>
+          <button class="btn ghost">remind me</button>
+        </div>
+        <div class="count"><div class="n">38</div><div class="u">hours to go</div></div>
+      </div>
+
+      <div>
+        <div class="shelf-head" style="margin-bottom:12px">
+          <span class="lbl" style="color:var(--dim)">ON THE SHELF</span>
+          <span class="more">6 GAMES · 2 LIVE</span>
+        </div>
+        <div class="shelf">
+          <div class="gcard">
+            <div class="cover" style="height:96px;background:linear-gradient(135deg,#0e3f3b,#1d7a66)">
+              <div class="grain"></div><span class="glyph">♞</span>
+              <span class="live-tag">LIVE · BOB V. DANA</span>
+            </div>
+            <div class="gbody">
+              <div class="gt">Hex Gambit</div>
+              <div class="gh">◈ activity · play.hexgambit.io</div>
+              <div class="gwho"><span class="stack">
+                <span class="av s24" style="background:linear-gradient(135deg,#4f7cff,#6fd3ff)">B</span>
+                <span class="av s24" style="background:linear-gradient(135deg,#9d6bff,#e08bff)">D</span></span>
+                mid-game · move 24</div>
+              <div class="act"><button class="btn live">▶ Watch</button><button class="btn">Challenge</button></div>
+            </div>
+          </div>
+          <div class="gcard">
+            <div class="cover" style="height:96px;background:linear-gradient(135deg,#173d1f,#3f9142)">
+              <div class="grain" style="background:repeating-conic-gradient(rgba(255,255,255,.05) 0 25%,transparent 0 50%);background-size:22px 22px"></div>
+              <span class="glyph">▦</span><span class="live-tag">ONLINE · 2/20</span>
+            </div>
+            <div class="gbody">
+              <div class="gt">Craftworld</div>
+              <div class="gh">⛭ game server · mc.nightshift.gg · 12 ms</div>
+              <div class="gwho"><span class="stack">
+                <span class="av s24" style="background:linear-gradient(135deg,#2fbf8f,#9ef0c0)">M</span>
+                <span class="av s24" style="background:linear-gradient(135deg,#f2a33c,#ffd36b)">E</span></span>
+                marek &amp; edda are on</div>
+              <div class="act"><button class="btn live">Join server</button><button class="btn">Copy address</button></div>
+            </div>
+          </div>
+          <div class="gcard">
+            <div class="cover" style="height:96px;background:linear-gradient(135deg,#5c1f0e,#c2560f)">
+              <div class="grain"></div><span class="glyph">⌖</span>
+              <span class="live-tag idle">IDLE</span>
+            </div>
+            <div class="gbody">
+              <div class="gt">Tanks! Night Ops</div>
+              <div class="gh">◈ activity · tanks.arcade.gg</div>
+              <div class="gwho">last played tuesday · 2–6 players</div>
+              <div class="act"><button class="btn pri">▶ Launch</button><button class="btn">Invite</button></div>
+            </div>
+          </div>
+          <div class="gcard">
+            <div class="cover" style="height:96px;background:linear-gradient(135deg,#2a2622,#6b6257)">
+              <div class="grain"></div><span class="glyph">⚙</span>
+              <span class="live-tag dead">HOST OFFLINE</span>
+            </div>
+            <div class="gbody">
+              <div class="gt">Factory Floor</div>
+              <div class="gh">⛭ game server · factorio.nightshift.gg</div>
+              <div class="gwho">megabase, 214 h · host: marek</div>
+              <div class="act"><button class="btn">Poke marek</button></div>
+            </div>
+          </div>
+          <div class="gcard">
+            <div class="cover" style="height:96px;background:linear-gradient(135deg,#274060,#3e77a8)">
+              <div class="grain"></div><span class="glyph">♠</span>
+              <span class="live-tag idle">TABLE OPEN</span>
+            </div>
+            <div class="gbody">
+              <div class="gt">Table Royale</div>
+              <div class="gh">◈ activity · cards.tableroyale.app</div>
+              <div class="gwho">poker &amp; trick decks · 3–8 players</div>
+              <div class="act"><button class="btn pri">▶ Open table</button></div>
+            </div>
+          </div>
+          <div class="gcard" style="border-style:dashed;background:none;align-items:center;justify-content:center;display:flex">
+            <div style="text-align:center;color:var(--mute);padding:20px">
+              <div style="font-size:26px;margin-bottom:8px">＋</div>
+              <div style="font-weight:700;color:var(--dim);font-size:13px">Register a game</div>
+              <div style="font-size:11px;margin-top:4px;max-width:20ch">a URL is enough — it travels sealed, like a channel name</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <div class="lbl" style="color:var(--dim);margin-bottom:10px">WHILE YOU WERE OUT</div>
+        <div class="rows">
+          <div class="rowi"><span class="ch"># general</span><span class="n">4</span>
+            <span class="txt">bob: rematch tonight. I’ve been practicing openings all week</span><span class="t">26 MIN</span></div>
+          <div class="rowi"><span class="ch"># game-night</span>
+            <span class="txt">marek pinned the new Craftworld map seed</span><span class="t">3 H</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="crew">
+    <div class="head"><span class="lbl">crew</span><span class="lbl" style="color:var(--live)">4 ON</span></div>
+    <div class="grp-lbl lbl" style="color:var(--live)">in the lounge — 3</div>
+    <div class="m"><span class="av s28 talk" style="background:linear-gradient(135deg,#4f7cff,#6fd3ff)">B</span>
+      <span class="who"><span class="nm">bob <span class="badge vf">✓</span></span><span class="rp">playing <span class="g">Hex Gambit</span> · 41 min</span></span></div>
+    <div class="m"><span class="av s28" style="background:linear-gradient(135deg,#9d6bff,#e08bff)">D</span>
+      <span class="who"><span class="nm">dana</span><span class="rp">playing <span class="g">Hex Gambit</span> · 41 min</span></span></div>
+    <div class="m"><span class="av s28" style="background:linear-gradient(135deg,#2fbf8f,#9ef0c0)">M</span>
+      <span class="who"><span class="nm">marek <span class="badge host">host</span></span><span class="rp">on <span class="g">Craftworld</span> · 2 h</span></span></div>
+    <div class="grp-lbl lbl">online — 1</div>
+    <div class="m"><span class="av s28" style="background:linear-gradient(135deg,#ff5470,#ff9a6b)">A</span>
+      <span class="who"><span class="nm">alice <span class="badge you">you</span></span><span class="rp">browsing the hub</span></span></div>
+    <div class="grp-lbl lbl">away — 2</div>
+    <div class="m off"><span class="av s28" style="background:linear-gradient(135deg,#f2a33c,#ffd36b)">E</span>
+      <span class="who"><span class="nm">edda</span><span class="rp">last seen 2 h ago</span></span></div>
+    <div class="m off"><span class="av s28" style="background:linear-gradient(135deg,#ef6fae,#ff9ad5)">C</span>
+      <span class="who"><span class="nm">charlie</span><span class="rp">last seen yesterday</span></span></div>
+    <div class="sealed"><b>Sealed circle.</b> Game names, servers and who-plays-what travel inside the encryption. Only the game hosts you connect to see their own traffic.</div>
+  </div>
+</div>
+</template>
+
+<!-- =================== FRAME A2 · AFTERDARK · IN-GAME =================== -->
+<template data-frame="A2">
+<div class="mock dA" style="grid-template-columns:72px 236px 1fr">
+  <div class="rail">
+    <div class="ring on" style="background:linear-gradient(135deg,#ff5470,#ff9a6b)">NS</div>
+    <div class="ring" style="background:linear-gradient(135deg,#475069,#2b3247)">DS</div>
+    <button class="add">+</button>
+    <div class="spacer"></div>
+    <div class="seal" title="sealed">🔒</div>
+  </div>
+
+  <div class="nav">
+    <div class="circle-head">
+      <div class="circle-name">The Night Shift</div>
+      <div class="circle-meta">6 members · epoch 31 · sealed</div>
+    </div>
+    <div class="grp">
+      <a class="item" href="#"><span class="ico">◈</span> game hub</a>
+      <a class="item" href="#"><span class="ico">#</span> general <span class="pill">4</span></a>
+      <a class="item" href="#"><span class="ico">#</span> game-night</a>
+      <a class="item" href="#"><span class="ico">#</span> clips</a>
+    </div>
+    <div class="grp">
+      <div class="lbl">voice</div>
+      <a class="item on" href="#"><span class="ico">◉</span> lounge <span class="live-chip">4 LIVE</span></a>
+      <a class="item" href="#"><span class="ico">◉</span> war room</a>
+    </div>
+    <div class="grp">
+      <div class="lbl">now playing</div>
+      <div class="voice-now" style="border-color:rgba(255,84,112,.35);background:var(--acc-soft)">
+        <div class="lbl" style="color:var(--acc)">♞ hex gambit · move 24</div>
+        <div class="who" style="color:var(--dim);font-size:11px;margin-top:6px">you’re at the board — minimize to picture-in-picture to browse chat</div>
+      </div>
+    </div>
+    <div class="self">
+      <span class="av s32" style="background:linear-gradient(135deg,#ff5470,#ff9a6b)">A</span>
+      <span class="who"><span class="hd">alice</span><span class="st" style="color:var(--acc)">IN GAME</span></span>
+      <span class="ic">🎧 ⚙</span>
+    </div>
+  </div>
+
+  <div class="main">
+    <div class="game-stage" style="grid-row:1 / -1">
+      <div class="game-surface">
+        <div class="game-topbar">
+          <button class="btn ghost">◂ hub</button>
+          <span class="title display" style="font-size:16px;white-space:nowrap">Hex Gambit</span>
+          <span class="host-chip"><span class="dot"></span> play.hexgambit.io — this host sees game traffic only</span>
+          <div class="right" style="margin-left:auto;display:flex;gap:8px">
+            <button class="btn">⧉ PiP</button>
+            <button class="btn pri">Invite seat</button>
+          </div>
+        </div>
+        <div class="board-wrap">
+          <div class="board">
+            <div class="sq l"><span class="bp">♜</span></div><div class="sq d"></div><div class="sq l"></div><div class="sq d"></div><div class="sq l"><span class="bp">♜</span></div><div class="sq d"></div><div class="sq l"><span class="bp">♚</span></div><div class="sq d"></div>
+            <div class="sq d"><span class="bp">♟</span></div><div class="sq l"><span class="bp">♟</span></div><div class="sq d"></div><div class="sq l"></div><div class="sq d"><span class="bp">♛</span></div><div class="sq l"><span class="bp">♟</span></div><div class="sq d"><span class="bp">♟</span></div><div class="sq l"><span class="bp">♟</span></div>
+            <div class="sq l mv"></div><div class="sq d"></div><div class="sq l"><span class="bp">♞</span></div><div class="sq d"></div><div class="sq l"><span class="bp">♟</span></div><div class="sq d"></div><div class="sq l"></div><div class="sq d"></div>
+            <div class="sq d"></div><div class="sq l mv"></div><div class="sq d"></div><div class="sq l"><span class="bp">♟</span></div><div class="sq d"></div><div class="sq l"></div><div class="sq d"></div><div class="sq l"></div>
+            <div class="sq l"></div><div class="sq d"></div><div class="sq l hl"><span class="wp">♗</span></div><div class="sq d"><span class="wp">♙</span></div><div class="sq l"></div><div class="sq d"></div><div class="sq l"></div><div class="sq d"></div>
+            <div class="sq d"></div><div class="sq l"></div><div class="sq d"><span class="wp">♘</span></div><div class="sq l"></div><div class="sq d"><span class="wp">♙</span></div><div class="sq l"></div><div class="sq d"></div><div class="sq l"></div>
+            <div class="sq l"><span class="wp">♙</span></div><div class="sq d"><span class="wp">♙</span></div><div class="sq l"></div><div class="sq d"></div><div class="sq l"></div><div class="sq d"><span class="wp">♙</span></div><div class="sq l"><span class="wp">♙</span></div><div class="sq d"><span class="wp">♙</span></div>
+            <div class="sq d"><span class="wp">♖</span></div><div class="sq l"></div><div class="sq d"></div><div class="sq l"><span class="wp">♕</span></div><div class="sq d"></div><div class="sq l"><span class="wp">♖</span></div><div class="sq d"><span class="wp">♔</span></div><div class="sq l"></div>
+          </div>
+          <div class="turnline">
+            <span class="clock">09:41</span> bob to move — bishop selected
+            <span class="clock" style="opacity:.5">11:07</span>
+          </div>
+        </div>
+      </div>
+
+      <div class="game-dock">
+        <div class="dock-tabs">
+          <button class="dt on">Chat</button>
+          <button class="dt">Crew · 4</button>
+          <button class="dt">Spectate</button>
+        </div>
+        <div class="dock-msgs">
+          <div class="dm"><span class="av s28" style="background:linear-gradient(135deg,#4f7cff,#6fd3ff)">B</span>
+            <span class="body"><span class="nm">bob</span><span class="ts">21:14</span><p>gg last one. this opening is new, you’ll see</p></span></div>
+          <div class="dm"><span class="av s28" style="background:linear-gradient(135deg,#9d6bff,#e08bff)">D</span>
+            <span class="body"><span class="nm">dana</span><span class="ts">21:15</span><p>less talking, your clock is running</p></span></div>
+          <div class="dm"><span class="av s28" style="background:linear-gradient(135deg,#ff5470,#ff9a6b)">A</span>
+            <span class="body"><span class="nm">alice</span><span class="ts">21:18</span><p>watching from the couch. dana this is brutal 🍿</p></span></div>
+          <div class="dm"><span class="av s28" style="background:linear-gradient(135deg,#2fbf8f,#9ef0c0)">M</span>
+            <span class="body"><span class="nm">marek</span><span class="ts">21:20</span><p>craftworld tour in 30 — don’t start another long one</p></span></div>
+          <div class="sysline" style="padding:2px 0">◈ this thread is the call’s chat — sealed, scoped to the room</div>
+        </div>
+        <div class="voice-strip">
+          <div class="vh"><span class="lbl" style="color:var(--live)">◉ lounge — 4 live</span><span class="lbl">P2P · SEALED</span></div>
+          <div class="row">
+            <span class="av s32" style="background:linear-gradient(135deg,#ff5470,#ff9a6b)">A</span>
+            <span class="av s32" style="background:linear-gradient(135deg,#4f7cff,#6fd3ff)">B</span>
+            <span class="av s32 talk" style="background:linear-gradient(135deg,#9d6bff,#e08bff)">D</span>
+            <span class="av s32" style="background:linear-gradient(135deg,#2fbf8f,#9ef0c0)">M</span>
+            <div class="vctl">
+              <button class="cbtn">🎙</button>
+              <button class="cbtn">🎧</button>
+              <button class="cbtn off">✕</button>
+            </div>
+          </div>
+        </div>
+        <div class="dock-composer">Message the room…</div>
+      </div>
+    </div>
+  </div>
+</div>
+</template>
+
+<!-- =================== FRAME A3 · AFTERDARK · CHAT =================== -->
+<template data-frame="A3">
+<div class="mock dA">
+  <div class="rail">
+    <div class="ring on" style="background:linear-gradient(135deg,#ff5470,#ff9a6b)">NS</div>
+    <div class="ring" style="background:linear-gradient(135deg,#475069,#2b3247)">DS</div>
+    <button class="add">+</button>
+    <div class="spacer"></div>
+    <div class="seal" title="sealed">🔒</div>
+  </div>
+
+  <div class="nav">
+    <div class="circle-head">
+      <div class="circle-name">The Night Shift</div>
+      <div class="circle-meta">6 members · epoch 31 · sealed</div>
+    </div>
+    <div class="grp">
+      <a class="item" href="#"><span class="ico">◈</span> game hub</a>
+      <a class="item on" href="#"><span class="ico">#</span> general</a>
+      <a class="item" href="#"><span class="ico">#</span> game-night</a>
+      <a class="item" href="#"><span class="ico">#</span> clips</a>
+    </div>
+    <div class="grp">
+      <div class="lbl">voice</div>
+      <a class="item" href="#"><span class="ico">◉</span> lounge <span class="live-chip">3 LIVE</span></a>
+      <a class="item" href="#"><span class="ico">◉</span> war room</a>
+    </div>
+    <div class="self">
+      <span class="av s32" style="background:linear-gradient(135deg,#ff5470,#ff9a6b)">A</span>
+      <span class="who"><span class="hd">alice</span><span class="st">online</span></span>
+      <span class="ic">🎧 ⚙</span>
+    </div>
+  </div>
+
+  <div class="main">
+    <div class="mast">
+      <span class="title"># general</span>
+      <span class="sub">TRASH TALK LIVES HERE · SEALED FOR 6</span>
+      <div class="right">
+        <button class="btn ghost">⌘K</button>
+        <button class="btn pri">◉ Join lounge</button>
+      </div>
+    </div>
+    <div class="msgs">
+      <div class="day">tonight</div>
+      <div class="mrow">
+        <span class="av s40" style="background:linear-gradient(135deg,#4f7cff,#6fd3ff)">B</span>
+        <span class="body"><span class="h"><span class="nm">bob</span><span class="badge vf">✓</span><span class="ts">20:41</span></span>
+          <p>rematch. tonight. I’ve been practicing openings all week</p></span>
+      </div>
+      <div class="mrow cont"><span class="gap"></span><span class="body"><p>loser hosts the craftworld tour commentary</p>
+        <span class="reacts"><span class="react on">🔥 3</span><span class="react">😤 1</span></span></span>
+      </div>
+      <div class="mrow">
+        <span class="av s40" style="background:linear-gradient(135deg,#9d6bff,#e08bff)">D</span>
+        <span class="body"><span class="h"><span class="nm">dana</span><span class="ts">20:44</span></span>
+          <p>bold words for someone who hung a queen on move 9 last week</p>
+          <span class="reacts"><span class="react on">💀 4</span></span></span>
+      </div>
+      <div class="mrow">
+        <span class="av s40" style="background:linear-gradient(135deg,#4f7cff,#6fd3ff)">B</span>
+        <span class="body"><span class="h"><span class="nm">bob</span><span class="badge vf">✓</span><span class="ts">20:47</span></span>
+          <p>board’s up. one seat left if anyone wants the loser’s bracket</p>
+          <div class="invite-card">
+            <div class="art" style="background:linear-gradient(135deg,#0e3f3b,#1d7a66)">♞</div>
+            <div class="ib">
+              <span class="it">bob started Hex Gambit</span>
+              <span class="is">play.hexgambit.io · 1 seat open · lounge call live</span>
+              <span class="ir"><button class="btn live">▶ Join game</button><button class="btn">Watch</button></span>
+            </div>
+          </div></span>
+      </div>
+      <div class="sysline">◉ alice started a call in <b>lounge</b> — bob, dana joined</div>
+      <div class="mrow">
+        <span class="av s40" style="background:linear-gradient(135deg,#2fbf8f,#9ef0c0)">M</span>
+        <span class="body"><span class="h"><span class="nm">marek</span><span class="badge host">host</span><span class="ts">21:02</span></span>
+          <p>new craftworld map seed is in. tour at 21:30, bring nothing, touch nothing</p>
+          <div class="file-card">🗺 <span>map-seed-tour.png</span> <span class="fm">1.2 MB · sealed</span></div></span>
+      </div>
+      <div class="mrow">
+        <span class="av s40" style="background:linear-gradient(135deg,#f2a33c,#ffd36b)">E</span>
+        <span class="body"><span class="h"><span class="nm">edda</span><span class="ts">21:05</span></span>
+          <p>can’t make the finals, someone clip the endgame for me</p></span>
+      </div>
+    </div>
+    <div class="composer">＋ <span>Message #general</span><span class="hint">↩ SEND</span></div>
+    <div class="sealnote"><span class="dot"></span> END-TO-END SEALED FOR 6 — NOTHING READABLE LEAVES THIS DEVICE</div>
+  </div>
+
+  <div class="crew">
+    <div class="head"><span class="lbl">crew</span><span class="lbl" style="color:var(--live)">4 ON</span></div>
+    <div class="grp-lbl lbl" style="color:var(--live)">in the lounge — 3</div>
+    <div class="m"><span class="av s28 talk" style="background:linear-gradient(135deg,#4f7cff,#6fd3ff)">B</span>
+      <span class="who"><span class="nm">bob <span class="badge vf">✓</span></span><span class="rp">playing <span class="g">Hex Gambit</span></span></span></div>
+    <div class="m"><span class="av s28" style="background:linear-gradient(135deg,#9d6bff,#e08bff)">D</span>
+      <span class="who"><span class="nm">dana</span><span class="rp">playing <span class="g">Hex Gambit</span></span></span></div>
+    <div class="m"><span class="av s28" style="background:linear-gradient(135deg,#ff5470,#ff9a6b)">A</span>
+      <span class="who"><span class="nm">alice <span class="badge you">you</span></span><span class="rp">in the lounge</span></span></div>
+    <div class="grp-lbl lbl">online — 1</div>
+    <div class="m"><span class="av s28" style="background:linear-gradient(135deg,#2fbf8f,#9ef0c0)">M</span>
+      <span class="who"><span class="nm">marek <span class="badge host">host</span></span><span class="rp">on <span class="g">Craftworld</span></span></span></div>
+    <div class="grp-lbl lbl">away — 2</div>
+    <div class="m off"><span class="av s28" style="background:linear-gradient(135deg,#f2a33c,#ffd36b)">E</span>
+      <span class="who"><span class="nm">edda</span><span class="rp">last seen 2 h ago</span></span></div>
+    <div class="m off"><span class="av s28" style="background:linear-gradient(135deg,#ef6fae,#ff9ad5)">C</span>
+      <span class="who"><span class="nm">charlie</span><span class="rp">last seen yesterday</span></span></div>
+    <div class="sealed"><b>Sealed circle.</b> Everyone here holds the keys — no one else can read the room.</div>
+  </div>
+</div>
+</template>
+
+<!-- =================== FRAME B1 · THE DEN · GAME HUB =================== -->
+<template data-frame="B1" data-first="1">
+<div class="mock dB">
+  <div class="rail">
+    <div class="ring on" style="background:linear-gradient(135deg,#a8683a,#e0a35c)">NS</div>
+    <div class="ring" style="background:linear-gradient(135deg,#57503f,#37322a)">DS</div>
+    <button class="add">+</button>
+    <div class="spacer"></div>
+    <div class="seal" title="sealed">🔒</div>
+  </div>
+
+  <div class="nav">
+    <div class="circle-head">
+      <div class="circle-name">The Night Shift</div>
+      <div class="circle-meta">6 members · epoch 31 · sealed</div>
+    </div>
+    <div class="grp">
+      <a class="item on" href="#"><span class="ico">◈</span> game room</a>
+      <a class="item" href="#"><span class="ico">#</span> general <span class="pill">4</span></a>
+      <a class="item" href="#"><span class="ico">#</span> game-night</a>
+      <a class="item" href="#"><span class="ico">#</span> clips</a>
+    </div>
+    <div class="grp">
+      <div class="lbl">voice</div>
+      <a class="item" href="#"><span class="ico">◉</span> the couch <span class="live-chip">3 LIVE</span></a>
+      <div class="voice-now">
+        <div class="lbl" style="color:var(--live)">live on the couch</div>
+        <div class="who">
+          <span class="av s24" style="background:linear-gradient(135deg,#5a7fb8,#8fb8d8)">B</span>
+          <span class="av s24" style="background:linear-gradient(135deg,#9a6fb8,#c79ad8)">D</span>
+          <span class="av s24" style="background:linear-gradient(135deg,#5f9a6a,#9ac79a)">M</span>
+          <button class="join">Join</button>
+        </div>
+      </div>
+    </div>
+    <div class="self">
+      <span class="av s32" style="background:linear-gradient(135deg,#c25a4a,#e0906b)">A</span>
+      <span class="who"><span class="hd">alice</span><span class="st">online</span></span>
+      <span class="ic">🎧 ⚙</span>
+    </div>
+  </div>
+
+  <div class="main">
+    <div class="mast">
+      <span class="title display" style="font-size:17px">The game room</span>
+      <span class="sub">SEALED — THE RELAY NEVER LEARNS WHAT YOU PLAY</span>
+      <div class="right">
+        <button class="btn">＋ Put a game on the shelf</button>
+      </div>
+    </div>
+    <div class="scroll" >
+      <div class="hero" style="padding:18px 24px 16px">
+        <div class="lbl">up next · game night</div>
+        <h1 class="display" style="font-size:26px;margin:6px 0 2px">Craftworld map tour, then the Hex Gambit finals</h1>
+        <p>Saturday nine o’clock — marek hosts. Winner of bob v. dana names the new base.</p>
+        <div class="row">
+          <button class="btn pri">I’m in</button>
+          <button class="btn ghost">remind me</button>
+        </div>
+        <div class="count"><div class="n">38</div><div class="u">hours to go</div></div>
+      </div>
+
+      <div>
+        <div class="shelf-head" style="margin-bottom:12px">
+          <span class="lbl" style="color:var(--dim)">THE SHELF</span>
+          <span class="more">6 GAMES · 2 LIVE</span>
+        </div>
+        <div class="shelf">
+          <div class="gcard">
+            <div class="cover" style="height:96px;background:linear-gradient(135deg,#2b4438,#4a7a5c)">
+              <div class="grain"></div><span class="glyph">♞</span>
+              <span class="live-tag">LIVE · BOB V. DANA</span>
+            </div>
+            <div class="gbody">
+              <div class="gt display" style="font-size:16px">Hex Gambit</div>
+              <div class="gh">◈ table game · play.hexgambit.io</div>
+              <div class="gwho"><span class="stack">
+                <span class="av s24" style="background:linear-gradient(135deg,#5a7fb8,#8fb8d8)">B</span>
+                <span class="av s24" style="background:linear-gradient(135deg,#9a6fb8,#c79ad8)">D</span></span>
+                mid-game · move 24</div>
+              <div class="act"><button class="btn live">Watch</button><button class="btn">Challenge</button></div>
+            </div>
+          </div>
+          <div class="gcard">
+            <div class="cover" style="height:96px;background:linear-gradient(135deg,#37522b,#6b9146)">
+              <div class="grain" style="background:repeating-conic-gradient(rgba(255,255,255,.05) 0 25%,transparent 0 50%);background-size:22px 22px"></div>
+              <span class="glyph">▦</span><span class="live-tag">ONLINE · 2/20</span>
+            </div>
+            <div class="gbody">
+              <div class="gt display" style="font-size:16px">Craftworld</div>
+              <div class="gh">⛭ our server · mc.nightshift.gg · 12 ms</div>
+              <div class="gwho"><span class="stack">
+                <span class="av s24" style="background:linear-gradient(135deg,#5f9a6a,#9ac79a)">M</span>
+                <span class="av s24" style="background:linear-gradient(135deg,#c2913c,#e0bc6b)">E</span></span>
+                marek &amp; edda are on</div>
+              <div class="act"><button class="btn live">Join server</button><button class="btn">Copy address</button></div>
+            </div>
+          </div>
+          <div class="gcard">
+            <div class="cover" style="height:96px;background:linear-gradient(135deg,#5c3a1e,#a86a2f)">
+              <div class="grain"></div><span class="glyph">⌖</span>
+              <span class="live-tag idle">IDLE</span>
+            </div>
+            <div class="gbody">
+              <div class="gt display" style="font-size:16px">Tanks! Night Ops</div>
+              <div class="gh">◈ table game · tanks.arcade.gg</div>
+              <div class="gwho">last played tuesday · 2–6 players</div>
+              <div class="act"><button class="btn pri">Launch</button><button class="btn">Invite</button></div>
+            </div>
+          </div>
+          <div class="gcard">
+            <div class="cover" style="height:96px;background:linear-gradient(135deg,#3a352e,#6e6353)">
+              <div class="grain"></div><span class="glyph">⚙</span>
+              <span class="live-tag dead">HOST OFFLINE</span>
+            </div>
+            <div class="gbody">
+              <div class="gt display" style="font-size:16px">Factory Floor</div>
+              <div class="gh">⛭ our server · factorio.nightshift.gg</div>
+              <div class="gwho">megabase, 214 h · host: marek</div>
+              <div class="act"><button class="btn">Poke marek</button></div>
+            </div>
+          </div>
+          <div class="gcard">
+            <div class="cover" style="height:96px;background:linear-gradient(135deg,#43304f,#7a5a8f)">
+              <div class="grain"></div><span class="glyph">♠</span>
+              <span class="live-tag idle">TABLE OPEN</span>
+            </div>
+            <div class="gbody">
+              <div class="gt display" style="font-size:16px">Table Royale</div>
+              <div class="gh">◈ table game · cards.tableroyale.app</div>
+              <div class="gwho">poker &amp; trick decks · 3–8 players</div>
+              <div class="act"><button class="btn pri">Open table</button></div>
+            </div>
+          </div>
+          <div class="gcard" style="border-style:dashed;background:none;align-items:center;justify-content:center;display:flex">
+            <div style="text-align:center;color:var(--mute);padding:20px">
+              <div style="font-size:26px;margin-bottom:8px">＋</div>
+              <div style="font-weight:700;color:var(--dim);font-size:13px">Put a game on the shelf</div>
+              <div style="font-size:11px;margin-top:4px;max-width:20ch">a URL is enough — it travels sealed, like a channel name</div>
+            </div>
+          </div>
+        </div>
+      </div>
+
+      <div>
+        <div class="lbl" style="color:var(--dim);margin-bottom:10px">WHILE YOU WERE OUT</div>
+        <div class="rows">
+          <div class="rowi"><span class="ch"># general</span><span class="n">4</span>
+            <span class="txt">bob: rematch tonight. I’ve been practicing openings all week</span><span class="t">26 MIN</span></div>
+          <div class="rowi"><span class="ch"># game-night</span>
+            <span class="txt">marek pinned the new Craftworld map seed</span><span class="t">3 H</span></div>
+        </div>
+      </div>
+    </div>
+  </div>
+
+  <div class="crew">
+    <div class="head"><span class="lbl">the crew</span><span class="lbl" style="color:var(--live)">4 ON</span></div>
+    <div class="grp-lbl lbl" style="color:var(--live)">on the couch — 3</div>
+    <div class="m"><span class="av s28 talk" style="background:linear-gradient(135deg,#5a7fb8,#8fb8d8)">B</span>
+      <span class="who"><span class="nm">bob <span class="badge vf">✓</span></span><span class="rp">playing <span class="g">Hex Gambit</span> · 41 min</span></span></div>
+    <div class="m"><span class="av s28" style="background:linear-gradient(135deg,#9a6fb8,#c79ad8)">D</span>
+      <span class="who"><span class="nm">dana</span><span class="rp">playing <span class="g">Hex Gambit</span> · 41 min</span></span></div>
+    <div class="m"><span class="av s28" style="background:linear-gradient(135deg,#5f9a6a,#9ac79a)">M</span>
+      <span class="who"><span class="nm">marek <span class="badge host">host</span></span><span class="rp">on <span class="g">Craftworld</span> · 2 h</span></span></div>
+    <div class="grp-lbl lbl">around — 1</div>
+    <div class="m"><span class="av s28" style="background:linear-gradient(135deg,#c25a4a,#e0906b)">A</span>
+      <span class="who"><span class="nm">alice <span class="badge you">you</span></span><span class="rp">browsing the shelf</span></span></div>
+    <div class="grp-lbl lbl">away — 2</div>
+    <div class="m off"><span class="av s28" style="background:linear-gradient(135deg,#c2913c,#e0bc6b)">E</span>
+      <span class="who"><span class="nm">edda</span><span class="rp">last seen 2 h ago</span></span></div>
+    <div class="m off"><span class="av s28" style="background:linear-gradient(135deg,#b86a92,#d89ab8)">C</span>
+      <span class="who"><span class="nm">charlie</span><span class="rp">last seen yesterday</span></span></div>
+    <div class="sealed"><b>Sealed circle.</b> Game names, servers and who-plays-what travel inside the encryption. Only the game hosts you connect to see their own traffic.</div>
+  </div>
+</div>
+</template>
+
+<!-- =================== FRAME B2 · THE DEN · CHAT =================== -->
+<template data-frame="B2">
+<div class="mock dB">
+  <div class="rail">
+    <div class="ring on" style="background:linear-gradient(135deg,#a8683a,#e0a35c)">NS</div>
+    <div class="ring" style="background:linear-gradient(135deg,#57503f,#37322a)">DS</div>
+    <button class="add">+</button>
+    <div class="spacer"></div>
+    <div class="seal" title="sealed">🔒</div>
+  </div>
+
+  <div class="nav">
+    <div class="circle-head">
+      <div class="circle-name">The Night Shift</div>
+      <div class="circle-meta">6 members · epoch 31 · sealed</div>
+    </div>
+    <div class="grp">
+      <a class="item" href="#"><span class="ico">◈</span> game room</a>
+      <a class="item on" href="#"><span class="ico">#</span> general</a>
+      <a class="item" href="#"><span class="ico">#</span> game-night</a>
+      <a class="item" href="#"><span class="ico">#</span> clips</a>
+    </div>
+    <div class="grp">
+      <div class="lbl">voice</div>
+      <a class="item" href="#"><span class="ico">◉</span> the couch <span class="live-chip">3 LIVE</span></a>
+      <a class="item" href="#"><span class="ico">◉</span> war room</a>
+    </div>
+    <div class="self">
+      <span class="av s32" style="background:linear-gradient(135deg,#c25a4a,#e0906b)">A</span>
+      <span class="who"><span class="hd">alice</span><span class="st">online</span></span>
+      <span class="ic">🎧 ⚙</span>
+    </div>
+  </div>
+
+  <div class="main">
+    <div class="mast">
+      <span class="title"># general</span>
+      <span class="sub">TRASH TALK LIVES HERE · SEALED FOR 6</span>
+      <div class="right">
+        <button class="btn pri">◉ Join the couch</button>
+      </div>
+    </div>
+    <div class="msgs">
+      <div class="day">tonight</div>
+      <div class="mrow">
+        <span class="av s40" style="background:linear-gradient(135deg,#5a7fb8,#8fb8d8)">B</span>
+        <span class="body"><span class="h"><span class="nm">bob</span><span class="badge vf">✓</span><span class="ts">20:41</span></span>
+          <p>rematch. tonight. I’ve been practicing openings all week</p></span>
+      </div>
+      <div class="mrow cont"><span class="gap"></span><span class="body"><p>loser hosts the craftworld tour commentary</p>
+        <span class="reacts"><span class="react on">🔥 3</span><span class="react">😤 1</span></span></span>
+      </div>
+      <div class="mrow">
+        <span class="av s40" style="background:linear-gradient(135deg,#9a6fb8,#c79ad8)">D</span>
+        <span class="body"><span class="h"><span class="nm">dana</span><span class="ts">20:44</span></span>
+          <p>bold words for someone who hung a queen on move 9 last week</p>
+          <span class="reacts"><span class="react on">💀 4</span></span></span>
+      </div>
+      <div class="mrow">
+        <span class="av s40" style="background:linear-gradient(135deg,#5a7fb8,#8fb8d8)">B</span>
+        <span class="body"><span class="h"><span class="nm">bob</span><span class="badge vf">✓</span><span class="ts">20:47</span></span>
+          <p>board’s up. one seat left if anyone wants the loser’s bracket</p>
+          <div class="invite-card">
+            <div class="art" style="background:linear-gradient(135deg,#2b4438,#4a7a5c)">♞</div>
+            <div class="ib">
+              <span class="it">bob started Hex Gambit</span>
+              <span class="is">play.hexgambit.io · 1 seat open · the couch is live</span>
+              <span class="ir"><button class="btn live">Join game</button><button class="btn">Watch</button></span>
+            </div>
+          </div></span>
+      </div>
+      <div class="sysline">◉ alice started a call on <b>the couch</b> — bob, dana joined</div>
+      <div class="mrow">
+        <span class="av s40" style="background:linear-gradient(135deg,#5f9a6a,#9ac79a)">M</span>
+        <span class="body"><span class="h"><span class="nm">marek</span><span class="badge host">host</span><span class="ts">21:02</span></span>
+          <p>new craftworld map seed is in. tour at 21:30, bring nothing, touch nothing</p>
+          <div class="file-card">🗺 <span>map-seed-tour.png</span> <span class="fm">1.2 MB · sealed</span></div></span>
+      </div>
+      <div class="mrow">
+        <span class="av s40" style="background:linear-gradient(135deg,#c2913c,#e0bc6b)">E</span>
+        <span class="body"><span class="h"><span class="nm">edda</span><span class="ts">21:05</span></span>
+          <p>can’t make the finals, someone clip the endgame for me</p></span>
+      </div>
+    </div>
+    <div class="composer">＋ <span>Message #general</span><span class="hint">↩ SEND</span></div>
+    <div class="sealnote"><span class="dot"></span> END-TO-END SEALED FOR 6 — NOTHING READABLE LEAVES THIS DEVICE</div>
+  </div>
+
+  <div class="crew">
+    <div class="head"><span class="lbl">the crew</span><span class="lbl" style="color:var(--live)">4 ON</span></div>
+    <div class="grp-lbl lbl" style="color:var(--live)">on the couch — 3</div>
+    <div class="m"><span class="av s28 talk" style="background:linear-gradient(135deg,#5a7fb8,#8fb8d8)">B</span>
+      <span class="who"><span class="nm">bob <span class="badge vf">✓</span></span><span class="rp">playing <span class="g">Hex Gambit</span></span></span></div>
+    <div class="m"><span class="av s28" style="background:linear-gradient(135deg,#9a6fb8,#c79ad8)">D</span>
+      <span class="who"><span class="nm">dana</span><span class="rp">playing <span class="g">Hex Gambit</span></span></span></div>
+    <div class="m"><span class="av s28" style="background:linear-gradient(135deg,#c25a4a,#e0906b)">A</span>
+      <span class="who"><span class="nm">alice <span class="badge you">you</span></span><span class="rp">on the couch</span></span></div>
+    <div class="grp-lbl lbl">around — 1</div>
+    <div class="m"><span class="av s28" style="background:linear-gradient(135deg,#5f9a6a,#9ac79a)">M</span>
+      <span class="who"><span class="nm">marek <span class="badge host">host</span></span><span class="rp">on <span class="g">Craftworld</span></span></span></div>
+    <div class="grp-lbl lbl">away — 2</div>
+    <div class="m off"><span class="av s28" style="background:linear-gradient(135deg,#c2913c,#e0bc6b)">E</span>
+      <span class="who"><span class="nm">edda</span><span class="rp">last seen 2 h ago</span></span></div>
+    <div class="m off"><span class="av s28" style="background:linear-gradient(135deg,#b86a92,#d89ab8)">C</span>
+      <span class="who"><span class="nm">charlie</span><span class="rp">last seen yesterday</span></span></div>
+    <div class="sealed"><b>Sealed circle.</b> Everyone here holds the keys — no one else can read the room.</div>
+  </div>
+</div>
+</template>
+</body></html>
