@@ -162,6 +162,7 @@ function GameCard({ game, canManage, onLaunch, onRemove }) {
           background: `linear-gradient(135deg, hsl(${hue} 45% 22%), hsl(${(hue + 40) % 360} 60% 40%))`,
         }}
       >
+        <span className="game-grain" aria-hidden="true" />
         <span className="game-cover-mark">{game.name.slice(0, 1).toUpperCase()}</span>
         <span className="game-kind">{game.kind === 'server' ? 'game server' : 'web game'}</span>
         {canManage && (
@@ -319,12 +320,28 @@ export default function Overview({
         <span className="sealed-note">
           sealed like everything else — the relay never learns what you play
         </span>
+        {canManage && !editing && (
+          <span className="pane-actions">
+            <button className="button" data-testid="overview-edit" onClick={() => setEditing(true)}>
+              customize
+            </button>
+            {!addingGame && (
+              <button className="button" data-testid="game-add" onClick={() => setAddingGame(true)}>
+                <Plus size={13} />
+                register a game
+              </button>
+            )}
+          </span>
+        )}
       </header>
       <div className="scroll overview-scroll">
-        <section className="overview-hero">
-          <Seal name={server.name} size={56} title={server.name} />
-          <div className="overview-title">
-            <h2 data-testid="overview-name">{server.name}</h2>
+        {!editing && (
+          <section className="hub-about">
+            {overview?.blurb && (
+              <p className="overview-blurb" data-testid="overview-blurb">
+                {overview.blurb}
+              </p>
+            )}
             <div className="overview-stats mono">
               <span>{server.members.length} member{server.members.length === 1 ? '' : 's'}</span>
               <span>·</span>
@@ -334,22 +351,8 @@ export default function Overview({
               <span>·</span>
               <span>epoch {String(server.epoch).padStart(2, '0')}</span>
             </div>
-            {overview?.blurb && !editing && (
-              <p className="overview-blurb" data-testid="overview-blurb">
-                {overview.blurb}
-              </p>
-            )}
-          </div>
-          {canManage && !editing && (
-            <button
-              className="button overview-customize"
-              data-testid="overview-edit"
-              onClick={() => setEditing(true)}
-            >
-              customize
-            </button>
-          )}
-        </section>
+          </section>
+        )}
 
         {editing ? (
           <section className="overview-section">
@@ -367,23 +370,42 @@ export default function Overview({
         ) : (
           <>
             {event && (
-              <section className="overview-upnext" data-testid="overview-event">
-                <span className="wm-tag">
-                  up next · <span data-testid="overview-countdown">{describeUntil(event.at, now)}</span>
-                </span>
-                <div className="upnext-body">
-                  <strong className="upnext-title">{event.title}</strong>
-                  <span className="upnext-when mono">
-                    {new Date(event.at).toLocaleString([], {
-                      weekday: 'short',
-                      month: 'short',
-                      day: 'numeric',
-                      hour: '2-digit',
-                      minute: '2-digit',
-                    })}
+              <section className="overview-upnext hub-hero" data-testid="overview-event">
+                <div className="hub-hero-body">
+                  <span className="wm-tag">
+                    up next · <span data-testid="overview-countdown">{describeUntil(event.at, now)}</span>
                   </span>
+                  <strong className="upnext-title hub-hero-title">{event.title}</strong>
+                  <p className="upnext-note">
+                    <span className="upnext-when mono">
+                      {new Date(event.at).toLocaleString([], {
+                        weekday: 'short',
+                        month: 'short',
+                        day: 'numeric',
+                        hour: '2-digit',
+                        minute: '2-digit',
+                      })}
+                    </span>
+                    {event.note && <> — {event.note}</>}
+                  </p>
                 </div>
-                {event.note && <p className="upnext-note">{event.note}</p>}
+                {(() => {
+                  const d = event.at - now;
+                  const [n, u] =
+                    d <= 0
+                      ? ['now', 'happening']
+                      : d < 2 * 3600e3
+                        ? [Math.max(1, Math.round(d / 60e3)), 'min to go']
+                        : d < 48 * 3600e3
+                          ? [Math.round(d / 3600e3), 'hours to go']
+                          : [Math.round(d / 86400e3), 'days to go'];
+                  return (
+                    <div className="hub-count" aria-hidden="true">
+                      <span className="n">{n}</span>
+                      <span className="u">{u}</span>
+                    </div>
+                  );
+                })()}
               </section>
             )}
 
@@ -392,7 +414,7 @@ export default function Overview({
                 <span>on the shelf</span>
                 {games.length > 0 && <span className="idx">{games.length}</span>}
               </span>
-              {games.length > 0 ? (
+              {games.length > 0 || canManage ? (
                 <ul className="game-shelf" data-testid="game-shelf">
                   {games.map((g) => (
                     <GameCard
@@ -403,39 +425,45 @@ export default function Overview({
                       onRemove={() => saveGames(games.filter((x) => x.id !== g.id))}
                     />
                   ))}
+                  {canManage && (
+                    <li className="game-card add-card">
+                      {addingGame ? (
+                        <AddGameForm
+                          onAdd={(game) => {
+                            setAddingGame(false);
+                            saveGames([...games, game]);
+                          }}
+                          onCancel={() => setAddingGame(false)}
+                        />
+                      ) : (
+                        <button
+                          className="add-card-btn"
+                          data-testid="game-add-tile"
+                          onClick={() => setAddingGame(true)}
+                        >
+                          <span className="add-card-plus">
+                            <Plus size={18} />
+                          </span>
+                          <span className="add-card-title">Register a game</span>
+                          <span className="add-card-sub">
+                            a URL is enough — it travels sealed, like a channel name
+                          </span>
+                        </button>
+                      )}
+                    </li>
+                  )}
                 </ul>
               ) : (
-                !addingGame && (
-                  <p className="muted overview-empty-note" data-testid="game-shelf-empty">
-                    No games yet. The shelf holds pointers to games living on other servers —
-                    web games launch right here with the room&rsquo;s chat and call beside them;
-                    native servers get an address card.
-                  </p>
-                )
+                <p className="muted overview-empty-note" data-testid="game-shelf-empty">
+                  No games yet. The shelf holds pointers to games living on other servers —
+                  web games launch right here with the room&rsquo;s chat and call beside them;
+                  native servers get an address card.
+                </p>
               )}
-              {canManage &&
-                (addingGame ? (
-                  <AddGameForm
-                    onAdd={(game) => {
-                      setAddingGame(false);
-                      saveGames([...games, game]);
-                    }}
-                    onCancel={() => setAddingGame(false)}
-                  />
-                ) : (
-                  <button
-                    className="ghost game-add"
-                    data-testid="game-add"
-                    onClick={() => setAddingGame(true)}
-                  >
-                    <Plus size={12} />
-                    put a game on the shelf
-                  </button>
-                ))}
             </section>
 
             <section className="overview-section">
-              <span className="overline">catch up</span>
+              <span className="overline">while you were out</span>
               <ul className="overview-rooms">
                 {rooms.map((ch) => {
                   const d = byChannel[ch] ?? { unread: 0, last: null };
