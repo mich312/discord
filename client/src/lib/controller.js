@@ -16,6 +16,14 @@
 //                                   carries per-channel topic/retention and —
 //                                   when history is on — the channel history
 //                                   key, so joining IS how the key is shared.
+//   {k:'overview', ov}            — the home base's admin-edited half
+//                                   changed: {blurb, links, event}. Rides
+//                                   inside MLS like everything else, so the
+//                                   relay never learns what a circle says
+//                                   about itself
+//   {k:'notice', op, n|id}        — the noticeboard: op 'add' pins {id,
+//                                   text,ts} (author = MLS sender), op
+//                                   'del' removes by id (author or admin)
 //   {k:'chan', ch}                — a channel was created
 //   {k:'chanset', ch, meta}       — a channel's settings changed (topic,
 //                                   auto-delete, history on/off + its key)
@@ -49,6 +57,13 @@ import {
   generateFragmentKey,
   generateInviteId,
 } from './invite.js';
+import {
+  canRemoveNotice,
+  mergeNotices,
+  normalizeNotice,
+  normalizeOverview,
+  upsertNotice,
+} from './overview.js';
 
 const KP_TOPUP = 2; // fresh KeyPackages published per connect
 const INVITE_TTL_SECONDS = 7 * 24 * 3600;
@@ -310,6 +325,9 @@ export class Controller {
       channels: prior?.channels ?? ['general'],
       voiceChannels: prior?.voiceChannels ?? ['lounge'],
       chanMeta: prior?.chanMeta ?? {},
+      overview: prior?.overview,
+      notices: prior?.notices ?? [],
+      seen: prior?.seen ?? {},
       hcursor: prior?.hcursor ?? {},
       verified: prior?.verified,
       members,
@@ -369,6 +387,8 @@ export class Controller {
               channels: record.channels,
               voiceChannels: record.voiceChannels ?? ['lounge'],
               chanMeta: record.chanMeta ?? {},
+              overview: record.overview ?? null,
+              notices: record.notices ?? [],
             });
           }
         } else {
@@ -422,6 +442,29 @@ export class Controller {
           for (const ch of content.voiceChannels) if (!rooms.includes(ch)) rooms.push(ch);
           record.voiceChannels = rooms;
         }
+        // Gap-fill the home base the same way: a joiner has none, and
+        // explicit edits arrive as their own `overview`/`notice` events.
+        // Adopting it re-parks the backup so it survives a vault restore.
+        if (content.overview !== undefined && record.overview == null) {
+          const adopted = normalizeOverview(content.overview);
+          if (adopted) {
+            record.overview = adopted;
+            this.scheduleBackup();
+          }
+        }
+        // Noticeboard union: ids this device already has win. Authors in a
+        // rebroadcast are vouched for by the rebroadcaster, like the rest
+        // of the metadata a joiner has no scrollback to verify.
+        if (Array.isArray(content.notices) && content.notices.length) {
+          const incoming = content.notices
+            .map((n) => normalizeNotice(n, n?.author))
+            .filter(Boolean);
+          const merged = mergeNotices(record.notices, incoming);
+          if (merged.length !== (record.notices ?? []).length) {
+            record.notices = merged;
+            this.scheduleBackup();
+          }
+        }
         // Gap-fill channel settings (a joiner has none): explicit changes
         // arrive as their own `chanset` events, so never clobber here.
         if (content.chanMeta) {
@@ -451,6 +494,34 @@ export class Controller {
         await this.applyRetention(record, content.ch);
         this.backfillHistory(record).catch((e) => console.warn(`history: ${e.message}`));
         this.scheduleBackup();
+        break;
+      }
+      case 'overview': {
+        // The home base's admin-edited half changed. Same advisory admin
+        // gate as `chanset`: MLS can't enforce roles, so ignore senders we
+        // know are not admins and fail open while roles are still syncing.
+        if (record.roles?.[sender] && record.roles[sender] !== 'admin') break;
+        record.overview = normalizeOverview(content.ov);
+        await this.addSystemMessage(record.id, `home base updated by ${sender}`);
+        this.scheduleBackup();
+        break;
+      }
+      case 'notice': {
+        // The noticeboard is the whole roster's — any member may pin. The
+        // author is the MLS-authenticated sender, never the payload.
+        if (content.op === 'add') {
+          const notice = normalizeNotice(content.n, sender);
+          if (notice) {
+            record.notices = upsertNotice(record.notices, notice);
+            this.scheduleBackup();
+          }
+        } else if (content.op === 'del') {
+          const target = (record.notices ?? []).find((n) => n.id === content.id);
+          if (target && canRemoveNotice(target, sender, record.roles)) {
+            record.notices = record.notices.filter((n) => n.id !== content.id);
+            this.scheduleBackup();
+          }
+        }
         break;
       }
       case 'file': {
@@ -654,6 +725,85 @@ export class Controller {
     this.dispatch({ type: 'servers', servers: this.snapshotServers() });
     this.dispatch({ type: 'refreshMessages' });
     this.scheduleBackup();
+  }
+
+  /** Replace the home base's admin-edited half (blurb, pinned links, next
+      event). The UI gates this to admins; inside the group it is a visible,
+      announced change like channel settings — the roster's own eyes are
+      the enforcement. */
+  async setOverview(serverId, overview) {
+    const record = this.servers.get(serverId);
+    record.overview = normalizeOverview(overview);
+    await this.sendContent(serverId, { k: 'overview', ov: record.overview });
+    await this.addSystemMessage(serverId, 'home base updated by you');
+    await this.db.serverPut(record);
+    this.dispatch({ type: 'servers', servers: this.snapshotServers() });
+    this.scheduleBackup();
+  }
+
+  /** Pin a note to the noticeboard — open to every member, not just
+      admins; a home base belongs to the whole roster. */
+  async addNotice(serverId, text) {
+    const record = this.servers.get(serverId);
+    const id = b64url.enc(crypto.getRandomValues(new Uint8Array(9)));
+    const notice = normalizeNotice({ id, text, ts: Date.now() }, this.me);
+    if (!notice) return;
+    record.notices = upsertNotice(record.notices, notice);
+    await this.sendContent(serverId, { k: 'notice', op: 'add', n: { id, text: notice.text, ts: notice.ts } });
+    await this.db.serverPut(record);
+    this.dispatch({ type: 'servers', servers: this.snapshotServers() });
+    this.scheduleBackup();
+  }
+
+  /** Unpin a note (the UI offers this to the author and to admins; the
+      receive side re-checks the same rule). */
+  async removeNotice(serverId, id) {
+    const record = this.servers.get(serverId);
+    record.notices = (record.notices ?? []).filter((n) => n.id !== id);
+    await this.sendContent(serverId, { k: 'notice', op: 'del', id });
+    await this.db.serverPut(record);
+    this.dispatch({ type: 'servers', servers: this.snapshotServers() });
+    this.scheduleBackup();
+  }
+
+  // === home-base catch-up (device-local, never synced) ====================
+
+  /** Viewing a room marks it read on this device. `seen` is deliberately
+      per-device state: what *you* have caught up on, not account data —
+      it stays out of the meta envelopes and the backup. */
+  async markSeen(serverId, channel) {
+    const record = this.servers.get(serverId);
+    if (!record || !channel) return;
+    record.seen = { ...(record.seen ?? {}), [channel]: Date.now() };
+    await this.db.serverPut(record);
+  }
+
+  /** Per-room digest for the home base: unread-since-last-look and the
+      latest line, straight from this device's own store. */
+  async channelDigest(serverId) {
+    const record = this.servers.get(serverId);
+    if (!record) return [];
+    const out = [];
+    for (const channel of record.channels) {
+      const msgs = (await this.db.msgsFor(serverId, channel))
+        .filter((m) => !m.system)
+        .sort((a, b) => a.ts - b.ts);
+      const seen = record.seen?.[channel] ?? record.joinedAt ?? 0;
+      const unread = msgs.filter((m) => m.ts > seen && m.sender !== this.me).length;
+      const last = msgs.at(-1);
+      out.push({
+        channel,
+        unread,
+        last: last
+          ? {
+              sender: last.sender,
+              text: last.file ? `sent ${last.file.name}` : last.text,
+              ts: last.ts,
+            }
+          : null,
+      });
+    }
+    return out;
   }
 
   /** Local half of auto-delete: drop this device's copies past retention. */
@@ -885,6 +1035,8 @@ export class Controller {
       channels: record.channels,
       voiceChannels: record.voiceChannels ?? ['lounge'],
       chanMeta: record.chanMeta ?? {},
+      overview: record.overview ?? null,
+      notices: record.notices ?? [],
     });
     await this.db.serverPut(record);
     this.dispatch({ type: 'servers', servers: this.snapshotServers() });
@@ -958,6 +1110,8 @@ export class Controller {
         channels: r.channels,
         voiceChannels: r.voiceChannels ?? ['lounge'],
         chanMeta: r.chanMeta ?? {},
+        overview: r.overview ?? null,
+        notices: r.notices ?? [],
       }));
     if (!servers.length) return;
     const payload = await sealBackup(identity, { v: 1, servers });
@@ -981,6 +1135,10 @@ export class Controller {
         channels: s.channels?.length ? s.channels : ['general'],
         voiceChannels: s.voiceChannels ?? ['lounge'],
         chanMeta: s.chanMeta ?? {},
+        overview: normalizeOverview(s.overview),
+        notices: (Array.isArray(s.notices) ? s.notices : [])
+          .map((n) => normalizeNotice(n, n?.author))
+          .filter(Boolean),
         members: [],
         epoch: 0,
         lastSeq: 0,
@@ -1296,6 +1454,9 @@ export class Controller {
       channels: prior?.channels ?? ['general'],
       voiceChannels: prior?.voiceChannels,
       chanMeta: prior?.chanMeta ?? {},
+      overview: prior?.overview,
+      notices: prior?.notices ?? [],
+      seen: prior?.seen ?? {},
       hcursor: prior?.hcursor ?? {},
       verified: prior?.verified,
       members,
@@ -1359,6 +1520,7 @@ export class Controller {
         voiceChannels: [...(r.voiceChannels ?? ['lounge'])],
         members: [...r.members],
         roles: { ...(r.roles ?? {}) },
+        notices: [...(r.notices ?? [])],
       }));
   }
 

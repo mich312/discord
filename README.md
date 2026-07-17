@@ -21,6 +21,13 @@ threat-model sections still apply verbatim.
 
 - **Text channels** inside E2EE servers — channel structure and server
   names travel *inside* the encryption; the relay never learns them.
+- **Home base** — picking a circle lands on its home base: the next team
+  event with a live countdown, per-room unread counts with the latest
+  line (device-local catch-up), and a noticeboard any member can pin to
+  (entries are authored by the MLS sender; author or admin unpins).
+  Admins set the event, blurb, and pinned links. Joiners inherit the page
+  via the encrypted metadata rebroadcast and it rides the encrypted
+  backup — the relay never learns what a circle says about itself.
 - **Invite links** (`?j=<id>#k=<key>`) — the decryption key rides in the
   URL fragment, which browsers never transmit. Joining uses MLS External
   Commits, so nobody has to be online to let you in. Link-joiners are

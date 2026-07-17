@@ -10,6 +10,7 @@ import CommandPalette from './components/CommandPalette.jsx';
 import Rail from './components/Rail.jsx';
 import Channels from './components/Channels.jsx';
 import Messages from './components/Messages.jsx';
+import Overview from './components/Overview.jsx';
 import Members from './components/Members.jsx';
 import CallPanel from './components/CallPanel.jsx';
 import CallStage from './components/CallStage.jsx';
@@ -38,6 +39,8 @@ function reducer(state, action) {
     case 'phase':
       return { ...state, phase: action.phase };
     case 'booted': {
+      // Land on the first circle's overview page (channel: null), not in a
+      // room — the landing zone is the front door.
       const first = action.servers[0];
       return {
         ...state,
@@ -45,14 +48,14 @@ function reducer(state, action) {
         me: action.me,
         servers: action.servers,
         active: first
-          ? { server: first.id, channel: first.channels[0] }
+          ? { server: first.id, channel: null }
           : { server: null, channel: null },
       };
     }
     case 'servers': {
       let active = state.active;
       if (!active.server && action.servers.length > 0) {
-        active = { server: action.servers[0].id, channel: action.servers[0].channels[0] };
+        active = { server: action.servers[0].id, channel: null };
       } else if (active.server) {
         // If the active channel was renamed or deleted out from under us,
         // fall back to the first remaining channel so the view isn't stranded.
@@ -184,6 +187,12 @@ export default function App() {
       .loadMessages(server, channel)
       .then((messages) => dispatch({ type: 'messages', messages }));
   }, [server, channel, state.messagesRev]);
+
+  // Whatever is on screen is read: keep the device-local seen marker in
+  // step so the home base's unread counts mean "since you last looked".
+  useEffect(() => {
+    if (server && channel) controllerRef.current?.markSeen(server, channel);
+  }, [server, channel, state.messages]);
 
   // Auto-dismiss toasts.
   useEffect(() => {
@@ -356,14 +365,14 @@ export default function App() {
             servers={state.servers}
             active={server}
             onSelect={(id) => {
-              const s = state.servers.find((x) => x.id === id);
-              dispatch({ type: 'select', server: id, channel: s.channels[0] });
+              // Picking a circle lands on its overview page, not a room.
+              dispatch({ type: 'select', server: id, channel: null });
               setStage(false); // navigating away swaps the stage for the rooms
               setDrawer(null);
             }}
             onCreate={async (name) => {
               const id = await controllerRef.current.createServer(name);
-              dispatch({ type: 'select', server: id, channel: 'general' });
+              dispatch({ type: 'select', server: id, channel: null });
               setDrawer(null);
             }}
           />
@@ -448,24 +457,58 @@ export default function App() {
           />
         ) : activeServer ? (
           <>
-            <Messages
-              key={`${server}/${channel}`}
-              server={activeServer}
-              channel={channel}
-              me={state.me}
-              messages={state.messages}
-              onSend={(text) =>
-                controllerRef.current
-                  .sendChat(server, channel, text)
-                  .catch((e) => dispatch({ type: 'toast', text: e.message }))
-              }
-              onSendFile={(file) =>
-                controllerRef.current
-                  .sendFile(server, channel, file)
-                  .catch((e) => dispatch({ type: 'toast', text: e.message }))
-              }
-              fetchFile={(file) => controllerRef.current.fetchFile(file)}
-            />
+            {channel ? (
+              <Messages
+                key={`${server}/${channel}`}
+                server={activeServer}
+                channel={channel}
+                me={state.me}
+                messages={state.messages}
+                onSend={(text) =>
+                  controllerRef.current
+                    .sendChat(server, channel, text)
+                    .catch((e) => dispatch({ type: 'toast', text: e.message }))
+                }
+                onSendFile={(file) =>
+                  controllerRef.current
+                    .sendFile(server, channel, file)
+                    .catch((e) => dispatch({ type: 'toast', text: e.message }))
+                }
+                fetchFile={(file) => controllerRef.current.fetchFile(file)}
+              />
+            ) : (
+              <Overview
+                server={activeServer}
+                me={state.me}
+                canManage={canManage && !activeServer.restored}
+                canSend={!activeServer.restored}
+                voice={state.voice}
+                digestKey={`${activeServer.lastSeq}:${state.messagesRev}`}
+                loadDigest={(id) => controllerRef.current.channelDigest(id)}
+                onSelectChannel={(ch) => dispatch({ type: 'select', server, channel: ch })}
+                onVoiceJoin={(ch) =>
+                  controllerRef.current.voice
+                    .join(server, ch)
+                    .then(() => openStage())
+                    .catch((e) => dispatch({ type: 'toast', text: `voice: ${e.message}` }))
+                }
+                onSave={(ov) =>
+                  controllerRef.current
+                    .setOverview(server, ov)
+                    .catch((e) => dispatch({ type: 'toast', text: e.message }))
+                }
+                onAddNotice={(text) =>
+                  controllerRef.current
+                    .addNotice(server, text)
+                    .catch((e) => dispatch({ type: 'toast', text: e.message }))
+                }
+                onRemoveNotice={(id) =>
+                  controllerRef.current
+                    .removeNotice(server, id)
+                    .catch((e) => dispatch({ type: 'toast', text: e.message }))
+                }
+              />
+            )}
             <Members
               server={activeServer}
               me={state.me}

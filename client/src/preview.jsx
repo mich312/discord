@@ -3,7 +3,7 @@
 // if App's shell changes, keep this in step. Views:
 //   /preview.html?view=app            main surface, carbon
 //   /preview.html?view=app&theme=paper
-//   /preview.html?view=onboarding | invited | empty | banner
+//   /preview.html?view=onboarding | invited | empty | banner | overview
 //   /preview.html?view=modal-safety | modal-invite | modal-secure | modal-identity
 //   /preview.html?view=palette | call | call-share
 import React, { useState } from 'react';
@@ -14,6 +14,7 @@ import CommandPalette from './components/CommandPalette.jsx';
 import Rail from './components/Rail.jsx';
 import Channels from './components/Channels.jsx';
 import Messages from './components/Messages.jsx';
+import Overview from './components/Overview.jsx';
 import Members from './components/Members.jsx';
 import Modal from './components/Modal.jsx';
 import Onboarding from './components/Onboarding.jsx';
@@ -39,6 +40,25 @@ const servers = [
     members: ['alice', 'bob', 'charlie', 'dana'],
     verified: ['bob'],
     linkJoined: ['charlie'],
+    chanMeta: { 'pit-wall': { topic: 'live timing chatter during sessions' } },
+    roles: { alice: 'admin' },
+    overview: {
+      blurb:
+        'Pit crew HQ for the season. Race weekends run out of #logistics; #pit-wall is live timing only.',
+      links: [
+        { label: 'stint sheet', url: 'https://example.com/stints' },
+        { label: 'tyre pressure log', url: 'https://example.com/tyres' },
+      ],
+      event: {
+        title: 'Qualifying — Round 4, Spa',
+        at: now + 52 * H,
+        note: 'Trailer leaves 6am. Pack the spare diffuser tonight.',
+      },
+    },
+    notices: [
+      { id: 'n1', text: 'Scrutineering forms due Thursday — hand them to dana.', ts: now - 5 * H, author: 'dana' },
+      { id: 'n2', text: 'New tyre pressure targets pinned in #pit-wall.', ts: now - 26 * H, author: 'bob' },
+    ],
   },
   {
     id: 'srv-photo',
@@ -71,6 +91,19 @@ const PNG = Uint8Array.from(
   atob('iVBORw0KGgoAAAANSUhEUgAAAAIAAAACCAYAAABytg0kAAAAEklEQVR42mNk+M9QzwAEjDAGACCDAv8cI7IoAAAAAElFTkSuQmCC'),
   (c) => c.charCodeAt(0)
 );
+
+// Home-base catch-up mock: what channelDigest() would compute locally.
+const digestMock = {
+  'srv-race': [
+    { channel: 'general', unread: 0, last: { sender: 'bob', text: 'plan B if it rains: box on lap 14 and go long', ts: now - 1.1 * H } },
+    { channel: 'logistics', unread: 3, last: { sender: 'dana', text: 'trailer leaves at 6am sharp — pack the spare diffuser tonight', ts: now - 2.2 * H } },
+    { channel: 'pit-wall', unread: 0, last: null },
+  ],
+  'srv-photo': [
+    { channel: 'general', unread: 0, last: null },
+    { channel: 'critique', unread: 1, last: { sender: 'edda', text: 'new darkroom scans are up', ts: now - 8 * H } },
+  ],
+};
 
 const voice = {
   active: { server: 'srv-race', channel: 'lounge' },
@@ -154,9 +187,15 @@ const modals = {
   },
 };
 
-function PreviewShell({ empty = false, banner = false, modal = null, palette = false, stage = null }) {
+function PreviewShell({ empty = false, banner = false, modal = null, palette = false, stage = null, landing = false }) {
   const me = 'alice';
-  const [active, setActive] = useState({ server: empty ? null : 'srv-race', channel: 'general' });
+  // channel: null means the circle's overview page, same as App.jsx.
+  const [active, setActive] = useState({
+    server: empty ? null : 'srv-race',
+    channel: landing ? null : 'general',
+  });
+  const [overviews, setOverviews] = useState({});
+  const [noticesBy, setNoticesBy] = useState({});
   const [openModal, setOpenModal] = useState(modal);
   const [paletteOpen, setPaletteOpen] = useState(palette);
   const [drawer, setDrawer] = useState(null); // narrow screens: null | 'nav' | 'roster'
@@ -194,7 +233,7 @@ function PreviewShell({ empty = false, banner = false, modal = null, palette = f
             servers={list}
             active={active.server}
             onSelect={(id) => {
-              setActive({ server: id, channel: 'general' });
+              setActive({ server: id, channel: null }); // land on the overview
               setDrawer(null);
             }}
             onCreate={noop}
@@ -239,18 +278,54 @@ function PreviewShell({ empty = false, banner = false, modal = null, palette = f
           />
         ) : activeServer ? (
           <>
-            <Messages
-              server={activeServer}
-              channel={active.channel}
-              me={me}
-              messages={messages}
-              onSend={noop}
-              onSendFile={noop}
-              fetchFile={async (f) => {
-                if ((f.mime ?? '').startsWith('image/')) return PNG;
-                throw new Error('preview: no blob store');
-              }}
-            />
+            {active.channel ? (
+              <Messages
+                server={activeServer}
+                channel={active.channel}
+                me={me}
+                messages={messages}
+                onSend={noop}
+                onSendFile={noop}
+                fetchFile={async (f) => {
+                  if ((f.mime ?? '').startsWith('image/')) return PNG;
+                  throw new Error('preview: no blob store');
+                }}
+              />
+            ) : (
+              <Overview
+                server={{
+                  ...activeServer,
+                  overview: overviews[activeServer.id] ?? activeServer.overview,
+                  notices: noticesBy[activeServer.id] ?? activeServer.notices ?? [],
+                }}
+                me={me}
+                canManage={activeServer.roles?.[me] === 'admin'}
+                canSend
+                voice={voice}
+                digestKey="preview"
+                loadDigest={async (id) => digestMock[id] ?? []}
+                onSelectChannel={(ch) => setActive({ ...active, channel: ch })}
+                onVoiceJoin={noop}
+                onSave={(ov) => setOverviews((o) => ({ ...o, [activeServer.id]: ov }))}
+                onAddNotice={(text) =>
+                  setNoticesBy((by) => ({
+                    ...by,
+                    [activeServer.id]: [
+                      { id: `p${Date.now()}`, text, ts: Date.now(), author: me },
+                      ...(by[activeServer.id] ?? activeServer.notices ?? []),
+                    ],
+                  }))
+                }
+                onRemoveNotice={(id) =>
+                  setNoticesBy((by) => ({
+                    ...by,
+                    [activeServer.id]: (by[activeServer.id] ?? activeServer.notices ?? []).filter(
+                      (n) => n.id !== id
+                    ),
+                  }))
+                }
+              />
+            )}
             <Members server={activeServer} me={me} onAdd={noop} onMember={() => setOpenModal(modals['modal-safety'])} />
           </>
         ) : (
@@ -297,6 +372,7 @@ function PreviewShell({ empty = false, banner = false, modal = null, palette = f
 function pick() {
   if (view === 'onboarding' || view === 'invited') return <Onboarding controller={mockController} />;
   if (view === 'empty') return <PreviewShell empty />;
+  if (view === 'overview') return <PreviewShell landing />;
   if (view === 'banner') return <PreviewShell banner />;
   if (view === 'palette') return <PreviewShell palette />;
   if (view === 'call') return <PreviewShell stage={stageVoice([])} />;
