@@ -13,9 +13,12 @@ services:
       DATABASE_URL: postgres://quorum:${POSTGRES_PASSWORD:-quorum}@db/quorum
       RP_ID: ${RP_ID:-localhost}
       RP_ORIGIN: ${RP_ORIGIN:-http://localhost}
-      # Generate once and keep, or push subscriptions die on restart (the raw
-      # 32-byte scalar is at DER offset 7 — count from the front, not
-      # `tail -c 32`, which trails the curve OID and yields a malformed key):
+      # Optional: an explicit Web Push key. Leave it blank and the relay
+      # auto-generates one on first boot and persists it to /data/vapid.key
+      # (VAPID_KEY_FILE, on the volume) so it survives restarts. Set this only
+      # to pin a specific key or share one across hosts (the raw 32-byte scalar
+      # is at DER offset 7 — count from the front, not `tail -c 32`, which
+      # trails the curve OID and yields a malformed key):
       #   openssl ecparam -genkey -name prime256v1 | openssl ec -no_public \
       #     -outform DER 2>/dev/null | tail -c +8 | head -c 32 | basenc --base64url | tr -d '='
       VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}

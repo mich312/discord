@@ -44,8 +44,10 @@ threat-model sections still apply verbatim.
   with live ratchets; the identity key is mirrored to localStorage and
   exportable (file, paste-string, or passphrase-wrapped recovery file).
 - **Web Push** — offline members get an encrypted nudge (group id only —
-  content never exists server-side). Requires `VAPID_PRIVATE_KEY` in
-  production.
+  content never exists server-side). The relay auto-generates and persists
+  its VAPID key on the data volume, so push survives restarts out of the
+  box; set `VAPID_PRIVATE_KEY` to pin an explicit key or share one across
+  hosts.
 - **Invite-only registration** — the platform itself is gated, not just
   the groups: the relay refuses to pin an unknown handle unless the
   connection presents a currently-usable invite id (the one from the
