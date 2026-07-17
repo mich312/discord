@@ -56,6 +56,19 @@ export function gameHost(game) {
   }
 }
 
+/** A game *reference* as carried inside a chat message ("bob opened X").
+    Deliberately has no URL: the card resolves against the circle's own
+    registry at click time, so a chat envelope can never point a Join
+    button somewhere the shelf doesn't. */
+export function normalizeGameRef(g) {
+  if (!g || typeof g !== 'object') return null;
+  const id = String(g.id ?? '').slice(0, 40);
+  const name = String(g.name ?? '').slice(0, GAME_NAME_MAX).trim();
+  const kind = KINDS.has(g.kind) ? g.kind : 'activity';
+  if (!id || !name) return null;
+  return { id, name, kind };
+}
+
 export function makeGameId(now = Date.now()) {
   return `g${now.toString(36)}${Math.floor(Math.random() * 46656).toString(36)}`;
 }

@@ -30,6 +30,11 @@
 //   {k:'file', ch, file}          — an attachment: {name,size,mime,blob,key};
 //                                   blob id points at relay disk, the AES key
 //                                   travels only inside this encrypted envelope
+//   {k:'game', ch, game}          — "I opened this game from the shelf":
+//                                   {id,name,kind} renders as a join card.
+//                                   The card resolves against the circle's
+//                                   own registry — the payload itself never
+//                                   supplies a URL to launch
 import { b64, Relay } from './relay.js';
 import {
   generateHistoryId,
@@ -64,6 +69,7 @@ import {
   normalizeOverview,
   upsertNotice,
 } from './overview.js';
+import { normalizeGameRef } from './games.js';
 
 const KP_TOPUP = 2; // fresh KeyPackages published per connect
 const INVITE_TTL_SECONDS = 7 * 24 * 3600;
@@ -428,6 +434,23 @@ export class Controller {
           channel: content.ch,
           sender,
           text: content.text,
+          ts: Date.now(),
+        });
+        break;
+      }
+      case 'game': {
+        // Same channel handling as chat; the ref is whitelisted and the
+        // Join affordance resolves against the shelf, never this payload.
+        const game = normalizeGameRef(content.game);
+        if (!game) break;
+        if (!isCallChat(content.ch) && !record.channels.includes(content.ch)) {
+          record.channels.push(content.ch);
+        }
+        await this.storeMessage({
+          server: record.id,
+          channel: content.ch,
+          sender,
+          game,
           ts: Date.now(),
         });
         break;
@@ -906,6 +929,18 @@ export class Controller {
     this.appendHistory(serverId, channel, message);
   }
 
+  /** Announce a game launch as a first-class message: renders as a join
+      card for everyone in the room. Only a reference travels — id, name,
+      kind — never a URL; joining resolves against the shelf. */
+  async sendGameCard(serverId, channel, game) {
+    const ref = normalizeGameRef(game);
+    if (!ref) return;
+    await this.sendContent(serverId, { k: 'game', ch: channel, game: ref });
+    const message = { server: serverId, channel, sender: this.me, game: ref, ts: Date.now() };
+    await this.storeMessage(message);
+    this.appendHistory(serverId, channel, message);
+  }
+
   /** Sender-side write into the channel's encrypted relay history log —
       only if this channel keeps history. Best-effort: the MLS message is
       the message; the log is a convenience copy. */
@@ -916,7 +951,11 @@ export class Controller {
     const entry = {
       sender: message.sender,
       ts: message.ts,
-      ...(message.file ? { file: message.file } : { text: message.text }),
+      ...(message.file
+        ? { file: message.file }
+        : message.game
+          ? { game: message.game }
+          : { text: message.text }),
     };
     sealHistoryEntry(meta.hkey, entry)
       .then((payload) =>
@@ -971,12 +1010,17 @@ export class Controller {
         // Whitelist fields: an entry is authored by whoever holds the room
         // key, so it must never override where it lands (server/channel)
         // or dress itself up as a system line.
+        const gameRef = entry.game ? normalizeGameRef(entry.game) : null;
         const message = {
           server: record.id,
           channel,
           sender: String(entry.sender ?? ''),
           ts: Number(entry.ts) || 0,
-          ...(entry.file ? { file: entry.file } : { text: String(entry.text ?? '') }),
+          ...(entry.file
+            ? { file: entry.file }
+            : gameRef
+              ? { game: gameRef }
+              : { text: String(entry.text ?? '') }),
           fromHistory: true,
         };
         if (message.ts < cutoff || seen.has(messageFingerprint(message))) continue;

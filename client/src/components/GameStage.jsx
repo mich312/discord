@@ -107,7 +107,9 @@ export default function GameStage({
                 <div className="stage-chat-line" key={i}>
                   <Seal name={m.sender} size={18} title={m.sender} />
                   <span className={m.sender === me ? 'sender self' : 'sender'}>{m.sender}</span>
-                  <span className="text">{m.file ? `sent a file: ${m.file.name}` : m.text}</span>
+                  <span className="text">
+                    {m.file ? `sent a file: ${m.file.name}` : m.game ? `opened ${m.game.name}` : m.text}
+                  </span>
                   <time>{timeOf(m.ts)}</time>
                 </div>
               )

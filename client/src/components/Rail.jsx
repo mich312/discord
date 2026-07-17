@@ -1,34 +1,52 @@
 import React, { useState } from 'react';
-import Seal from './Seal.jsx';
+import { nameHue } from '../lib/avatar.js';
 import { Plus } from './icons.jsx';
 
-// Circles: the handful of groups you actually belong to — named rows with
-// their seals, not an anonymous strip of icons. 3–6 of these, not 40.
+// The circle rail: one tile per circle, monogram on the circle's own hue.
+// Still a handful of groups you actually belong to — 3–6 tiles, not 40 —
+// but the names now live in the nav column's header, so the rail can be
+// pure identity: color + mark, active ring, done.
+function monogram(name) {
+  const words = String(name).trim().split(/\s+/).filter(Boolean);
+  const mark = words.length >= 2 ? words[0][0] + words[1][0] : String(name).slice(0, 2);
+  return mark.toUpperCase();
+}
+
 export default function Rail({ servers, active, onSelect, onCreate }) {
   const [adding, setAdding] = useState(false);
   const [name, setName] = useState('');
 
   return (
     <nav className="rail">
-      <div className="section-label">
-        <span className="overline"><span className="idx">01</span>circles</span>
-      </div>
       <ul className="circle-list">
-        {servers.map((s) => (
-          <li key={s.id}>
-            <button
-              className={s.id === active ? 'circle-row active' : 'circle-row'}
-              title={s.name}
-              data-testid={`rail-${s.name}`}
-              onClick={() => onSelect(s.id)}
-            >
-              <Seal name={s.name} size={26} />
-              <span className="circle-name">{s.name}</span>
-            </button>
-          </li>
-        ))}
-        <li>
-          {adding ? (
+        {servers.map((s) => {
+          const hue = nameHue(s.name);
+          return (
+            <li key={s.id}>
+              <button
+                className={s.id === active ? 'circle-tile active' : 'circle-tile'}
+                title={s.name}
+                data-testid={`rail-${s.name}`}
+                style={{
+                  background: `linear-gradient(135deg, hsl(${hue} 60% 42%), hsl(${(hue + 42) % 360} 68% 58%))`,
+                }}
+                onClick={() => onSelect(s.id)}
+              >
+                {monogram(s.name)}
+              </button>
+            </li>
+          );
+        })}
+        <li className="rail-add-slot">
+          <button
+            className="circle-tile add"
+            title="found a new circle"
+            data-testid="new-server"
+            onClick={() => setAdding(true)}
+          >
+            <Plus size={15} />
+          </button>
+          {adding && (
             <form
               className="rail-form"
               onSubmit={(e) => {
@@ -47,13 +65,6 @@ export default function Rail({ servers, active, onSelect, onCreate }) {
                 data-testid="new-server-name"
               />
             </form>
-          ) : (
-            <button className="circle-row add" title="found a new circle" data-testid="new-server" onClick={() => setAdding(true)}>
-              <span className="add-tile">
-                <Plus size={13} />
-              </span>
-              <span className="circle-name">new circle</span>
-            </button>
           )}
         </li>
       </ul>

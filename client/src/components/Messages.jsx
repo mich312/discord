@@ -1,7 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import Seal from './Seal.jsx';
 import { describeRetention } from '../lib/controller.js';
-import { Lock, Paperclip, Clock } from './icons.jsx';
+import { nameHue } from '../lib/avatar.js';
+import { Lock, Paperclip, Clock, Wave, Gamepad } from './icons.jsx';
 
 function timeOf(ts) {
   return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -103,13 +104,85 @@ function Attachment({ file, fetchFile }) {
   );
 }
 
-export default function Messages({ server, channel, me, messages, onSend, onSendFile, fetchFile }) {
+// "bob opened Hex Gambit" as a first-class message. The Join button
+// resolves the reference against the circle's shelf — if the game was
+// taken off (or never existed), the card stays but the button dims.
+function GameInvite({ game, sender, me, shelf, onLaunchGame }) {
+  const resolved = shelf.find((g) => g.id === game.id) ?? null;
+  const hue = nameHue(game.name);
+  return (
+    <div className="game-invite" data-testid="game-invite">
+      <div
+        className="gi-art"
+        style={{
+          background: `linear-gradient(135deg, hsl(${hue} 45% 22%), hsl(${(hue + 40) % 360} 60% 40%))`,
+        }}
+      >
+        <Gamepad size={22} />
+      </div>
+      <div className="gi-body">
+        <span className="gi-title">
+          {sender === me ? 'you' : sender} opened {game.name}
+        </span>
+        <span className="gi-sub mono">
+          {resolved
+            ? resolved.kind === 'server'
+              ? resolved.url
+              : 'on the shelf — plays right here'
+            : 'no longer on the shelf'}
+        </span>
+        <span className="gi-actions">
+          {resolved && resolved.kind === 'activity' ? (
+            <button
+              className="button live"
+              data-testid="game-invite-join"
+              onClick={() => onLaunchGame(resolved)}
+            >
+              join game
+            </button>
+          ) : resolved ? (
+            <button
+              className="button"
+              data-testid="game-invite-copy"
+              onClick={() => navigator.clipboard?.writeText(resolved.url).catch(() => {})}
+            >
+              copy address
+            </button>
+          ) : null}
+        </span>
+      </div>
+    </div>
+  );
+}
+
+export default function Messages({
+  server,
+  channel,
+  me,
+  messages,
+  onSend,
+  onSendFile,
+  fetchFile,
+  voice,
+  onVoiceJoin,
+  onOpenStage,
+  onLaunchGame,
+}) {
   const [draft, setDraft] = useState('');
   const scroller = useRef(null);
   const folded = useMemo(() => fold(messages), [messages]);
   const members = server.members.length;
   const meta = server.chanMeta?.[channel] ?? {};
   const keepsHistory = !!meta.hid;
+  const shelf = server.overview?.games ?? [];
+  // The header's call affordance: join the busiest voice room (or the
+  // first one), or hop back to the stage if we're already in a call here.
+  const voiceRooms = server.voiceChannels ?? ['lounge'];
+  const inCallHere = voice?.active?.server === server.id;
+  const liveRoom =
+    voiceRooms
+      .map((r) => ({ r, n: voice?.presence?.[`${server.id}/${r}`]?.length ?? 0 }))
+      .sort((a, b) => b.n - a.n)[0] ?? null;
 
   useEffect(() => {
     scroller.current?.scrollTo(0, scroller.current.scrollHeight);
@@ -139,6 +212,22 @@ export default function Messages({ server, channel, me, messages, onSend, onSend
             </span>
           ) : null}
         </span>
+        {inCallHere && onOpenStage ? (
+          <button className="button pane-call live" data-testid="pane-open-call" onClick={onOpenStage}>
+            <Wave size={13} />
+            open call
+          </button>
+        ) : liveRoom && onVoiceJoin ? (
+          <button
+            className={liveRoom.n ? 'button pane-call live' : 'button pane-call'}
+            data-testid="pane-join-voice"
+            title={liveRoom.n ? `${liveRoom.n} in ${liveRoom.r} right now` : `start a call in ${liveRoom.r}`}
+            onClick={() => onVoiceJoin(liveRoom.r)}
+          >
+            <Wave size={13} />
+            {liveRoom.n ? `join ${liveRoom.r} · ${liveRoom.n}` : `join ${liveRoom.r}`}
+          </button>
+        ) : null}
       </header>
       <div className="scroll" ref={scroller} data-testid="message-scroll">
         <div className="watermark" data-testid="watermark">
@@ -184,6 +273,14 @@ export default function Messages({ server, channel, me, messages, onSend, onSend
                 <div className="msg-line" key={i}>
                   {m.file ? (
                     <Attachment file={m.file} fetchFile={fetchFile} />
+                  ) : m.game ? (
+                    <GameInvite
+                      game={m.game}
+                      sender={m.sender}
+                      me={me}
+                      shelf={shelf}
+                      onLaunchGame={onLaunchGame ?? (() => {})}
+                    />
                   ) : (
                     <span className="text">{m.text}</span>
                   )}

@@ -429,61 +429,82 @@ kbd {
 }
 .section-label .ghost { padding: 1px 5px; }
 
-/* circles (rail) */
-.rail { flex-shrink: 0; padding-bottom: 8px; border-bottom: 1px solid var(--hairline); }
-.circle-list { list-style: none; padding: 0 8px; }
-.circle-row {
-  position: relative;
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  width: 100%;
-  background: none;
-  border: none;
-  border-radius: var(--r);
-  padding: 5px 8px;
-  color: var(--ink-dim);
-  text-align: left;
-  transition: background var(--fast) var(--ease), color var(--fast) var(--ease);
+/* circles (rail): one monogram tile per circle, names live in the nav
+   column's header. The sidebar splits into rail | nav-col. */
+.sidebar { flex-direction: row; }
+.rail {
+  width: 60px;
+  flex-shrink: 0;
+  padding: 12px 0;
+  border-right: 1px solid var(--hairline);
+  background: color-mix(in srgb, var(--panel) 55%, var(--well));
+  overflow-y: auto;
 }
-.circle-row:hover { background: var(--hover); color: var(--ink); }
-.circle-row.active { background: var(--accent-soft); color: var(--ink); }
-.circle-row.active::before {
+.nav-col { flex: 1; min-width: 0; display: flex; flex-direction: column; min-height: 0; }
+.circle-list { list-style: none; padding: 0; display: flex; flex-direction: column; align-items: center; gap: 10px; }
+.circle-tile {
+  position: relative;
+  width: 40px;
+  height: 40px;
+  border: none;
+  border-radius: 13px;
+  color: rgba(255, 255, 255, 0.94);
+  font: 800 13px var(--sans);
+  letter-spacing: -0.01em;
+  cursor: pointer;
+  opacity: 0.62;
+  transition: opacity var(--fast) var(--ease), box-shadow var(--fast) var(--ease);
+}
+.circle-tile:hover { opacity: 1; }
+.circle-tile.active {
+  opacity: 1;
+  box-shadow: 0 0 0 2px var(--well), 0 0 0 4px var(--accent);
+}
+.circle-tile.active::before {
   content: '';
   position: absolute;
-  left: -8px;
-  top: 4px;
-  bottom: 4px;
-  width: 2px;
+  left: -10px;
+  top: 9px;
+  bottom: 9px;
+  width: 3px;
+  border-radius: 3px;
   background: var(--accent);
 }
-.circle-row .circle-name {
-  flex: 1;
-  min-width: 0;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-  font-weight: 550;
-  font-size: 13px;
-}
-.circle-row.add { color: var(--ink-mute); }
-.circle-row.add .add-tile {
-  width: 22px;
-  height: 22px;
+.circle-tile.add {
+  background: none;
+  border: 1.5px dashed var(--hairline-strong);
+  color: var(--ink-mute);
   display: grid;
   place-items: center;
-  border: 1px dashed var(--hairline-strong);
-  flex-shrink: 0;
+  opacity: 1;
 }
-.rail-form { padding: 3px 8px; }
+.circle-tile.add:hover { color: var(--ink); border-color: var(--ink-mute); }
+.rail-add-slot { position: relative; }
+.rail-form {
+  position: absolute;
+  left: 52px;
+  top: 0;
+  z-index: 46;
+  width: 190px;
+  padding: 8px;
+  background: var(--raised);
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--r);
+  box-shadow: var(--overlay-shadow);
+}
 .rail-form input {
   width: 100%;
   background: var(--well);
   border: 1px solid var(--ink-dim);
-  border-radius: var(--r);
+  border-radius: var(--r-sm);
   padding: 6px 9px;
   font-size: 13px;
 }
+
+/* nav column header: the circle's name lives here, not in a rail row */
+.circle-head { padding: 14px 14px 12px; border-bottom: 1px solid var(--hairline); }
+.circle-head-name { font-size: 15px; font-weight: 750; letter-spacing: -0.02em; }
+.circle-head-meta { margin-top: 3px; font-size: var(--text-xs); color: var(--ink-mute); letter-spacing: 0.04em; }
 
 /* rooms + voice */
 .channels { flex: 1; min-height: 0; display: flex; flex-direction: column; }
@@ -541,6 +562,28 @@ kbd {
   font-size: 13px;
 }
 
+/* channel-row unread pill + voice live chip */
+.channel .chan-unread { margin-left: auto; }
+.channel .chan-flag + .chan-unread { margin-left: 6px; }
+.live-chip {
+  margin-left: auto;
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  font: 700 var(--text-xs) var(--mono);
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
+  color: var(--ok);
+}
+.live-chip::before {
+  content: '';
+  width: 6px;
+  height: 6px;
+  border-radius: var(--r-pill);
+  background: var(--ok);
+  box-shadow: 0 0 8px var(--ok);
+}
+
 /* voice */
 .voice-list { flex-shrink: 0; padding-bottom: 10px; }
 .voice-row { display: flex; align-items: center; gap: 4px; }
@@ -568,11 +611,16 @@ kbd {
 }
 .voice-participants {
   list-style: none;
-  padding: 2px 0 6px 30px;
+  margin: 4px 8px 8px;
+  padding: 8px 10px;
   display: flex;
   flex-direction: column;
-  gap: 3px;
+  gap: 4px;
+  background: var(--ok-soft);
+  border: 1px solid rgba(61, 220, 132, 0.22);
+  border-radius: var(--r);
 }
+[data-theme='paper'] .voice-participants { border-color: rgba(47, 138, 87, 0.3); }
 .voice-participants li {
   display: flex;
   align-items: center;
@@ -582,7 +630,14 @@ kbd {
 }
 .voice-participants li.me { color: var(--ink); }
 .voice-participants li.me::after { content: '·you'; color: var(--ink-mute); }
-.voice-participants .link-state { color: var(--ink-mute); font-size: var(--text-xs); }
+.voice-participants li { min-width: 0; }
+.voice-participants .link-state {
+  color: var(--ink-mute);
+  font-size: var(--text-xs);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .voice-participants .vp-name { white-space: nowrap; }
 /* who's talking: the seal lights up and lifts while sound is flowing */
 .voice-participants li.speaking { color: var(--ink); }
@@ -604,6 +659,15 @@ kbd {
   transition: color .15s ease, opacity .15s ease;
 }
 .voice-participants li.speaking .voice-meter { color: var(--ok); opacity: 1; }
+
+/* roster presence: only what this device truly knows (calls) */
+.member-col { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+.member-col .member-name { text-align: left; }
+.member-presence { font: 500 var(--text-xs) var(--mono); color: var(--ok); }
+.section-label.member-group { padding-top: 10px; }
+.section-label.member-group.live .overline { color: var(--ok); }
+.member-list.in-call { flex: 0 0 auto; }
+.member.speaking .seal-avatar { box-shadow: 0 0 0 2px var(--ok), 0 0 10px var(--ok-soft); }
 
 /* direct call: a call button on each roster row */
 .member-call { color: var(--ink-mute); padding: 2px 3px; display: inline-grid; place-items: center; }
@@ -1126,6 +1190,7 @@ kbd {
   padding: 5px 6px;
   border-radius: var(--r);
 }
+.member .member-col .member-name { font: 500 13px var(--mono); }
 .member:hover { background: var(--hover); }
 .member-name {
   background: none;
@@ -1759,6 +1824,48 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
   color: var(--ink-mute);
 }
 
+/* the conversation header's call affordance */
+.pane-call { margin-left: 12px; flex-shrink: 0; padding: 5px 12px; }
+.pane-call.live { color: var(--ok); border-color: var(--ok); }
+.pane-call.live:hover { background: var(--ok-soft); }
+
+/* a game launch as a first-class message */
+.game-invite {
+  display: flex;
+  max-width: 440px;
+  margin: 4px 0;
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--r);
+  background: var(--panel);
+  overflow: hidden;
+}
+.game-invite .gi-art {
+  width: 76px;
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  color: rgba(255, 255, 255, 0.9);
+}
+.game-invite .gi-body {
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+  padding: 10px 13px 11px;
+}
+.game-invite .gi-title { font-weight: 700; font-size: 13.5px; letter-spacing: -0.01em; }
+.game-invite .gi-sub {
+  font-size: var(--text-xs);
+  color: var(--ink-mute);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.game-invite .gi-actions { display: flex; gap: 7px; margin-top: 7px; }
+.game-invite .gi-actions .button { padding: 5px 12px; }
+.button.live { color: var(--ok); border-color: var(--ok); }
+.button.live:hover { background: var(--ok-soft); border-color: var(--ok); }
+
 /* ------------------------------------------------------------- game shelf -- */
 /* The hub's centerpiece: pointers to games living on other servers. Covers
    carry each game's derived hue — the one place the chrome allows a wash of
@@ -2012,7 +2119,8 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
 
   /* comfortable touch targets */
   .icon-btn { width: 36px; height: 36px; }
-  .circle-row { padding: 8px; }
+  .rail { width: 64px; }
+  .circle-tile { width: 44px; height: 44px; }
   .channel { padding: 8px; }
   .member { padding: 8px 6px; }
   .voice-join { padding: 5px 12px; }

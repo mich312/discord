@@ -10,6 +10,7 @@ export default function Channels({
   activeChannel,
   me,
   canManage,
+  unreads,
   onSelect,
   onSettings,
   onCreate,
@@ -27,6 +28,13 @@ export default function Channels({
 
   return (
     <aside className="channels">
+      <div className="circle-head">
+        <div className="circle-head-name">{server.name}</div>
+        <div className="circle-head-meta mono">
+          {server.members.length} member{server.members.length === 1 ? '' : 's'} · epoch{' '}
+          {String(server.epoch).padStart(2, '0')} · sealed
+        </div>
+      </div>
       {/* The circle's game hub — where clicking the circle drops you.
           activeChannel === null means "on the hub". */}
       <ul className="channel-list overview-entry">
@@ -70,6 +78,11 @@ export default function Channels({
                     <Clock size={11} />
                   </span>
                 ) : null}
+                {ch !== activeChannel && (unreads?.[ch] ?? 0) > 0 && (
+                  <span className="unread-badge chan-unread" data-testid={`chan-unread-${ch}`}>
+                    {unreads[ch]}
+                  </span>
+                )}
               </button>
               {canManage && (
                 <button
@@ -146,6 +159,11 @@ export default function Channels({
                       <Wave size={13} />
                     </span>
                     {ch}
+                    {participants.length > 0 && (
+                      <span className="live-chip" data-testid={`voice-live-${ch}`}>
+                        {participants.length} live
+                      </span>
+                    )}
                   </span>
                 )}
                 {joined ? (

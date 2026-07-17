@@ -182,6 +182,9 @@ export default function App() {
     if (state.modal || paletteOpen) setDrawer(null);
   }, [state.modal, paletteOpen]);
 
+  // Device-local unread counts for the sidebar pills — same digest the
+  // hub uses, keyed on everything that can move it.
+  const [unreads, setUnreads] = useState({});
   // Load history whenever the active channel changes — or when stored
   // messages changed underneath us (history backfill, auto-delete prune).
   const { server, channel } = state.active;
@@ -193,10 +196,22 @@ export default function App() {
   }, [server, channel, state.messagesRev]);
 
   // Whatever is on screen is read: keep the device-local seen marker in
-  // step so the home base's unread counts mean "since you last looked".
+  // step so the hub's unread counts mean "since you last looked".
   useEffect(() => {
     if (server && channel) controllerRef.current?.markSeen(server, channel);
   }, [server, channel, state.messages]);
+
+  useEffect(() => {
+    if (!server) return void setUnreads({});
+    let alive = true;
+    controllerRef.current
+      ?.channelDigest(server)
+      .then((d) => alive && setUnreads(Object.fromEntries(d.map((x) => [x.channel, x.unread]))))
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [server, channel, state.messagesRev, state.messages]);
 
   // Auto-dismiss toasts.
   useEffect(() => {
@@ -226,13 +241,18 @@ export default function App() {
 
   // Launch a game from the shelf: the game takes the main pane, and the
   // circle's first room docks beside it so the conversation rides along.
-  const launchGame = (g) => {
+  // Launching also drops a join card into that room — late arrivals get
+  // a one-tap way in, which is the whole point of a shared shelf.
+  const launchGame = (g, { announce = true } = {}) => {
     const ch = channel ?? activeServer?.channels[0];
     if (!ch) return;
     dispatch({ type: 'select', server, channel: ch });
     setStage(false);
     setGame(g);
     setDrawer(null);
+    if (announce && !activeServer?.restored) {
+      controllerRef.current?.sendGameCard(server, ch, g).catch(() => {});
+    }
   };
 
   const closeGame = () => {
@@ -400,11 +420,13 @@ export default function App() {
               setDrawer(null);
             }}
           />
+          <div className="nav-col">
           {activeServer && (
             <Channels
               server={activeServer}
               activeChannel={channel}
               me={state.me}
+              unreads={unreads}
               canManage={canManage && !activeServer.restored}
               onSelect={(ch) => {
                 dispatch({ type: 'select', server, channel: ch });
@@ -457,6 +479,7 @@ export default function App() {
             <button className="icon-btn" title="settings" data-testid="open-settings" onClick={openSettings}>
               <Gear size={14} />
             </button>
+          </div>
           </div>
         </nav>
         {activeServer && game && channel ? (
@@ -522,6 +545,15 @@ export default function App() {
                     .catch((e) => dispatch({ type: 'toast', text: e.message }))
                 }
                 fetchFile={(file) => controllerRef.current.fetchFile(file)}
+                voice={state.voice}
+                onVoiceJoin={(ch) =>
+                  controllerRef.current.voice
+                    .join(server, ch)
+                    .then(() => openStage())
+                    .catch((e) => dispatch({ type: 'toast', text: `voice: ${e.message}` }))
+                }
+                onOpenStage={openStage}
+                onLaunchGame={(g) => launchGame(g, { announce: false })}
               />
             ) : (
               <Overview
@@ -561,6 +593,7 @@ export default function App() {
               server={activeServer}
               me={state.me}
               canManage={canManage}
+              voice={state.voice}
               onCall={(peer) => {
                 setDrawer(null);
                 controllerRef.current.voice

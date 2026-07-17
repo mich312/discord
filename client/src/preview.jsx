@@ -87,6 +87,7 @@ const messages = [
   { sender: 'charlie', text: 'found my way in via the link, reading up now', ts: now - 24.8 * H },
   { sender: 'alice', text: 'dropped 0.2 up front, track temp is way up', ts: now - 3 * H },
   { sender: 'alice', file: { name: 'tyre-temps.png', mime: 'image/png', size: 48213 }, ts: now - 3 * H + 30e3 },
+  { sender: 'bob', game: { id: 'g1', name: 'Hex Gambit', kind: 'activity' }, ts: now - 2.5 * H },
   { sender: 'alice', text: 'left front is the one to watch', ts: now - 3 * H + 55e3 },
   { sender: 'dana', text: 'trailer leaves at 6am sharp — pack the spare diffuser tonight', ts: now - 2.2 * H },
   { sender: 'bob', file: { name: 'stint-plan.pdf', mime: 'application/pdf', size: 182044 }, ts: now - 1.1 * H },
@@ -246,11 +247,15 @@ function PreviewShell({ empty = false, banner = false, modal = null, palette = f
             }}
             onCreate={noop}
           />
+          <div className="nav-col">
           {activeServer && (
             <Channels
               server={activeServer}
               activeChannel={active.channel}
               me={me}
+              unreads={Object.fromEntries(
+                (digestMock[activeServer.id] ?? []).map((d) => [d.channel, d.unread])
+              )}
               onSelect={(ch) => {
                 setActive({ ...active, channel: ch });
                 setDrawer(null);
@@ -269,6 +274,7 @@ function PreviewShell({ empty = false, banner = false, modal = null, palette = f
             </span>
             <button className="icon-btn" title="identity key"><Key size={14} /></button>
             <button className="icon-btn" title="alerts"><Bell size={14} /></button>
+          </div>
           </div>
         </nav>
         {activeServer && liveGame && active.channel ? (
@@ -315,6 +321,13 @@ function PreviewShell({ empty = false, banner = false, modal = null, palette = f
                   if ((f.mime ?? '').startsWith('image/')) return PNG;
                   throw new Error('preview: no blob store');
                 }}
+                voice={voice}
+                onVoiceJoin={noop}
+                onOpenStage={noop}
+                onLaunchGame={(g) => {
+                  setActive({ ...active, channel: activeServer.channels[0] });
+                  setLiveGame(g);
+                }}
               />
             ) : (
               <Overview
@@ -355,7 +368,7 @@ function PreviewShell({ empty = false, banner = false, modal = null, palette = f
                 }
               />
             )}
-            <Members server={activeServer} me={me} onAdd={noop} onMember={() => setOpenModal(modals['modal-safety'])} />
+            <Members server={activeServer} me={me} voice={voice} onAdd={noop} onMember={() => setOpenModal(modals['modal-safety'])} />
           </>
         ) : (
           <div className="empty-state">

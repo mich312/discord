@@ -34,7 +34,8 @@ export async function openHistoryEntry(hkeyB64, payloadB64) {
 /** Content identity of a message, for deduplicating a history backfill
     against messages this device already received live over MLS. */
 export function messageFingerprint(m) {
-  return `${m.sender}|${m.ts}|${m.file ? `f:${m.file.blob}` : `t:${m.text ?? ''}`}`;
+  const body = m.file ? `f:${m.file.blob}` : m.game ? `g:${m.game.id}` : `t:${m.text ?? ''}`;
+  return `${m.sender}|${m.ts}|${body}`;
 }
 
 /** The circles-backup key: derived deterministically from the identity
