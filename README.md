@@ -21,13 +21,20 @@ threat-model sections still apply verbatim.
 
 - **Text channels** inside E2EE servers — channel structure and server
   names travel *inside* the encryption; the relay never learns them.
-- **Home base** — picking a circle lands on its home base: the next team
-  event with a live countdown, per-room unread counts with the latest
-  line (device-local catch-up), and a noticeboard any member can pin to
-  (entries are authored by the MLS sender; author or admin unpins).
-  Admins set the event, blurb, and pinned links. Joiners inherit the page
-  via the encrypted metadata rebroadcast and it rides the encrypted
-  backup — the relay never learns what a circle says about itself.
+- **Game hub** — picking a circle lands on its hub: the next event with a
+  live countdown, per-room unread counts with the latest line
+  (device-local catch-up), a noticeboard any member can pin to (entries
+  are authored by the MLS sender; author or admin unpins) — and **the
+  shelf**: the games this circle plays, living on their own servers. Web
+  games launch embedded in a sandboxed iframe with the room's chat docked
+  beside them and the call riding along; native game servers (Minecraft,
+  Factorio…) get address cards. The registry travels inside the
+  encryption like channel names, so the relay never learns what a circle
+  plays — and the UI says plainly what E2EE can't cover: connecting to a
+  game shows that game's host your traffic, exactly like opening a pinned
+  link. Admins set the event, blurb, pinned links, and the shelf. Joiners
+  inherit the page via the encrypted metadata rebroadcast and it rides
+  the encrypted backup.
 - **Invite links** (`?j=<id>#k=<key>`) — the decryption key rides in the
   URL fragment, which browsers never transmit. Joining uses MLS External
   Commits, so nobody has to be online to let you in. Link-joiners are

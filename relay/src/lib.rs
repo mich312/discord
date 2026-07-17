@@ -30,11 +30,15 @@ use tower_http::set_header::SetResponseHeaderLayer;
 ///   from object URLs; the favicon is a data: SVG.
 /// - `style-src 'unsafe-inline'`: React style attributes. CSS injection
 ///   is not in the threat model script injection is.
+/// - `frame-src 'self' https:`: the game hub embeds web games from the
+///   shelf in sandboxed iframes — other servers' pages, over TLS only.
+///   The frame is a separate origin; it can't touch this page or its keys.
 /// The same header rides on every response (worker.js and sw.js get their
 /// own CSP from their response headers, so the worker is covered too).
 const CSP: &str = "default-src 'self'; script-src 'self' 'wasm-unsafe-eval'; \
     worker-src 'self'; connect-src 'self'; img-src 'self' blob: data:; \
     media-src blob:; style-src 'self' 'unsafe-inline'; object-src 'none'; \
+    frame-src 'self' https:; \
     base-uri 'none'; form-action 'self'; frame-ancestors 'none'";
 
 pub fn router(app: Arc<App>) -> Router {

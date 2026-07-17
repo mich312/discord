@@ -5,6 +5,8 @@
 // record (and encrypted backup). No I/O in this module; the controller
 // owns sending/receiving, this owns the shapes and the merge rules.
 
+import { normalizeGames } from './games.js';
+
 export const BLURB_MAX = 4000;
 export const LINKS_MAX = 12;
 export const NOTICE_MAX = 500;
@@ -14,8 +16,8 @@ const MIN = 60e3;
 const HOUR = 3600e3;
 const DAY = 86400e3;
 
-/** The admin-edited half of the page: blurb, pinned links, and the next
-    team event. Returns null when there is nothing to keep. */
+/** The admin-edited half of the page: blurb, pinned links, the next team
+    event — and the game shelf. Returns null when there is nothing to keep. */
 export function normalizeOverview(ov) {
   if (!ov || typeof ov !== 'object') return null;
   const blurb = typeof ov.blurb === 'string' ? ov.blurb.slice(0, BLURB_MAX).trim() : '';
@@ -27,8 +29,9 @@ export function normalizeOverview(ov) {
     }))
     .filter((l) => l.url);
   const event = normalizeEvent(ov.event);
-  if (!blurb && links.length === 0 && !event) return null;
-  return { blurb, links, ...(event ? { event } : {}) };
+  const games = normalizeGames(ov.games);
+  if (!blurb && links.length === 0 && !event && games.length === 0) return null;
+  return { blurb, links, ...(event ? { event } : {}), ...(games.length ? { games } : {}) };
 }
 
 function normalizeEvent(ev) {

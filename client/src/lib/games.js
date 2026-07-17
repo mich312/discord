@@ -1,0 +1,61 @@
+// The game shelf: pure rules for the circle's game registry. Games live on
+// other servers — quorum only keeps sealed pointers to them. The registry
+// rides inside the overview payload, so it crosses devices in MLS envelopes
+// and reaches joiners via the metadata rebroadcast and the encrypted backup;
+// the relay never learns what a circle plays. Same discipline as overview.js:
+// whitelisted fields, bounded sizes, no I/O.
+
+export const GAMES_MAX = 24;
+export const GAME_NAME_MAX = 60;
+export const GAME_URL_MAX = 2048;
+export const GAME_NOTE_MAX = 140;
+
+/** Two kinds of game:
+    - 'activity': a web game, embedded in the app in a sandboxed iframe
+    - 'server':   a native game server (Minecraft, Factorio…) — an address
+                  card; joining happens in the game's own client. */
+const KINDS = new Set(['activity', 'server']);
+
+export function normalizeGame(g) {
+  if (!g || typeof g !== 'object') return null;
+  const id = String(g.id ?? '').slice(0, 40);
+  const name = String(g.name ?? '').slice(0, GAME_NAME_MAX).trim();
+  const url = String(g.url ?? '').slice(0, GAME_URL_MAX).trim();
+  const kind = KINDS.has(g.kind) ? g.kind : 'activity';
+  const note = String(g.note ?? '').slice(0, GAME_NOTE_MAX).trim();
+  if (!id || !name || !url) return null;
+  if (kind === 'activity' && !activitySrc(url)) return null;
+  return { id, name, url, kind, ...(note ? { note } : {}) };
+}
+
+export function normalizeGames(list) {
+  return (Array.isArray(list) ? list : [])
+    .slice(0, GAMES_MAX)
+    .map(normalizeGame)
+    .filter(Boolean);
+}
+
+/** What an activity iframe may load: https:// anywhere, or a same-origin
+    path ("/games/…") for bundled demos. Anything else — javascript:, data:,
+    protocol-relative — is refused so a hostile envelope can't turn the
+    shelf into a script injector. */
+export function activitySrc(url) {
+  if (/^https:\/\//i.test(url)) return url;
+  if (/^\/[^/\\]/.test(url)) return url;
+  return null;
+}
+
+/** Display host for the honesty line: where this game actually lives. */
+export function gameHost(game) {
+  if (game.kind === 'server') return game.url;
+  try {
+    const u = new URL(game.url, 'https://this-app');
+    return u.host === 'this-app' ? 'bundled with this app' : u.host;
+  } catch {
+    return game.url;
+  }
+}
+
+export function makeGameId(now = Date.now()) {
+  return `g${now.toString(36)}${Math.floor(Math.random() * 46656).toString(36)}`;
+}

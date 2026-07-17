@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import Seal from './Seal.jsx';
 import VoiceMeter from './VoiceMeter.jsx';
-import { Hash, Wave, Plus, Gear, Clock, CircleGlyph } from './icons.jsx';
+import { Hash, Wave, Plus, Gear, Clock, Gamepad } from './icons.jsx';
 
 // Rooms and voice tables of the active circle. Channel names travel inside
 // the encryption, so even this sidebar is knowledge the relay never has.
@@ -27,8 +27,8 @@ export default function Channels({
 
   return (
     <aside className="channels">
-      {/* The circle's home base — where clicking the circle drops you.
-          activeChannel === null means "on the home base". */}
+      {/* The circle's game hub — where clicking the circle drops you.
+          activeChannel === null means "on the hub". */}
       <ul className="channel-list overview-entry">
         <li>
           <button
@@ -37,9 +37,9 @@ export default function Channels({
             onClick={() => onSelect(null)}
           >
             <span className="glyph">
-              <CircleGlyph size={13} />
+              <Gamepad size={14} />
             </span>
-            home base
+            game hub
           </button>
         </li>
       </ul>

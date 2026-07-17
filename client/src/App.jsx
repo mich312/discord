@@ -14,6 +14,7 @@ import Overview from './components/Overview.jsx';
 import Members from './components/Members.jsx';
 import CallPanel from './components/CallPanel.jsx';
 import CallStage from './components/CallStage.jsx';
+import GameStage from './components/GameStage.jsx';
 import { callChatChannel } from './lib/controller.js';
 import Settings from './components/Settings.jsx';
 import Seal from './components/Seal.jsx';
@@ -119,6 +120,9 @@ export default function App() {
   // in the call, the shared screen, and the call's own chat thread (the
   // active channel becomes `voice:<room>` so the message machinery follows).
   const [stage, setStage] = useState(false);
+  // A web game from the shelf, playing in the main pane with the room's
+  // chat (and the call, if one is on) docked beside it.
+  const [game, setGame] = useState(null);
   // Where to land when the stage closes — the text channel we came from.
   const stageReturn = useRef(null);
   const controllerRef = useRef(null);
@@ -129,7 +133,7 @@ export default function App() {
     // status bar) in step with the app surface.
     document
       .querySelector('meta[name="theme-color"]')
-      ?.setAttribute('content', theme === 'paper' ? '#e6e4dd' : '#0e0e0f');
+      ?.setAttribute('content', theme === 'paper' ? '#e9e6e0' : '#09090a');
     try {
       localStorage.setItem('quorum-theme', theme);
     } catch {
@@ -212,10 +216,29 @@ export default function App() {
   const openStage = () => {
     const v = controllerRef.current?.voice?.active;
     if (!v) return;
+    // A running game keeps the pane — the call rides in its dock instead.
+    if (game) return;
     if (!stage) stageReturn.current = state.active;
     dispatch({ type: 'select', server: v.server, channel: callChatChannel(v.channel) });
     setStage(true);
     setDrawer(null);
+  };
+
+  // Launch a game from the shelf: the game takes the main pane, and the
+  // circle's first room docks beside it so the conversation rides along.
+  const launchGame = (g) => {
+    const ch = channel ?? activeServer?.channels[0];
+    if (!ch) return;
+    dispatch({ type: 'select', server, channel: ch });
+    setStage(false);
+    setGame(g);
+    setDrawer(null);
+  };
+
+  const closeGame = () => {
+    setGame(null);
+    // Land back on the hub the game was launched from.
+    if (server) dispatch({ type: 'select', server, channel: null });
   };
 
   const closeStage = () => {
@@ -365,9 +388,10 @@ export default function App() {
             servers={state.servers}
             active={server}
             onSelect={(id) => {
-              // Picking a circle lands on its overview page, not a room.
+              // Picking a circle lands on its game hub, not a room.
               dispatch({ type: 'select', server: id, channel: null });
               setStage(false); // navigating away swaps the stage for the rooms
+              setGame(null);
               setDrawer(null);
             }}
             onCreate={async (name) => {
@@ -385,6 +409,7 @@ export default function App() {
               onSelect={(ch) => {
                 dispatch({ type: 'select', server, channel: ch });
                 setStage(false); // picking a text room dismisses the stage
+                setGame(null); // …and the game
                 setDrawer(null);
               }}
               onSettings={(ch) =>
@@ -434,7 +459,29 @@ export default function App() {
             </button>
           </div>
         </nav>
-        {activeServer && stage && state.voice.active ? (
+        {activeServer && game && channel ? (
+          <GameStage
+            game={game}
+            server={activeServer}
+            channel={channel}
+            me={state.me}
+            messages={state.messages}
+            canSend={!activeServer.restored}
+            onSend={(text) =>
+              controllerRef.current
+                .sendChat(server, channel, text)
+                .catch((e) => dispatch({ type: 'toast', text: e.message }))
+            }
+            voice={state.voice}
+            onVoiceJoin={(ch) =>
+              controllerRef.current.voice
+                .join(server, ch)
+                .catch((e) => dispatch({ type: 'toast', text: `voice: ${e.message}` }))
+            }
+            onVoiceLeave={() => controllerRef.current.voice.leave()}
+            onClose={closeGame}
+          />
+        ) : activeServer && stage && state.voice.active ? (
           <CallStage
             voice={state.voice}
             manager={controllerRef.current.voice}
@@ -492,6 +539,7 @@ export default function App() {
                     .then(() => openStage())
                     .catch((e) => dispatch({ type: 'toast', text: `voice: ${e.message}` }))
                 }
+                onLaunchGame={launchGame}
                 onSave={(ov) =>
                   controllerRef.current
                     .setOverview(server, ov)
@@ -649,6 +697,7 @@ export default function App() {
             onNavigate={(srv, ch) => {
               dispatch({ type: 'select', server: srv, channel: ch });
               setStage(false);
+              setGame(null);
             }}
             onClose={() => setPaletteOpen(false)}
           />

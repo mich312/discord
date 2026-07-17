@@ -5,7 +5,7 @@
 //   /preview.html?view=app&theme=paper
 //   /preview.html?view=onboarding | invited | empty | banner | overview
 //   /preview.html?view=modal-safety | modal-invite | modal-secure | modal-identity
-//   /preview.html?view=palette | call | call-share
+//   /preview.html?view=palette | call | call-share | game
 import React, { useState } from 'react';
 import { createRoot } from 'react-dom/client';
 import './styles.css';
@@ -19,6 +19,7 @@ import Members from './components/Members.jsx';
 import Modal from './components/Modal.jsx';
 import Onboarding from './components/Onboarding.jsx';
 import CallStage from './components/CallStage.jsx';
+import GameStage from './components/GameStage.jsx';
 import Seal from './components/Seal.jsx';
 import { Key, Bell, ShieldCheck, QuorumGlyph } from './components/icons.jsx';
 
@@ -43,6 +44,12 @@ const servers = [
     chanMeta: { 'pit-wall': { topic: 'live timing chatter during sessions' } },
     roles: { alice: 'admin' },
     overview: {
+      games: [
+        { id: 'g1', name: 'Hex Gambit', url: '/games/hexgambit.html', kind: 'activity', note: 'bundled demo — local two-player chess' },
+        { id: 'g2', name: 'Craftworld', url: 'mc.raceteam.example:25565', kind: 'server', note: 'survival, keep-inventory off' },
+        { id: 'g3', name: 'Tanks! Night Ops', url: 'https://tanks.arcade.example/room/race-team', kind: 'activity' },
+        { id: 'g4', name: 'Factory Floor', url: 'factorio.raceteam.example:34197', kind: 'server' },
+      ],
       blurb:
         'Pit crew HQ for the season. Race weekends run out of #logistics; #pit-wall is live timing only.',
       links: [
@@ -187,13 +194,14 @@ const modals = {
   },
 };
 
-function PreviewShell({ empty = false, banner = false, modal = null, palette = false, stage = null, landing = false }) {
+function PreviewShell({ empty = false, banner = false, modal = null, palette = false, stage = null, landing = false, game = null }) {
   const me = 'alice';
-  // channel: null means the circle's overview page, same as App.jsx.
+  // channel: null means the circle's hub page, same as App.jsx.
   const [active, setActive] = useState({
     server: empty ? null : 'srv-race',
-    channel: landing ? null : 'general',
+    channel: landing && !game ? null : 'general',
   });
+  const [liveGame, setLiveGame] = useState(game);
   const [overviews, setOverviews] = useState({});
   const [noticesBy, setNoticesBy] = useState({});
   const [openModal, setOpenModal] = useState(modal);
@@ -263,7 +271,24 @@ function PreviewShell({ empty = false, banner = false, modal = null, palette = f
             <button className="icon-btn" title="alerts"><Bell size={14} /></button>
           </div>
         </nav>
-        {activeServer && stage ? (
+        {activeServer && liveGame && active.channel ? (
+          <GameStage
+            game={liveGame}
+            server={activeServer}
+            channel={active.channel}
+            me={me}
+            messages={callMessages}
+            canSend
+            onSend={noop}
+            voice={voice}
+            onVoiceJoin={noop}
+            onVoiceLeave={noop}
+            onClose={() => {
+              setLiveGame(null);
+              setActive({ ...active, channel: null });
+            }}
+          />
+        ) : activeServer && stage ? (
           <CallStage
             voice={stage}
             manager={mockVoiceManager}
@@ -306,6 +331,10 @@ function PreviewShell({ empty = false, banner = false, modal = null, palette = f
                 loadDigest={async (id) => digestMock[id] ?? []}
                 onSelectChannel={(ch) => setActive({ ...active, channel: ch })}
                 onVoiceJoin={noop}
+                onLaunchGame={(g) => {
+                  setActive({ ...active, channel: activeServer.channels[0] });
+                  setLiveGame(g);
+                }}
                 onSave={(ov) => setOverviews((o) => ({ ...o, [activeServer.id]: ov }))}
                 onAddNotice={(text) =>
                   setNoticesBy((by) => ({
@@ -376,6 +405,13 @@ function pick() {
   if (view === 'banner') return <PreviewShell banner />;
   if (view === 'palette') return <PreviewShell palette />;
   if (view === 'call') return <PreviewShell stage={stageVoice([])} />;
+  if (view === 'game')
+    return (
+      <PreviewShell
+        landing
+        game={{ id: 'g1', name: 'Hex Gambit', url: '/games/hexgambit.html', kind: 'activity' }}
+      />
+    );
   if (view === 'call-share') return <PreviewShell stage={stageVoice(['bob'])} />;
   if (modals[view]) return <PreviewShell modal={modals[view]} />;
   return <PreviewShell />;

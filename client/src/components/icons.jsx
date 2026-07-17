@@ -190,6 +190,22 @@ export const CircleGlyph = (p) => (
   </Svg>
 );
 
+export const Gamepad = (p) => (
+  <Svg {...p}>
+    <path d="M4.6 4.6h6.8a3.4 3.4 0 0 1 3.3 4.1l-.5 2.4a1.9 1.9 0 0 1-3.3.9l-1-1.2H6.1l-1 1.2a1.9 1.9 0 0 1-3.3-.9l-.5-2.4a3.4 3.4 0 0 1 3.3-4.1Z" />
+    <path d="M5.4 7v2M4.4 8h2" />
+    <circle cx="10.4" cy="7.4" r="0.7" fill="currentColor" stroke="none" />
+    <circle cx="11.8" cy="8.8" r="0.7" fill="currentColor" stroke="none" />
+  </Svg>
+);
+
+export const External = (p) => (
+  <Svg {...p}>
+    <path d="M6.5 3.5H4.2A1.7 1.7 0 0 0 2.5 5.2v6.6a1.7 1.7 0 0 0 1.7 1.7h6.6a1.7 1.7 0 0 0 1.7-1.7V9.5" />
+    <path d="M9.5 2.5h4v4M13.2 2.8 7.5 8.5" />
+  </Svg>
+);
+
 export const Seal8 = (p) => (
   <Svg {...p}>
     <circle cx="8" cy="8" r="5.8" />

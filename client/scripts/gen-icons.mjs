@@ -1,5 +1,5 @@
 // Generate the PWA icon set (public/icons/*.png) from the brand glyph —
-// a registration mark holding three modules, signal yellow on carbon.
+// a registration mark holding three modules, coral on afterdark black.
 // The glyph is pure rectangles, so the PNGs are rasterized right here with
 // node's zlib: no canvas, no image dependency, reproducible output.
 // Run once (outputs are committed): node scripts/gen-icons.mjs
@@ -7,8 +7,8 @@ import { deflateSync } from 'node:zlib';
 import { mkdirSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-const WELL = [0x0e, 0x0e, 0x0f]; // --well (carbon)
-const ACCENT = [0xe5, 0xc2, 0x35]; // --accent (signal yellow)
+const WELL = [0x09, 0x09, 0x0a]; // --well (afterdark)
+const ACCENT = [0xff, 0x54, 0x70]; // --accent (coral)
 
 // --- minimal PNG encoder (8-bit RGB, no alpha) ------------------------------
 const crcTable = Array.from({ length: 256 }, (_, n) => {
