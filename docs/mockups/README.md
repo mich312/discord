@@ -17,7 +17,7 @@ interactive version (two directions × five screens, with concept notes).
 
 Directions:
 
-- **01 · Afterdark** — private-arcade look: OLED blue-black, coral accent,
+- **01 · Afterdark** — private-arcade look: true OLED black, coral accent,
   presence-green strictly meaning "live", cover art carries the energy.
 - **02 · The Den** — game night at someone's place: lamplight palette,
   brass accent, serif display. Same layout skeleton, different skin.
