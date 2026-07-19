@@ -41,11 +41,6 @@ services:
       db:
         condition: service_healthy
     restart: unless-stopped
-    # `default` reaches the db (below); `edge` lets the reverse proxy in the
-    # sibling edge/ stack reach this service by name and terminate TLS in front.
-    networks:
-      - default
-      - edge
 
   db:
     image: postgres:16
@@ -65,8 +60,3 @@ services:
 volumes:
   blobs:
   pgdata:
-
-networks:
-  # Owned by the sibling edge/ proxy stack; start that stack first so it exists.
-  edge:
-    external: true
