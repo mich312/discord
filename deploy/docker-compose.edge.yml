@@ -1,0 +1,40 @@
+# Production stack behind a SHARED external reverse proxy (../edge) instead of
+# this repo's own Caddy. Use this overlay when one proxy terminates TLS for
+# several apps on the host and you want domain/cert config to live in one place.
+#
+#   docker compose --env-file deploy/.env \
+#     -f docker-compose.yml \
+#     -f deploy/docker-compose.edge.yml \
+#     -f deploy/docker-compose.turn.yml up --build -d
+#
+# It layers on top of the base docker-compose.yml: drops quorum's host port
+# (the edge proxy reaches it over the `edge` network), points RP_ID/RP_ORIGIN
+# at the HTTPS origin the proxy serves, and joins the shared `edge` network.
+# This is the TLS-terminating alternative to deploy/docker-compose.tls.yml —
+# use one or the other, not both. The `edge` network is owned by the edge
+# stack; create it (or start edge) before bringing this up.
+
+services:
+  quorum:
+    # Base compose publishes "80:80"; behind the proxy the relay must not be
+    # exposed on the host. `!reset` drops the inherited port mapping.
+    ports: !reset []
+    environment:
+      RP_ID: ${CADDY_DOMAIN}
+      RP_ORIGIN: https://${CADDY_DOMAIN}
+      VAPID_PRIVATE_KEY: ${VAPID_PRIVATE_KEY:-}
+      # The edge proxy overwrites X-Forwarded-For, so rate limits can key on it.
+      TRUST_PROXY: "1"
+      # Voice ICE / TURN (see deploy/docker-compose.turn.yml).
+      ICE_SERVERS: ${ICE_SERVERS:-}
+      TURN_URLS: ${TURN_URLS:-}
+      TURN_SECRET: ${TURN_SECRET:-}
+      TURN_TTL: ${TURN_TTL:-3600}
+    # `default` reaches the db; `edge` lets the shared proxy reach quorum by name.
+    networks:
+      - default
+      - edge
+
+networks:
+  edge:
+    external: true
