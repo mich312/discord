@@ -463,7 +463,7 @@ export class Controller {
           channel: content.ch,
           sender,
           text: content.text,
-          ts: Date.now(),
+          ts: messageTs(content.ts),
         });
         break;
       }
@@ -478,7 +478,7 @@ export class Controller {
           channel: content.ch,
           sender,
           game,
-          ts: Date.now(),
+          ts: messageTs(content.ts),
         });
         break;
       }
@@ -642,7 +642,7 @@ export class Controller {
           channel: content.ch,
           sender,
           file: content.file,
-          ts: Date.now(),
+          ts: messageTs(content.ts),
         });
         break;
       }
@@ -1051,8 +1051,14 @@ export class Controller {
   }
 
   async sendChat(serverId, channel, text) {
-    await this.sendContent(serverId, { k: 'chat', ch: channel, text });
-    const message = { server: serverId, channel, sender: this.me, text, ts: Date.now() };
+    // The timestamp is the sender's, carried on the wire, so every device —
+    // and the kept-history log — stamps this message identically. Otherwise
+    // each recipient's own receive-clock ts would (a) order messages
+    // differently per member and (b) defeat the history dedup, which keys on
+    // ts, duplicating every backfilled line. See `messageTs`.
+    const ts = Date.now();
+    await this.sendContent(serverId, { k: 'chat', ch: channel, text, ts });
+    const message = { server: serverId, channel, sender: this.me, text, ts };
     await this.storeMessage(message);
     this.appendHistory(serverId, channel, message);
   }
@@ -1063,8 +1069,9 @@ export class Controller {
   async sendGameCard(serverId, channel, game) {
     const ref = normalizeGameRef(game);
     if (!ref) return;
-    await this.sendContent(serverId, { k: 'game', ch: channel, game: ref });
-    const message = { server: serverId, channel, sender: this.me, game: ref, ts: Date.now() };
+    const ts = Date.now();
+    await this.sendContent(serverId, { k: 'game', ch: channel, game: ref, ts });
+    const message = { server: serverId, channel, sender: this.me, game: ref, ts };
     await this.storeMessage(message);
     this.appendHistory(serverId, channel, message);
   }
@@ -1552,8 +1559,9 @@ export class Controller {
       blob: blobId,
       key: b64.enc(key),
     };
-    await this.sendContent(serverId, { k: 'file', ch: channel, file });
-    const message = { server: serverId, channel, sender: this.me, file, ts: Date.now() };
+    const ts = Date.now();
+    await this.sendContent(serverId, { k: 'file', ch: channel, file, ts });
+    const message = { server: serverId, channel, sender: this.me, file, ts };
     await this.storeMessage(message);
     this.appendHistory(serverId, channel, message);
   }
@@ -1783,6 +1791,17 @@ export class Controller {
   toast(text) {
     this.dispatch({ type: 'toast', text });
   }
+}
+
+/** A message's timestamp is the sender's clock, carried on the wire, so every
+    device orders and dedupes it identically and it matches the kept-history
+    copy. Older senders (or a hostile payload) may omit it or send garbage; a
+    non-finite/non-positive value falls back to this device's own clock. The
+    history log already trusts the sender's ts, so this only makes live
+    receipt consistent with it. */
+export function messageTs(claimed, now = Date.now()) {
+  const t = Number(claimed);
+  return Number.isFinite(t) && t > 0 ? t : now;
 }
 
 /** A call's conversation thread lives under `voice:<room>` — real E2EE chat
