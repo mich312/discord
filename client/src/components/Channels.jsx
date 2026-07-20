@@ -1,6 +1,5 @@
 import React, { useState } from 'react';
 import Seal from './Seal.jsx';
-import VoiceMeter from './VoiceMeter.jsx';
 import { Hash, Wave, Plus, Gear, Clock, Gamepad } from './icons.jsx';
 
 // Rooms and voice rooms of the active circle. Room names travel inside the
@@ -215,31 +214,37 @@ export default function Channels({
                   </div>
                 </div>
               )}
-              {joined && (
-                <div className="voice-joined-card" data-testid={`voice-participants-${ch}`}>
-                  <span className="overline voice-live-label">in call · {ch}</span>
-                  <ul className="voice-participants">
-                    {(participants.length ? participants : [me]).map((p) => {
-                      const speaking = voice.speaking?.includes(p);
-                      return (
-                        <li
-                          key={p}
-                          className={[p === me ? 'me' : '', speaking ? 'speaking' : ''].filter(Boolean).join(' ') || undefined}
-                          data-testid={`voice-participant-${p}`}
-                          data-speaking={speaking ? 'true' : 'false'}
-                        >
-                          <Seal name={p} size={16} />
-                          <span className="vp-name">{p === me ? 'you' : p}</span>
-                          <VoiceMeter name={p} />
-                          {p !== me && voice.connections[p] && voice.connections[p] !== 'connected' && (
-                            <span className="link-state">· {voice.connections[p]}</span>
-                          )}
-                        </li>
-                      );
-                    })}
-                  </ul>
-                </div>
-              )}
+              {joined && (() => {
+                const inCall = participants.length ? participants : [me];
+                return (
+                  <div className="voice-joined-card" data-testid={`voice-participants-${ch}`}>
+                    <span className="overline voice-live-label">in call · {ch}</span>
+                    <div className="voice-joined-row">
+                      <span className="call-orbs">
+                        {inCall.slice(0, 5).map((p) => {
+                          const speaking = voice.speaking?.includes(p);
+                          const pending =
+                            p !== me && voice.connections[p] && voice.connections[p] !== 'connected';
+                          return (
+                            <span
+                              key={p}
+                              className={['call-orb', speaking ? 'speaking' : '', pending ? 'pending' : '']
+                                .filter(Boolean)
+                                .join(' ')}
+                              data-testid={`voice-participant-${p}`}
+                              data-speaking={speaking ? 'true' : 'false'}
+                              title={p === me ? 'you' : p}
+                            >
+                              <Seal name={p} size={30} title={p === me ? 'you' : p} />
+                            </span>
+                          );
+                        })}
+                        {inCall.length > 5 && <span className="voice-live-more">+{inCall.length - 5}</span>}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })()}
             </li>
           );
         })}

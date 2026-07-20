@@ -653,52 +653,35 @@ kbd {
   border-radius: var(--r);
 }
 [data-theme='paper'] .voice-joined-card { border-color: rgba(47, 138, 87, 0.35); }
-.voice-joined-card .voice-live-label { margin-bottom: 8px; }
-.voice-participants {
-  list-style: none;
-  margin: 0;
-  padding: 0;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-.voice-participants li {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  font: var(--text-sm) var(--mono);
-  color: var(--ink-dim);
-}
-.voice-participants li.me { color: var(--ink); }
-.voice-participants li { min-width: 0; }
-.voice-participants .link-state {
-  color: var(--ink-mute);
-  font-size: var(--text-xs);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.voice-participants .vp-name { white-space: nowrap; }
-/* who's talking: the seal lights up and lifts while sound is flowing */
-.voice-participants li.speaking { color: var(--ink); }
-.voice-participants li svg:first-of-type {
+.voice-joined-card .voice-live-label { margin-bottom: 10px; }
+/* Who's in the call, as a stack of orbs — same language as the "live in …"
+   card above, but each orb pulses while its owner is talking. */
+.voice-joined-row { display: flex; align-items: center; }
+.call-orbs { display: flex; align-items: center; padding-left: 3px; }
+.call-orb {
+  display: inline-flex;
+  margin-right: -8px;
   border-radius: 50%;
-  transition: filter .12s ease, transform .12s ease;
+  transition: transform .16s var(--ease);
 }
-.voice-participants li.speaking svg:first-of-type {
-  filter: drop-shadow(0 0 4px var(--ok));
-  transform: scale(1.08);
+.call-orb .seal-avatar {
+  display: block;
+  border-radius: 50%;
+  box-shadow: 0 0 0 2px var(--ok-soft);
 }
-/* mini scrolling waveform, dim until the speaker is active */
-.voice-participants .voice-meter {
-  margin-left: auto;
-  width: 36px;
-  height: 14px;
-  color: var(--ink-mute);
-  opacity: 0.45;
-  transition: color .15s ease, opacity .15s ease;
+[data-theme='paper'] .call-orb .seal-avatar { box-shadow: 0 0 0 2px #dff1e6; }
+/* not yet connected: dim the orb instead of a text status */
+.call-orb.pending { opacity: 0.45; }
+/* talking: lift, ring, and a soft breathing glow */
+.call-orb.speaking { transform: scale(1.12); z-index: 1; }
+.call-orb.speaking .seal-avatar {
+  box-shadow: 0 0 0 2px var(--ok), 0 0 12px var(--ok);
+  animation: orb-pulse 1.1s var(--ease) infinite;
 }
-.voice-participants li.speaking .voice-meter { color: var(--ok); opacity: 1; }
+@keyframes orb-pulse {
+  0%, 100% { box-shadow: 0 0 0 2px var(--ok), 0 0 6px color-mix(in srgb, var(--ok) 55%, transparent); }
+  50% { box-shadow: 0 0 0 2px var(--ok), 0 0 15px var(--ok); }
+}
 
 /* roster presence: only what this device truly knows (calls) */
 .member-col { flex: 1; min-width: 0; display: flex; flex-direction: column; }
