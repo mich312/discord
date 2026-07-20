@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import Seal from './Seal.jsx';
 import VoiceMeter from './VoiceMeter.jsx';
-import { Wave, X, Lock, Screen } from './icons.jsx';
+import { Wave, X, Lock, Screen, Mic, MicOff } from './icons.jsx';
 
 function timeOf(ts) {
   return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -95,7 +95,8 @@ export default function CallStage({
               data-testid="stage-mute"
               onClick={onToggleMute}
             >
-              {voice.muted ? '🔇 unmute' : '🎙 mute'}
+              {voice.muted ? <MicOff size={14} /> : <Mic size={14} />}
+              {voice.muted ? ' unmute' : ' mute'}
             </button>
           )}
           {iShare ? (

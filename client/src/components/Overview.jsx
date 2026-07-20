@@ -3,7 +3,7 @@ import Seal from './Seal.jsx';
 import { describeAgo, describeUntil, canRemoveNotice } from '../lib/overview.js';
 import { freshPresence, gameHost, lastPlayed, makeGameId, normalizeGame } from '../lib/games.js';
 import { nameHue } from '../lib/avatar.js';
-import { Hash, Wave, Lock, LinkGlyph, Plus, X, ArrowRight, Gamepad, External, Copy } from './icons.jsx';
+import { Hash, Wave, Lock, LinkGlyph, Plus, X, ArrowRight, Gamepad, External, Copy, Check } from './icons.jsx';
 
 // The circle's game hub: what you land on when you pick a circle. Not a
 // brochure — a briefing, with the shelf front and center:
@@ -439,7 +439,8 @@ export default function Overview({
                         data-testid="rsvp-toggle"
                         onClick={() => onRsvp(event.at, !iAmIn)}
                       >
-                        {iAmIn ? '✓ you\u2019re in' : '▶ I\u2019m in'}
+                        {iAmIn ? <Check size={13} /> : null}
+                        {iAmIn ? ' you\u2019re in' : 'I\u2019m in'}
                       </button>
                       {going.length > 0 && (
                         <span className="hub-going" data-testid="rsvp-going">

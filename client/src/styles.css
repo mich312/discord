@@ -237,7 +237,6 @@ kbd {
 .linkish:hover { text-decoration: underline; }
 
 .row { display: flex; gap: 8px; }
-.push-right { margin-left: auto; }
 
 /* ---------------------------------------------------------------- fields -- */
 .field { display: block; margin-bottom: 14px; }
@@ -348,16 +347,6 @@ kbd {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.epoch-chip {
-  font: 500 var(--text-xs) var(--mono);
-  letter-spacing: 0.12em;
-  color: var(--ink-mute);
-  border: 1px solid var(--hairline-strong);
-  border-radius: var(--r-pill);
-  padding: 2px 9px;
-  white-space: nowrap;
-}
-
 .masthead-actions {
   margin-left: auto;
   display: flex;
@@ -1342,7 +1331,6 @@ kbd {
   letter-spacing: 0.08em;
   color: var(--ink-mute);
 }
-.overview-customize { flex-shrink: 0; }
 
 .overview-section { padding: 20px 0 2px; max-width: 74ch; }
 .overview-section > .overline { display: block; margin-bottom: 10px; }
@@ -1543,7 +1531,6 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
 .overview-add-link { justify-self: start; }
 .overview-edit-actions { display: flex; gap: 8px; margin-top: 6px; }
 
-.overview-foot { max-width: 66ch; padding-bottom: 8px; }
 
 /* ------------------------------------------------------------ empty state -- */
 .empty-state {
@@ -2339,7 +2326,6 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
   .masthead-brand { width: auto; gap: 0; }
   .masthead-brand .wordmark { display: none; }
   .masthead-context { gap: 8px; flex: 1; min-width: 0; }
-  .epoch-chip { display: none; }
   .masthead-actions { gap: 2px; }
   .masthead-actions .button { display: none; } /* invite lives in the palette */
   .palette-hint { border: none; padding: 4px 6px; }

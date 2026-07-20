@@ -210,7 +210,7 @@ export default function Channels({
                       data-testid={`voice-join-${ch}`}
                       onClick={() => onVoiceJoin(ch)}
                     >
-                      Join
+                      join
                     </button>
                   </div>
                 </div>
