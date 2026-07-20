@@ -425,6 +425,7 @@ export class Controller {
               chanMeta: record.chanMeta ?? {},
               overview: record.overview ?? null,
               notices: record.notices ?? [],
+              rsvps: record.rsvps ?? {},
             });
           }
         } else {
