@@ -1286,9 +1286,12 @@ kbd {
   cursor: pointer;
   margin-left: 6px;
   padding: 1px 4px;
-  visibility: hidden;
+  /* display:none (not visibility) so the toggle doesn't reserve width at
+     rest — otherwise it silently squeezes short handles to "b.." */
+  display: none;
 }
-.member:hover .role-toggle { visibility: visible; }
+.member:hover .role-toggle,
+.member:focus-within .role-toggle { display: inline-flex; align-items: center; }
 .role-toggle:hover { color: var(--ink); text-decoration: underline; text-underline-offset: 3px; }
 
 .add-member { padding: 10px 14px 0; }
@@ -2309,7 +2312,7 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
 /* Devices without hover can't reveal hover-gated affordances — surface the
    ones that matter and drop the ones that are pure hover decoration. */
 @media (hover: none) {
-  .role-toggle { visibility: visible; }
+  .role-toggle { display: inline-flex; align-items: center; }
   .msg-line { padding-right: 0; }
   .msg-line time { display: none; }
 }
