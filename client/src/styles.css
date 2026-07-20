@@ -630,9 +630,11 @@ kbd {
 /* voice */
 .voice-list { flex-shrink: 0; padding-bottom: 10px; }
 .voice-row { display: flex; align-items: center; gap: 4px; }
-.voice-row .channel { flex: 1; cursor: default; }
+.voice-row .channel { flex: 1; min-width: 0; cursor: default; }
 .voice-row .channel:hover { background: none; color: var(--ink-mute); }
 .voice-row .channel:hover .glyph { color: var(--ink-mute); }
+/* a joined voice room button IS clickable (opens the call view) */
+.voice-row .channel.joined { cursor: pointer; }
 .voice-join {
   font: 600 var(--text-xs) var(--mono);
   letter-spacing: 0.1em;
@@ -652,18 +654,25 @@ kbd {
   color: var(--accent-ink);
   white-space: nowrap;
 }
+/* you're in this call: the row above gets a live treatment, and this card
+   is bound to it — a header so it isn't a bare unlabeled green box. */
+.voice-joined-card {
+  margin: 6px 8px 8px;
+  padding: 10px 12px;
+  background: var(--ok-soft);
+  border: 1px solid rgba(61, 220, 132, 0.25);
+  border-radius: var(--r);
+}
+[data-theme='paper'] .voice-joined-card { border-color: rgba(47, 138, 87, 0.35); }
+.voice-joined-card .voice-live-label { margin-bottom: 8px; }
 .voice-participants {
   list-style: none;
-  margin: 4px 8px 8px;
-  padding: 8px 10px;
+  margin: 0;
+  padding: 0;
   display: flex;
   flex-direction: column;
   gap: 4px;
-  background: var(--ok-soft);
-  border: 1px solid rgba(61, 220, 132, 0.22);
-  border-radius: var(--r);
 }
-[data-theme='paper'] .voice-participants { border-color: rgba(47, 138, 87, 0.3); }
 .voice-participants li {
   display: flex;
   align-items: center;
@@ -672,7 +681,6 @@ kbd {
   color: var(--ink-dim);
 }
 .voice-participants li.me { color: var(--ink); }
-.voice-participants li.me::after { content: '·you'; color: var(--ink-mute); }
 .voice-participants li { min-width: 0; }
 .voice-participants .link-state {
   color: var(--ink-mute);
@@ -977,9 +985,20 @@ kbd {
 .stage-chat .composer-note { padding: 4px 12px 10px; }
 
 /* joined voice room name doubles as the way back to its stage */
-.voice-row .channel.joined { cursor: pointer; }
-.voice-row .channel.joined:hover { background: var(--active, var(--well)); color: var(--ink); }
-.voice-row .channel.joined:hover .glyph { color: var(--accent-ink); }
+/* the room you're in reads as active: green fill + a left bar tying it to
+   the participant card below (mirrors .channel.active, in the call's hue) */
+.voice-row .channel.joined,
+.voice-row .channel.joined:hover { color: var(--ink); background: var(--ok-soft); }
+.voice-row .channel.joined::before {
+  content: '';
+  position: absolute;
+  left: -8px;
+  top: 4px;
+  bottom: 4px;
+  width: 2px;
+  background: var(--ok);
+}
+.voice-row .channel.joined .glyph { color: var(--ok); }
 
 /* self card */
 .self-card {

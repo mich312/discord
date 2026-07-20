@@ -215,27 +215,30 @@ export default function Channels({
                   </div>
                 </div>
               )}
-              {participants.length > 0 && joined && (
-                <ul className="voice-participants" data-testid={`voice-participants-${ch}`}>
-                  {participants.map((p) => {
-                    const speaking = voice.speaking?.includes(p);
-                    return (
-                      <li
-                        key={p}
-                        className={[p === me ? 'me' : '', speaking ? 'speaking' : ''].filter(Boolean).join(' ') || undefined}
-                        data-testid={`voice-participant-${p}`}
-                        data-speaking={speaking ? 'true' : 'false'}
-                      >
-                        <Seal name={p} size={16} />
-                        <span className="vp-name">{p}</span>
-                        {joined && <VoiceMeter name={p} />}
-                        {joined && p !== me && voice.connections[p] && voice.connections[p] !== 'connected' && (
-                          <span className="link-state">· {voice.connections[p]}</span>
-                        )}
-                      </li>
-                    );
-                  })}
-                </ul>
+              {joined && (
+                <div className="voice-joined-card" data-testid={`voice-participants-${ch}`}>
+                  <span className="overline voice-live-label">in call · {ch}</span>
+                  <ul className="voice-participants">
+                    {(participants.length ? participants : [me]).map((p) => {
+                      const speaking = voice.speaking?.includes(p);
+                      return (
+                        <li
+                          key={p}
+                          className={[p === me ? 'me' : '', speaking ? 'speaking' : ''].filter(Boolean).join(' ') || undefined}
+                          data-testid={`voice-participant-${p}`}
+                          data-speaking={speaking ? 'true' : 'false'}
+                        >
+                          <Seal name={p} size={16} />
+                          <span className="vp-name">{p === me ? 'you' : p}</span>
+                          <VoiceMeter name={p} />
+                          {p !== me && voice.connections[p] && voice.connections[p] !== 'connected' && (
+                            <span className="link-state">· {voice.connections[p]}</span>
+                          )}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                </div>
               )}
             </li>
           );
