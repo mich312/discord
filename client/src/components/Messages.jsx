@@ -260,8 +260,8 @@ export default function Messages({
         )}
         <span className="sealed-note">
           {keepsHistory
-            ? 'history kept for joiners — sealed by a room key the relay never sees'
-            : 'messages exist only on the devices in the roster'}
+            ? 'history kept for new members'
+            : 'no history — only devices here now keep these messages'}
           {meta.retention ? (
             <span className="retention-note" title="auto-delete is on for this room">
               {' '}· <Clock size={11} /> auto-deletes {describeRetention(meta.retention)} after sending
@@ -291,12 +291,12 @@ export default function Messages({
           {keepsHistory ? (
             <>
               Beginning of <strong>#{channel}</strong> as this device knows it. This room keeps
-              encrypted history, so what you see may include messages restored with the room key.
+              history, so you may see messages from before you joined.
             </>
           ) : (
             <>
-              Beginning of <strong>#{channel}</strong> as this device knows it. Earlier messages,
-              if any, were encrypted with keys this device never had.
+              Beginning of <strong>#{channel}</strong> as this device knows it. Earlier messages
+              were sent before you joined.
             </>
           )}
         </div>
@@ -396,7 +396,7 @@ export default function Messages({
         </form>
         <div className="composer-note">
           <Lock size={11} />
-          end-to-end sealed for {members} member{members === 1 ? '' : 's'} — nothing readable leaves this device
+          End-to-end encrypted · {members} member{members === 1 ? '' : 's'}
         </div>
         </>
         )}

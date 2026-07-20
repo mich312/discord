@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Hash, CircleGlyph, ArrowRight } from './icons.jsx';
+import { Hash, CircleGlyph } from './icons.jsx';
 
 // ⌘K switcher. Rooms across every circle, circle switching, and the
 // handful of global actions — one keystroke away, keyboard-first.
@@ -22,7 +22,7 @@ export default function CommandPalette({ servers, active, actions, onNavigate, o
     const circles = servers.map((s) => ({
       id: `circle:${s.id}`,
       label: s.name,
-      hint: s.id === active ? 'current circle — game hub' : 'circle game hub',
+      hint: s.id === active ? 'current circle' : 'circle',
       glyph: <CircleGlyph />,
       run: () => onNavigate(s.id, null), // land on the circle's home base
     }));
@@ -98,7 +98,6 @@ export default function CommandPalette({ servers, active, actions, onNavigate, o
           <span><kbd>↑</kbd> <kbd>↓</kbd> navigate</span>
           <span><kbd>↵</kbd> open</span>
           <span><kbd>esc</kbd> dismiss</span>
-          <span className="push-right"><ArrowRight size={12} /> everything stays sealed</span>
         </div>
       </div>
     </div>

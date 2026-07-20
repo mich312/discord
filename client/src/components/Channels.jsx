@@ -3,8 +3,8 @@ import Seal from './Seal.jsx';
 import VoiceMeter from './VoiceMeter.jsx';
 import { Hash, Wave, Plus, Gear, Clock, Gamepad } from './icons.jsx';
 
-// Rooms and voice tables of the active circle. Channel names travel inside
-// the encryption, so even this sidebar is knowledge the relay never has.
+// Rooms and voice rooms of the active circle. Room names travel inside the
+// encryption, so even this sidebar is knowledge the relay never has.
 export default function Channels({
   server,
   activeChannel,
@@ -31,8 +31,7 @@ export default function Channels({
       <div className="circle-head">
         <div className="circle-head-name">{server.name}</div>
         <div className="circle-head-meta mono">
-          {server.members.length} member{server.members.length === 1 ? '' : 's'} · epoch{' '}
-          {String(server.epoch).padStart(2, '0')} · sealed
+          {server.members.length} member{server.members.length === 1 ? '' : 's'}
         </div>
       </div>
       {/* The circle's game hub — where clicking the circle drops you.

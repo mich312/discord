@@ -2,9 +2,8 @@ import React from 'react';
 import { QuorumGlyph, LinkGlyph, CommandGlyph, Sun, Moon, Menu, Users } from './icons.jsx';
 
 // Full-width top bar: brand at the left edge, the current circle as a
-// title (not a sidebar header), epoch as a visible artifact of the key
-// schedule, and the session chrome (palette, theme, relay state) at the
-// right. Nothing here scrolls; this is the instrument's fascia.
+// title (not a sidebar header), and the session chrome (palette, theme,
+// relay state) at the right. Nothing here scrolls; this is the fascia.
 // On narrow screens the sidebar and roster become drawers; the menu and
 // roster toggles below only render (via CSS) when that layout is active.
 export default function Masthead({ server, connection, theme, canInvite, onInvite, onPalette, onTheme, onMenu, onRoster }) {
@@ -22,9 +21,6 @@ export default function Masthead({ server, connection, theme, canInvite, onInvit
       {server && (
         <div className="masthead-context">
           <h1 className="circle-title" data-testid="server-name">{server.name}</h1>
-          <span className="epoch-chip" title="key epoch — increments whenever membership changes">
-            EPOCH {String(server.epoch).padStart(2, '0')}
-          </span>
         </div>
       )}
       <div className="masthead-actions">

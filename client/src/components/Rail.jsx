@@ -40,7 +40,7 @@ export default function Rail({ servers, active, onSelect, onCreate }) {
         <li className="rail-add-slot">
           <button
             className="circle-tile add"
-            title="found a new circle"
+            title="new circle"
             data-testid="new-server"
             onClick={() => setAdding(true)}
           >
@@ -61,7 +61,7 @@ export default function Rail({ servers, active, onSelect, onCreate }) {
                 value={name}
                 onChange={(e) => setName(e.target.value)}
                 onBlur={() => setAdding(false)}
-                placeholder="name the circle…"
+                placeholder="Circle name"
                 data-testid="new-server-name"
               />
             </form>

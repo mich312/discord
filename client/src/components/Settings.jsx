@@ -100,7 +100,7 @@ export default function Settings({
             <div>
               <div className="settings-handle">{me}</div>
               <div className="fineprint muted">
-                Your handle is a public key fingerprint — it can’t be renamed.
+                Your handle is tied to your identity key and can’t be changed.
               </div>
             </div>
           </div>
@@ -114,8 +114,7 @@ export default function Settings({
             <div className="settings-row-body">
               <div>Push notifications</div>
               <div className="fineprint muted">
-                A nudge when a message arrives while you’re offline. The relay only ever
-                learns the group id — never content.
+                A nudge when a message arrives while you’re offline.
               </div>
               {perm === 'denied' && (
                 <div className="fineprint warn">

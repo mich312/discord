@@ -25,7 +25,7 @@ function ScreenTile({ stream, name, mine }) {
       <video ref={ref} autoPlay playsInline muted data-testid={`stage-screen-video-${name}`} />
       <span className="stage-screen-label">
         <Screen size={12} />
-        {mine ? 'your screen — what everyone else sees' : `${name}'s screen`}
+        {mine ? 'your screen' : `${name}'s screen`}
       </span>
     </div>
   );
@@ -87,7 +87,6 @@ export default function CallStage({
             </span>
           )}
         </span>
-        <span className="sealed-note">media is peer-to-peer — the relay carries only sealed signals</span>
         <div className="stage-actions">
           {onToggleMute && !voice.listenOnly && (
             <button
@@ -172,7 +171,6 @@ export default function CallStage({
         <aside className="stage-chat" data-testid="stage-chat">
           <div className="stage-chat-head">
             <span>call chat</span>
-            <span className="muted">sealed like any room</span>
           </div>
           <div className="scroll" ref={scroller} data-testid="stage-chat-scroll">
             {messages.length === 0 && (
@@ -219,7 +217,7 @@ export default function CallStage({
           )}
           <div className="composer-note">
             <Lock size={11} />
-            end-to-end sealed — visible only to this circle
+            End-to-end encrypted
           </div>
         </aside>
       </div>

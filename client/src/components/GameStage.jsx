@@ -58,7 +58,7 @@ export default function GameStage({
           {game.name}
         </span>
         <span className="sealed-note game-host-note" title={game.url}>
-          runs on {gameHost(game)} — that host sees its own traffic, never your chat
+          runs on {gameHost(game)} — its host sees your connection, not your chat
         </span>
         <div className="stage-actions">
           {canSend && onInviteSeat && (
@@ -122,7 +122,7 @@ export default function GameStage({
               data-testid="dock-tab-crew"
               onClick={() => setTab('crew')}
             >
-              <Users size={12} /> crew · {server.members.length}
+              <Users size={12} /> members · {server.members.length}
             </button>
           </div>
           {tab === 'crew' ? (
@@ -134,7 +134,7 @@ export default function GameStage({
                 return (
                   <div key={m} className={speaking ? 'dock-crew-row speaking' : 'dock-crew-row'}>
                     <Seal name={m} size={22} title={m} />
-                    <span className="dock-crew-name">{m === me ? `${m} · you` : m}</span>
+                    <span className="dock-crew-name">{m === me ? 'you' : m}</span>
                     <span className="dock-crew-state">
                       {inThisCall ? 'in the call' : p ? `playing ${p.name}` : ''}
                     </span>
@@ -146,7 +146,7 @@ export default function GameStage({
           <div className="scroll" ref={scroller} data-testid="game-chat-scroll">
             {messages.length === 0 && (
               <div className="stage-chat-empty muted">
-                Nothing yet — trash talk lands here, sealed like any room.
+                No messages yet.
               </div>
             )}
             {messages.map((m, i) =>
@@ -228,13 +228,13 @@ export default function GameStage({
                 data-testid="game-voice-join"
                 onClick={() => onVoiceJoin(firstVoiceRoom)}
               >
-                <Wave size={12} /> talk while you play — join {firstVoiceRoom}
+                <Wave size={12} /> join {firstVoiceRoom}
               </button>
             </div>
           )}
           <div className="composer-note">
             <Lock size={11} />
-            chat &amp; call sealed — the game is not
+            Chat and call are encrypted — the game isn&rsquo;t
           </div>
         </aside>
       </div>
