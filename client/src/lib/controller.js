@@ -456,9 +456,7 @@ export class Controller {
     }
     switch (content.k) {
       case 'chat': {
-        if (!isCallChat(content.ch) && !record.channels.includes(content.ch)) {
-          record.channels.push(content.ch);
-        }
+        this.ensureChannel(record, content.ch);
         await this.storeMessage({
           server: record.id,
           channel: content.ch,
@@ -473,9 +471,7 @@ export class Controller {
         // Join affordance resolves against the shelf, never this payload.
         const game = normalizeGameRef(content.game);
         if (!game) break;
-        if (!isCallChat(content.ch) && !record.channels.includes(content.ch)) {
-          record.channels.push(content.ch);
-        }
+        this.ensureChannel(record, content.ch);
         await this.storeMessage({
           server: record.id,
           channel: content.ch,
@@ -524,6 +520,14 @@ export class Controller {
         if (record.pendingMetaSync) {
           record.pendingMetaSync = false;
           Object.assign(record, reconcileMeta(content));
+          // The snapshot is authoritative about what exists now, so a channel
+          // it lists is not a tombstone — drop any stale one so it isn't
+          // wrongly blocked from re-appearing.
+          if (record.deletedChannels?.length) {
+            record.deletedChannels = record.deletedChannels.filter(
+              (c) => !record.channels.includes(c)
+            );
+          }
           this.backfillHistory(record).catch((e) => console.warn(`history: ${e.message}`));
           this.scheduleBackup();
           break;
@@ -631,9 +635,7 @@ export class Controller {
         break;
       }
       case 'file': {
-        if (!isCallChat(content.ch) && !record.channels.includes(content.ch)) {
-          record.channels.push(content.ch);
-        }
+        this.ensureChannel(record, content.ch);
         await this.storeMessage({
           server: record.id,
           channel: content.ch,
@@ -649,6 +651,7 @@ export class Controller {
         // admin. Fail open if the sender's role isn't known yet, so a legit
         // creation racing role sync isn't dropped.
         if (record.roles?.[sender] && record.roles[sender] !== 'admin') break;
+        this.clearChannelDeleted(record, content.ch);
         if (!record.channels.includes(content.ch)) {
           record.channels.push(content.ch);
           await this.addSystemMessage(record.id, `#${content.ch} created by ${sender}`, content.ch);
@@ -669,6 +672,8 @@ export class Controller {
         if (record.roles?.[sender] && record.roles[sender] !== 'admin') break;
         if (record.channels.includes(content.ch) && !record.channels.includes(content.to)) {
           record.channels = record.channels.map((c) => (c === content.ch ? content.to : c));
+          this.markChannelDeleted(record, content.ch);
+          this.clearChannelDeleted(record, content.to);
           if (record.chanMeta?.[content.ch]) {
             record.chanMeta = { ...record.chanMeta, [content.to]: record.chanMeta[content.ch] };
             delete record.chanMeta[content.ch];
@@ -684,6 +689,7 @@ export class Controller {
         if (record.roles?.[sender] && record.roles[sender] !== 'admin') break;
         if (record.channels.includes(content.ch) && record.channels.length > 1) {
           record.channels = record.channels.filter((c) => c !== content.ch);
+          this.markChannelDeleted(record, content.ch);
           if (record.chanMeta?.[content.ch]) {
             record.chanMeta = { ...record.chanMeta };
             delete record.chanMeta[content.ch];
@@ -758,11 +764,46 @@ export class Controller {
     return id;
   }
 
+  // === channel presence guard ============================================
+  //
+  // A message can legitimately arrive for a channel this device hasn't been
+  // told about yet — its `chan` event still in flight over the ordered log,
+  // or a channel created before we joined. We surface such a channel so the
+  // message isn't stranded. But the log is not perfectly ordered relative to
+  // deletes, and a re-added device can be handed old blobs: a late, replayed,
+  // or reordered message for a *deleted* channel must never bring it back.
+  // Deleted names are tombstoned (bounded) so only an explicit admin `chan`
+  // re-creation can revive them.
+  static DELETED_MAX = 200;
+
+  /** Surface an unknown channel for an incoming message, unless it is a call
+      thread or a room we have seen deleted. */
+  ensureChannel(record, ch) {
+    if (isCallChat(ch) || record.channels.includes(ch)) return;
+    if ((record.deletedChannels ?? []).includes(ch)) return;
+    record.channels.push(ch);
+  }
+
+  /** Remember a removed channel so a stray message can't resurrect it. */
+  markChannelDeleted(record, ch) {
+    record.deletedChannels = [...new Set([...(record.deletedChannels ?? []), ch])].slice(
+      -Controller.DELETED_MAX
+    );
+  }
+
+  /** A channel is legitimately (re-)created: it is no longer a tombstone. */
+  clearChannelDeleted(record, ch) {
+    if (record.deletedChannels?.length) {
+      record.deletedChannels = record.deletedChannels.filter((c) => c !== ch);
+    }
+  }
+
   async createChannel(serverId, channel) {
     const record = this.servers.get(serverId);
     const ch = channel.toLowerCase().replace(/[^a-z0-9-]+/g, '-');
     if (!ch || record.channels.includes(ch)) return;
     record.channels.push(ch);
+    this.clearChannelDeleted(record, ch);
     await this.sendContent(serverId, { k: 'chan', ch });
     await this.db.serverPut(record);
     this.dispatch({ type: 'servers', servers: this.snapshotServers() });
@@ -944,6 +985,8 @@ export class Controller {
     const ch = Controller.slugChannel(to);
     if (!ch || ch === from || !record.channels.includes(from) || record.channels.includes(ch)) return;
     record.channels = record.channels.map((c) => (c === from ? ch : c));
+    this.markChannelDeleted(record, from);
+    this.clearChannelDeleted(record, ch);
     if (record.chanMeta?.[from]) {
       record.chanMeta = { ...record.chanMeta, [ch]: record.chanMeta[from] };
       delete record.chanMeta[from];
@@ -963,6 +1006,7 @@ export class Controller {
     if (!record.channels.includes(channel)) return;
     if (record.channels.length <= 1) throw new Error('a server needs at least one channel');
     record.channels = record.channels.filter((c) => c !== channel);
+    this.markChannelDeleted(record, channel);
     if (record.chanMeta?.[channel]) {
       record.chanMeta = { ...record.chanMeta };
       delete record.chanMeta[channel];
