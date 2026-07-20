@@ -65,6 +65,46 @@ export function upsertNotice(list, notice) {
     .slice(0, NOTICES_MAX);
 }
 
+/** Authoritative reconcile of a circle's synced shape from a meta
+    rebroadcast, for a device that just (re-)joined or was restored and so
+    resumed the log past the changes it missed. Unlike the live gap-fill
+    (union, which can only grow), this adopts the rebroadcaster's snapshot
+    wholesale so deletions — phantom channels, an unpinned notice, a cleared
+    game hub — actually land. Returns only the fields present in the snapshot,
+    normalized and bounded, for the caller to assign onto the record. */
+export function reconcileMeta(content) {
+  const out = {};
+  if (Array.isArray(content.channels) && content.channels.length) {
+    out.channels = [...new Set(content.channels)];
+  }
+  if (Array.isArray(content.voiceChannels) && content.voiceChannels.length) {
+    out.voiceChannels = [...new Set(content.voiceChannels)];
+  }
+  if (content.overview !== undefined) {
+    out.overview = normalizeOverview(content.overview);
+  }
+  if (content.chanMeta && typeof content.chanMeta === 'object') {
+    out.chanMeta = { ...content.chanMeta };
+  }
+  if (Array.isArray(content.notices)) {
+    out.notices = content.notices
+      .map((n) => normalizeNotice(n, n?.author))
+      .filter(Boolean)
+      .sort((a, b) => b.ts - a.ts)
+      .slice(0, NOTICES_MAX);
+  }
+  if (content.rsvps && typeof content.rsvps === 'object') {
+    const rsvps = {};
+    for (const [handle, v] of Object.entries(content.rsvps).slice(0, 64)) {
+      const at = Number(v?.at);
+      if (!Number.isFinite(at)) continue;
+      rsvps[String(handle).slice(0, 64)] = { at, ts: Number(v?.ts) || Date.now() };
+    }
+    out.rsvps = rsvps;
+  }
+  return out;
+}
+
 /** Union for the joiner gap-fill (meta rebroadcast): entries this device
     already has win over the incoming copy of the same id. */
 export function mergeNotices(mine, incoming) {

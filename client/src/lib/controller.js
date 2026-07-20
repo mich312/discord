@@ -77,6 +77,7 @@ import {
   mergeNotices,
   normalizeNotice,
   normalizeOverview,
+  reconcileMeta,
   upsertNotice,
 } from './overview.js';
 import { freshPresence, normalizeGameRef, normalizePresence } from './games.js';
@@ -362,6 +363,13 @@ export class Controller {
       epoch,
       lastSeq: msg.after,
       joinedAt: prior?.joinedAt ?? Date.now(),
+      // This device resumes the log *after* the point it was added, so it
+      // will never replay the channel/overview/notice changes that happened
+      // while it was gone. Whatever shape it is carrying (a restored stub, or
+      // a stale live record from before it was removed) may be out of date:
+      // let the next meta rebroadcast reconcile it authoritatively instead of
+      // just unioning, so deletions actually land. See the `meta` handler.
+      pendingMetaSync: true,
     };
     this.servers.set(group, record);
     await this.db.serverPut(record);
@@ -506,6 +514,20 @@ export class Controller {
       }
       case 'meta': {
         record.name = content.name ?? record.name;
+        // A device catching up after a (re-)join or restore may be holding a
+        // stale shape: phantom channels a since-departed admin deleted, a game
+        // hub from before the shelf changed, notices long since unpinned. It
+        // resumed the log past those events and will never replay them, but the
+        // rebroadcaster has and is authoritative — so adopt its snapshot
+        // wholesale. The union path below can only ever grow the shape; this is
+        // the one place it must be allowed to shrink.
+        if (record.pendingMetaSync) {
+          record.pendingMetaSync = false;
+          Object.assign(record, reconcileMeta(content));
+          this.backfillHistory(record).catch((e) => console.warn(`history: ${e.message}`));
+          this.scheduleBackup();
+          break;
+        }
         for (const ch of content.channels ?? []) {
           if (!record.channels.includes(ch)) record.channels.push(ch);
         }
@@ -1635,6 +1657,9 @@ export class Controller {
       epoch,
       lastSeq: sent.seq,
       joinedAt: prior?.joinedAt ?? Date.now(),
+      // Same as onWelcome: the log resumes past this join, so let the first
+      // meta rebroadcast reconcile a possibly-stale shape rather than union.
+      pendingMetaSync: true,
     };
     this.servers.set(group, record);
     await this.db.serverPut(record);
