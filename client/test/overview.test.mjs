@@ -12,6 +12,7 @@ import {
   mergeNotices,
   normalizeNotice,
   normalizeOverview,
+  reconcileMeta,
   upsertNotice,
 } from '../src/lib/overview.js';
 
@@ -75,6 +76,51 @@ test('upsertNotice replaces by id, keeps newest first, and caps the board', () =
   list = upsertNotice(list, { id: list[3].id, text: 'edited', ts: list[3].ts, author: 'a' });
   assert.equal(list.filter((n) => n.text === 'edited').length, 1);
   assert.equal(list.length, NOTICES_MAX);
+});
+
+test('reconcileMeta adopts the snapshot wholesale so deletions land', () => {
+  // A device holding a stale shape (a phantom channel a departed admin
+  // deleted, a stale game hub, an unpinned notice) reconciles to the
+  // rebroadcaster's authoritative snapshot — the shape must be allowed to
+  // *shrink*, unlike the union gap-fill.
+  const snapshot = {
+    channels: ['general', 'general', 'racing'], // deduped; 'photos' is gone
+    voiceChannels: ['lounge'],
+    overview: { games: [{ id: 'g1', name: 'Chess', url: 'https://chess.example' }] },
+    chanMeta: { racing: { topic: 'sunday laps' } },
+    notices: [{ id: 'keep', text: 'still pinned', ts: NOW, author: 'alice' }],
+  };
+  const out = reconcileMeta(snapshot);
+  assert.deepEqual(out.channels, ['general', 'racing']); // 'photos' dropped, deduped
+  assert.deepEqual(out.voiceChannels, ['lounge']);
+  assert.equal(out.overview.games.length, 1); // game hub finally arrives
+  assert.deepEqual(out.chanMeta, { racing: { topic: 'sunday laps' } });
+  assert.deepEqual(out.notices.map((n) => n.id), ['keep']);
+});
+
+test('reconcileMeta touches only fields present in the snapshot', () => {
+  // Missing/empty channel or voice lists must not blank out the record —
+  // the caller keeps its current list. A null overview *is* meaningful
+  // (admin cleared the game hub) and is adopted.
+  const out = reconcileMeta({ overview: null, channels: [] });
+  assert.deepEqual(Object.keys(out).sort(), ['overview']);
+  assert.equal(out.overview, null);
+  assert.deepEqual(reconcileMeta({}), {});
+});
+
+test('reconcileMeta normalizes hostile snapshot fields', () => {
+  const out = reconcileMeta({
+    overview: { blurb: ' hi ', smuggled: 'x'.repeat(99) },
+    notices: [
+      { id: 'n2', text: 'newer', ts: NOW, author: 'bob' },
+      { id: 'n1', text: 'older', ts: NOW - MIN, author: 'alice' },
+      { id: '', text: 'junk' }, // dropped
+    ],
+    rsvps: { alice: { at: NOW + DAY }, bad: { at: 'soon' } },
+  });
+  assert.deepEqual(out.overview, { blurb: 'hi', links: [] });
+  assert.deepEqual(out.notices.map((n) => n.id), ['n2', 'n1']); // newest first, junk gone
+  assert.deepEqual(Object.keys(out.rsvps), ['alice']); // non-finite time dropped
 });
 
 test('mergeNotices unions by id and my copy wins', () => {

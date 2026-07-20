@@ -3,7 +3,7 @@ import Seal from './Seal.jsx';
 import { describeAgo, describeUntil, canRemoveNotice } from '../lib/overview.js';
 import { freshPresence, gameHost, lastPlayed, makeGameId, normalizeGame } from '../lib/games.js';
 import { nameHue } from '../lib/avatar.js';
-import { Hash, Wave, Lock, LinkGlyph, Plus, X, ArrowRight, Gamepad, External, Copy } from './icons.jsx';
+import { Hash, Wave, Lock, LinkGlyph, Plus, X, ArrowRight, Gamepad, External, Copy, Check } from './icons.jsx';
 
 // The circle's game hub: what you land on when you pick a circle. Not a
 // brochure — a briefing, with the shelf front and center:
@@ -58,7 +58,7 @@ function EditForm({ overview, onSave, onCancel }) {
         });
       }}
     >
-      <label className="overview-field-label">up next — the team&rsquo;s next date</label>
+      <label className="overview-field-label">up next — your circle&rsquo;s next event</label>
       <div className="overview-event-edit">
         <input
           value={eventTitle}
@@ -366,9 +366,6 @@ export default function Overview({
           </span>
           game hub
         </span>
-        <span className="sealed-note">
-          sealed like everything else — the relay never learns what you play
-        </span>
         {canManage && !editing && (
           <span className="pane-actions">
             <button className="button" data-testid="overview-edit" onClick={() => setEditing(true)}>
@@ -397,8 +394,6 @@ export default function Overview({
               <span data-testid="overview-unread-total">
                 {unreadTotal > 0 ? `${unreadTotal} unread` : 'all caught up'}
               </span>
-              <span>·</span>
-              <span>epoch {String(server.epoch).padStart(2, '0')}</span>
             </div>
           </section>
         )}
@@ -444,7 +439,8 @@ export default function Overview({
                         data-testid="rsvp-toggle"
                         onClick={() => onRsvp(event.at, !iAmIn)}
                       >
-                        {iAmIn ? '✓ you\u2019re in' : '▶ I\u2019m in'}
+                        {iAmIn ? <Check size={13} /> : null}
+                        {iAmIn ? ' you\u2019re in' : 'I\u2019m in'}
                       </button>
                       {going.length > 0 && (
                         <span className="hub-going" data-testid="rsvp-going">
@@ -522,7 +518,7 @@ export default function Overview({
                           </span>
                           <span className="add-card-title">Register a game</span>
                           <span className="add-card-sub">
-                            a URL is enough — it travels sealed, like a channel name
+                            a URL is enough — it shows up here for the whole circle
                           </span>
                         </button>
                       )}
@@ -531,9 +527,7 @@ export default function Overview({
                 </ul>
               ) : (
                 <p className="muted overview-empty-note" data-testid="game-shelf-empty">
-                  No games yet. The shelf holds pointers to games living on other servers —
-                  web games launch right here with the room&rsquo;s chat and call beside them;
-                  native servers get an address card.
+                  No games yet. Add one and it shows up here for the whole circle.
                 </p>
               )}
             </section>
@@ -590,7 +584,7 @@ export default function Overview({
                         </span>
                         <span className="room">{ch}</span>
                         <span className="last">
-                          {present.length ? `live now: ${present.join(', ')}` : 'voice table — empty'}
+                          {present.length ? `live now: ${present.join(', ')}` : 'voice room — empty'}
                         </span>
                         <span className="go mono">join</span>
                       </button>
@@ -650,8 +644,7 @@ export default function Overview({
                 </ul>
               ) : (
                 <p className="muted overview-empty-note" data-testid="overview-notices-empty">
-                  Nothing pinned. Anyone in the circle can pin a note here — schedules,
-                  decisions, the thing nobody should have to scroll for.
+                  Nothing pinned yet. Pin notes the whole circle should see.
                 </p>
               )}
             </section>
@@ -699,7 +692,7 @@ export default function Overview({
                 <span className="overline">about</span>
                 <p className="overview-blurb placeholder muted" data-testid="overview-blurb-empty">
                   {canManage
-                    ? 'Nothing here yet — use customize to set the next event, tell the circle what this place is for, and pin the links that matter.'
+                    ? 'Nothing here yet — hit Customize to set an event, describe this circle, and pin links.'
                     : 'The admins have not written anything here yet.'}
                 </p>
               </section>
@@ -707,11 +700,6 @@ export default function Overview({
           </>
         )}
 
-        <p className="fineprint muted overview-foot">
-          Everything on this page — the event, the notes, the words — exists only inside
-          the encryption. {server.members.length} device{server.members.length === 1 ? '' : 's'} can
-          read it; the relay is not one of them.
-        </p>
       </div>
     </main>
   );

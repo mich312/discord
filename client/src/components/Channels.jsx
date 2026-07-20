@@ -1,10 +1,9 @@
 import React, { useState } from 'react';
 import Seal from './Seal.jsx';
-import VoiceMeter from './VoiceMeter.jsx';
 import { Hash, Wave, Plus, Gear, Clock, Gamepad } from './icons.jsx';
 
-// Rooms and voice tables of the active circle. Channel names travel inside
-// the encryption, so even this sidebar is knowledge the relay never has.
+// Rooms and voice rooms of the active circle. Room names travel inside the
+// encryption, so even this sidebar is knowledge the relay never has.
 export default function Channels({
   server,
   activeChannel,
@@ -31,8 +30,7 @@ export default function Channels({
       <div className="circle-head">
         <div className="circle-head-name">{server.name}</div>
         <div className="circle-head-meta mono">
-          {server.members.length} member{server.members.length === 1 ? '' : 's'} · epoch{' '}
-          {String(server.epoch).padStart(2, '0')} · sealed
+          {server.members.length} member{server.members.length === 1 ? '' : 's'}
         </div>
       </div>
       {/* The circle's game hub — where clicking the circle drops you.
@@ -211,33 +209,42 @@ export default function Channels({
                       data-testid={`voice-join-${ch}`}
                       onClick={() => onVoiceJoin(ch)}
                     >
-                      Join
+                      join
                     </button>
                   </div>
                 </div>
               )}
-              {participants.length > 0 && joined && (
-                <ul className="voice-participants" data-testid={`voice-participants-${ch}`}>
-                  {participants.map((p) => {
-                    const speaking = voice.speaking?.includes(p);
-                    return (
-                      <li
-                        key={p}
-                        className={[p === me ? 'me' : '', speaking ? 'speaking' : ''].filter(Boolean).join(' ') || undefined}
-                        data-testid={`voice-participant-${p}`}
-                        data-speaking={speaking ? 'true' : 'false'}
-                      >
-                        <Seal name={p} size={16} />
-                        <span className="vp-name">{p}</span>
-                        {joined && <VoiceMeter name={p} />}
-                        {joined && p !== me && voice.connections[p] && voice.connections[p] !== 'connected' && (
-                          <span className="link-state">· {voice.connections[p]}</span>
-                        )}
-                      </li>
-                    );
-                  })}
-                </ul>
-              )}
+              {joined && (() => {
+                const inCall = participants.length ? participants : [me];
+                return (
+                  <div className="voice-joined-card" data-testid={`voice-participants-${ch}`}>
+                    <span className="overline voice-live-label">in call · {ch}</span>
+                    <div className="voice-joined-row">
+                      <span className="call-orbs">
+                        {inCall.slice(0, 5).map((p) => {
+                          const speaking = voice.speaking?.includes(p);
+                          const pending =
+                            p !== me && voice.connections[p] && voice.connections[p] !== 'connected';
+                          return (
+                            <span
+                              key={p}
+                              className={['call-orb', speaking ? 'speaking' : '', pending ? 'pending' : '']
+                                .filter(Boolean)
+                                .join(' ')}
+                              data-testid={`voice-participant-${p}`}
+                              data-speaking={speaking ? 'true' : 'false'}
+                              title={p === me ? 'you' : p}
+                            >
+                              <Seal name={p} size={30} title={p === me ? 'you' : p} />
+                            </span>
+                          );
+                        })}
+                        {inCall.length > 5 && <span className="voice-live-more">+{inCall.length - 5}</span>}
+                      </span>
+                    </div>
+                  </div>
+                );
+              })()}
             </li>
           );
         })}

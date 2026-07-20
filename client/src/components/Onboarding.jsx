@@ -21,8 +21,8 @@ function Gate({ children }) {
           Rooms that keep <em>their own counsel.</em>
         </p>
         <p className="gate-sub">
-          Small, invite-only circles, end-to-end encrypted with MLS. The server
-          relays ciphertext it can never read — and the interface never pretends otherwise.
+          Small, invite-only circles, end-to-end encrypted. The server passes along
+          messages it can&rsquo;t read — and the interface never pretends otherwise.
         </p>
         <ul className="principles">
           <li>
@@ -43,7 +43,7 @@ function Gate({ children }) {
             <span className="p-glyph">03</span>
             <div>
               <strong>The roster is the boundary</strong>
-              <span>Joiners see nothing from before they joined. That is the cost of it being true.</span>
+              <span>New members see nothing from before they joined.</span>
             </div>
           </li>
         </ul>

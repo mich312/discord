@@ -109,7 +109,7 @@ export default function Members({ server, me, canManage, voice, onAdd, onMember,
   return (
     <aside className="members">
       <div className="section-label">
-        <span className="overline">crew</span>
+        <span className="overline">members</span>
         {liveCount > 0 ? (
           <span className="member-count live" title="in a call or in a game right now">
             {liveCount} live
@@ -118,7 +118,6 @@ export default function Members({ server, me, canManage, voice, onAdd, onMember,
           <span className="member-count">{server.members.length}</span>
         )}
       </div>
-      <p className="roster-sub">Everyone who holds the keys to this circle — no one else can read it.</p>
       {occupiedRooms.map((room) => {
         const here = server.members.filter((m) => inRoom[m] === room);
         return (
@@ -165,8 +164,7 @@ export default function Members({ server, me, canManage, voice, onAdd, onMember,
         <p className="fineprint muted">Only admins of this circle can add members.</p>
       )}
       <p className="fineprint muted">
-        Adding someone rotates the group keys (new epoch). They will see nothing sent
-        before their join.
+        New members can&rsquo;t see messages sent before they joined.
       </p>
     </aside>
   );

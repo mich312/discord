@@ -237,7 +237,6 @@ kbd {
 .linkish:hover { text-decoration: underline; }
 
 .row { display: flex; gap: 8px; }
-.push-right { margin-left: auto; }
 
 /* ---------------------------------------------------------------- fields -- */
 .field { display: block; margin-bottom: 14px; }
@@ -348,16 +347,6 @@ kbd {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.epoch-chip {
-  font: 500 var(--text-xs) var(--mono);
-  letter-spacing: 0.12em;
-  color: var(--ink-mute);
-  border: 1px solid var(--hairline-strong);
-  border-radius: var(--r-pill);
-  padding: 2px 9px;
-  white-space: nowrap;
-}
-
 .masthead-actions {
   margin-left: auto;
   display: flex;
@@ -630,9 +619,11 @@ kbd {
 /* voice */
 .voice-list { flex-shrink: 0; padding-bottom: 10px; }
 .voice-row { display: flex; align-items: center; gap: 4px; }
-.voice-row .channel { flex: 1; cursor: default; }
+.voice-row .channel { flex: 1; min-width: 0; cursor: default; }
 .voice-row .channel:hover { background: none; color: var(--ink-mute); }
 .voice-row .channel:hover .glyph { color: var(--ink-mute); }
+/* a joined voice room button IS clickable (opens the call view) */
+.voice-row .channel.joined { cursor: pointer; }
 .voice-join {
   font: 600 var(--text-xs) var(--mono);
   letter-spacing: 0.1em;
@@ -652,56 +643,45 @@ kbd {
   color: var(--accent-ink);
   white-space: nowrap;
 }
-.voice-participants {
-  list-style: none;
-  margin: 4px 8px 8px;
-  padding: 8px 10px;
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
+/* you're in this call: the row above gets a live treatment, and this card
+   is bound to it — a header so it isn't a bare unlabeled green box. */
+.voice-joined-card {
+  margin: 6px 8px 8px;
+  padding: 10px 12px;
   background: var(--ok-soft);
-  border: 1px solid rgba(61, 220, 132, 0.22);
+  border: 1px solid rgba(61, 220, 132, 0.25);
   border-radius: var(--r);
 }
-[data-theme='paper'] .voice-participants { border-color: rgba(47, 138, 87, 0.3); }
-.voice-participants li {
-  display: flex;
-  align-items: center;
-  gap: 7px;
-  font: var(--text-sm) var(--mono);
-  color: var(--ink-dim);
-}
-.voice-participants li.me { color: var(--ink); }
-.voice-participants li.me::after { content: '·you'; color: var(--ink-mute); }
-.voice-participants li { min-width: 0; }
-.voice-participants .link-state {
-  color: var(--ink-mute);
-  font-size: var(--text-xs);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.voice-participants .vp-name { white-space: nowrap; }
-/* who's talking: the seal lights up and lifts while sound is flowing */
-.voice-participants li.speaking { color: var(--ink); }
-.voice-participants li svg:first-of-type {
+[data-theme='paper'] .voice-joined-card { border-color: rgba(47, 138, 87, 0.35); }
+.voice-joined-card .voice-live-label { margin-bottom: 10px; }
+/* Who's in the call, as a stack of orbs — same language as the "live in …"
+   card above, but each orb pulses while its owner is talking. */
+.voice-joined-row { display: flex; align-items: center; }
+.call-orbs { display: flex; align-items: center; padding-left: 3px; }
+.call-orb {
+  display: inline-flex;
+  margin-right: -8px;
   border-radius: 50%;
-  transition: filter .12s ease, transform .12s ease;
+  transition: transform .16s var(--ease);
 }
-.voice-participants li.speaking svg:first-of-type {
-  filter: drop-shadow(0 0 4px var(--ok));
-  transform: scale(1.08);
+.call-orb .seal-avatar {
+  display: block;
+  border-radius: 50%;
+  box-shadow: 0 0 0 2px var(--ok-soft);
 }
-/* mini scrolling waveform, dim until the speaker is active */
-.voice-participants .voice-meter {
-  margin-left: auto;
-  width: 36px;
-  height: 14px;
-  color: var(--ink-mute);
-  opacity: 0.45;
-  transition: color .15s ease, opacity .15s ease;
+[data-theme='paper'] .call-orb .seal-avatar { box-shadow: 0 0 0 2px #dff1e6; }
+/* not yet connected: dim the orb instead of a text status */
+.call-orb.pending { opacity: 0.45; }
+/* talking: lift, ring, and a soft breathing glow */
+.call-orb.speaking { transform: scale(1.12); z-index: 1; }
+.call-orb.speaking .seal-avatar {
+  box-shadow: 0 0 0 2px var(--ok), 0 0 12px var(--ok);
+  animation: orb-pulse 1.1s var(--ease) infinite;
 }
-.voice-participants li.speaking .voice-meter { color: var(--ok); opacity: 1; }
+@keyframes orb-pulse {
+  0%, 100% { box-shadow: 0 0 0 2px var(--ok), 0 0 6px color-mix(in srgb, var(--ok) 55%, transparent); }
+  50% { box-shadow: 0 0 0 2px var(--ok), 0 0 15px var(--ok); }
+}
 
 /* roster presence: only what this device truly knows (calls) */
 .member-col { flex: 1; min-width: 0; display: flex; flex-direction: column; }
@@ -977,9 +957,20 @@ kbd {
 .stage-chat .composer-note { padding: 4px 12px 10px; }
 
 /* joined voice room name doubles as the way back to its stage */
-.voice-row .channel.joined { cursor: pointer; }
-.voice-row .channel.joined:hover { background: var(--active, var(--well)); color: var(--ink); }
-.voice-row .channel.joined:hover .glyph { color: var(--accent-ink); }
+/* the room you're in reads as active: green fill + a left bar tying it to
+   the participant card below (mirrors .channel.active, in the call's hue) */
+.voice-row .channel.joined,
+.voice-row .channel.joined:hover { color: var(--ink); background: var(--ok-soft); }
+.voice-row .channel.joined::before {
+  content: '';
+  position: absolute;
+  left: -8px;
+  top: 4px;
+  bottom: 4px;
+  width: 2px;
+  background: var(--ok);
+}
+.voice-row .channel.joined .glyph { color: var(--ok); }
 
 /* self card */
 .self-card {
@@ -1278,9 +1269,12 @@ kbd {
   cursor: pointer;
   margin-left: 6px;
   padding: 1px 4px;
-  visibility: hidden;
+  /* display:none (not visibility) so the toggle doesn't reserve width at
+     rest — otherwise it silently squeezes short handles to "b.." */
+  display: none;
 }
-.member:hover .role-toggle { visibility: visible; }
+.member:hover .role-toggle,
+.member:focus-within .role-toggle { display: inline-flex; align-items: center; }
 .role-toggle:hover { color: var(--ink); text-decoration: underline; text-underline-offset: 3px; }
 
 .add-member { padding: 10px 14px 0; }
@@ -1323,7 +1317,6 @@ kbd {
   letter-spacing: 0.08em;
   color: var(--ink-mute);
 }
-.overview-customize { flex-shrink: 0; }
 
 .overview-section { padding: 20px 0 2px; max-width: 74ch; }
 .overview-section > .overline { display: block; margin-bottom: 10px; }
@@ -1524,7 +1517,6 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
 .overview-add-link { justify-self: start; }
 .overview-edit-actions { display: flex; gap: 8px; margin-top: 6px; }
 
-.overview-foot { max-width: 66ch; padding-bottom: 8px; }
 
 /* ------------------------------------------------------------ empty state -- */
 .empty-state {
@@ -2303,7 +2295,7 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
 /* Devices without hover can't reveal hover-gated affordances — surface the
    ones that matter and drop the ones that are pure hover decoration. */
 @media (hover: none) {
-  .role-toggle { visibility: visible; }
+  .role-toggle { display: inline-flex; align-items: center; }
   .msg-line { padding-right: 0; }
   .msg-line time { display: none; }
 }
@@ -2320,7 +2312,6 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
   .masthead-brand { width: auto; gap: 0; }
   .masthead-brand .wordmark { display: none; }
   .masthead-context { gap: 8px; flex: 1; min-width: 0; }
-  .epoch-chip { display: none; }
   .masthead-actions { gap: 2px; }
   .masthead-actions .button { display: none; } /* invite lives in the palette */
   .palette-hint { border: none; padding: 4px 6px; }

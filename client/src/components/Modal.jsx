@@ -83,8 +83,8 @@ export default function Modal({
         {modal.type === 'invite' && (
           <>
             <p className="muted">
-              The part after <code>#</code> is the decryption key — browsers never send it
-              over the network, so the server stores an invite blob it cannot read.
+              This link contains a secret key. Anyone with the full link can join, so
+              send it only to people you trust.
             </p>
             <textarea className="keybox" readOnly value={modal.url} data-testid="invite-url" />
             <button className="button primary" onClick={() => copy(modal.url)} data-testid="copy-invite">
@@ -92,10 +92,9 @@ export default function Modal({
               {copied ? 'copied' : 'copy link'}
             </button>
             <p className="fineprint muted">
-              This link is a bearer token: whoever holds it becomes a member. It expires in
-              7 days, dies if the blob goes stale while you're offline, and anyone who joins
-              with it is marked <em>unverified</em> in the roster. Revoking it later
-              only stops new joins — removing a member is what actually rotates the keys.
+              Anyone who has this link becomes a member. It expires in 7 days, and anyone
+              who joins with it is marked <em>unverified</em> until someone checks their
+              safety number.
             </p>
           </>
         )}
@@ -135,9 +134,7 @@ export default function Modal({
               </button>
             </form>
             <p className="fineprint muted">
-              Passkeys leave nothing to brute-force. With a password, the server could try
-              to guess a <em>weak</em> one offline against the encrypted copy — pick a real
-              passphrase.
+              Passkeys are strongest. If you use a password, make it a long one.
             </p>
             <div className="divider">or keep it manual</div>
             <a
@@ -249,12 +246,8 @@ export default function Modal({
                   <span>keep history for future joiners</span>
                 </label>
                 <p className="fineprint muted">
-                  On: messages are also sealed under a room key that travels inside the
-                  encryption to whoever is in the roster — new members and your own next
-                  device can read back. The relay still sees only ciphertext, but this
-                  deliberately gives up forward secrecy for this room: anyone admitted
-                  later can read what the key unlocks. Off: messages exist only on the
-                  devices that were present.
+                  On: people added later can read this room&rsquo;s past messages. Off: only
+                  the people here now can — messages live only on their devices.
                 </p>
                 <label className="field">
                   <span>auto-delete messages</span>
@@ -355,7 +348,7 @@ export default function Modal({
             <p className="fineprint muted">
               Unlike the recovery file, this export is NOT passphrase-protected. Paste it
               into “restore → identity key” on another device to sign in there. It restores
-              your account, not old group keys.
+              your account, not your old messages.
             </p>
           </>
         )}

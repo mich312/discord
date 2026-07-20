@@ -77,6 +77,7 @@ import {
   mergeNotices,
   normalizeNotice,
   normalizeOverview,
+  reconcileMeta,
   upsertNotice,
 } from './overview.js';
 import { freshPresence, normalizeGameRef, normalizePresence } from './games.js';
@@ -362,6 +363,13 @@ export class Controller {
       epoch,
       lastSeq: msg.after,
       joinedAt: prior?.joinedAt ?? Date.now(),
+      // This device resumes the log *after* the point it was added, so it
+      // will never replay the channel/overview/notice changes that happened
+      // while it was gone. Whatever shape it is carrying (a restored stub, or
+      // a stale live record from before it was removed) may be out of date:
+      // let the next meta rebroadcast reconcile it authoritatively instead of
+      // just unioning, so deletions actually land. See the `meta` handler.
+      pendingMetaSync: true,
     };
     this.servers.set(group, record);
     await this.db.serverPut(record);
@@ -417,6 +425,7 @@ export class Controller {
               chanMeta: record.chanMeta ?? {},
               overview: record.overview ?? null,
               notices: record.notices ?? [],
+              rsvps: record.rsvps ?? {},
             });
           }
         } else {
@@ -448,15 +457,13 @@ export class Controller {
     }
     switch (content.k) {
       case 'chat': {
-        if (!isCallChat(content.ch) && !record.channels.includes(content.ch)) {
-          record.channels.push(content.ch);
-        }
+        this.ensureChannel(record, content.ch);
         await this.storeMessage({
           server: record.id,
           channel: content.ch,
           sender,
           text: content.text,
-          ts: Date.now(),
+          ts: messageTs(content.ts),
         });
         break;
       }
@@ -465,15 +472,13 @@ export class Controller {
         // Join affordance resolves against the shelf, never this payload.
         const game = normalizeGameRef(content.game);
         if (!game) break;
-        if (!isCallChat(content.ch) && !record.channels.includes(content.ch)) {
-          record.channels.push(content.ch);
-        }
+        this.ensureChannel(record, content.ch);
         await this.storeMessage({
           server: record.id,
           channel: content.ch,
           sender,
           game,
-          ts: Date.now(),
+          ts: messageTs(content.ts),
         });
         break;
       }
@@ -506,6 +511,28 @@ export class Controller {
       }
       case 'meta': {
         record.name = content.name ?? record.name;
+        // A device catching up after a (re-)join or restore may be holding a
+        // stale shape: phantom channels a since-departed admin deleted, a game
+        // hub from before the shelf changed, notices long since unpinned. It
+        // resumed the log past those events and will never replay them, but the
+        // rebroadcaster has and is authoritative — so adopt its snapshot
+        // wholesale. The union path below can only ever grow the shape; this is
+        // the one place it must be allowed to shrink.
+        if (record.pendingMetaSync) {
+          record.pendingMetaSync = false;
+          Object.assign(record, reconcileMeta(content));
+          // The snapshot is authoritative about what exists now, so a channel
+          // it lists is not a tombstone — drop any stale one so it isn't
+          // wrongly blocked from re-appearing.
+          if (record.deletedChannels?.length) {
+            record.deletedChannels = record.deletedChannels.filter(
+              (c) => !record.channels.includes(c)
+            );
+          }
+          this.backfillHistory(record).catch((e) => console.warn(`history: ${e.message}`));
+          this.scheduleBackup();
+          break;
+        }
         for (const ch of content.channels ?? []) {
           if (!record.channels.includes(ch)) record.channels.push(ch);
         }
@@ -609,15 +636,13 @@ export class Controller {
         break;
       }
       case 'file': {
-        if (!isCallChat(content.ch) && !record.channels.includes(content.ch)) {
-          record.channels.push(content.ch);
-        }
+        this.ensureChannel(record, content.ch);
         await this.storeMessage({
           server: record.id,
           channel: content.ch,
           sender,
           file: content.file,
-          ts: Date.now(),
+          ts: messageTs(content.ts),
         });
         break;
       }
@@ -627,6 +652,7 @@ export class Controller {
         // admin. Fail open if the sender's role isn't known yet, so a legit
         // creation racing role sync isn't dropped.
         if (record.roles?.[sender] && record.roles[sender] !== 'admin') break;
+        this.clearChannelDeleted(record, content.ch);
         if (!record.channels.includes(content.ch)) {
           record.channels.push(content.ch);
           await this.addSystemMessage(record.id, `#${content.ch} created by ${sender}`, content.ch);
@@ -647,6 +673,8 @@ export class Controller {
         if (record.roles?.[sender] && record.roles[sender] !== 'admin') break;
         if (record.channels.includes(content.ch) && !record.channels.includes(content.to)) {
           record.channels = record.channels.map((c) => (c === content.ch ? content.to : c));
+          this.markChannelDeleted(record, content.ch);
+          this.clearChannelDeleted(record, content.to);
           if (record.chanMeta?.[content.ch]) {
             record.chanMeta = { ...record.chanMeta, [content.to]: record.chanMeta[content.ch] };
             delete record.chanMeta[content.ch];
@@ -662,6 +690,7 @@ export class Controller {
         if (record.roles?.[sender] && record.roles[sender] !== 'admin') break;
         if (record.channels.includes(content.ch) && record.channels.length > 1) {
           record.channels = record.channels.filter((c) => c !== content.ch);
+          this.markChannelDeleted(record, content.ch);
           if (record.chanMeta?.[content.ch]) {
             record.chanMeta = { ...record.chanMeta };
             delete record.chanMeta[content.ch];
@@ -736,11 +765,46 @@ export class Controller {
     return id;
   }
 
+  // === channel presence guard ============================================
+  //
+  // A message can legitimately arrive for a channel this device hasn't been
+  // told about yet — its `chan` event still in flight over the ordered log,
+  // or a channel created before we joined. We surface such a channel so the
+  // message isn't stranded. But the log is not perfectly ordered relative to
+  // deletes, and a re-added device can be handed old blobs: a late, replayed,
+  // or reordered message for a *deleted* channel must never bring it back.
+  // Deleted names are tombstoned (bounded) so only an explicit admin `chan`
+  // re-creation can revive them.
+  static DELETED_MAX = 200;
+
+  /** Surface an unknown channel for an incoming message, unless it is a call
+      thread or a room we have seen deleted. */
+  ensureChannel(record, ch) {
+    if (isCallChat(ch) || record.channels.includes(ch)) return;
+    if ((record.deletedChannels ?? []).includes(ch)) return;
+    record.channels.push(ch);
+  }
+
+  /** Remember a removed channel so a stray message can't resurrect it. */
+  markChannelDeleted(record, ch) {
+    record.deletedChannels = [...new Set([...(record.deletedChannels ?? []), ch])].slice(
+      -Controller.DELETED_MAX
+    );
+  }
+
+  /** A channel is legitimately (re-)created: it is no longer a tombstone. */
+  clearChannelDeleted(record, ch) {
+    if (record.deletedChannels?.length) {
+      record.deletedChannels = record.deletedChannels.filter((c) => c !== ch);
+    }
+  }
+
   async createChannel(serverId, channel) {
     const record = this.servers.get(serverId);
     const ch = channel.toLowerCase().replace(/[^a-z0-9-]+/g, '-');
     if (!ch || record.channels.includes(ch)) return;
     record.channels.push(ch);
+    this.clearChannelDeleted(record, ch);
     await this.sendContent(serverId, { k: 'chan', ch });
     await this.db.serverPut(record);
     this.dispatch({ type: 'servers', servers: this.snapshotServers() });
@@ -922,6 +986,8 @@ export class Controller {
     const ch = Controller.slugChannel(to);
     if (!ch || ch === from || !record.channels.includes(from) || record.channels.includes(ch)) return;
     record.channels = record.channels.map((c) => (c === from ? ch : c));
+    this.markChannelDeleted(record, from);
+    this.clearChannelDeleted(record, ch);
     if (record.chanMeta?.[from]) {
       record.chanMeta = { ...record.chanMeta, [ch]: record.chanMeta[from] };
       delete record.chanMeta[from];
@@ -941,6 +1007,7 @@ export class Controller {
     if (!record.channels.includes(channel)) return;
     if (record.channels.length <= 1) throw new Error('a server needs at least one channel');
     record.channels = record.channels.filter((c) => c !== channel);
+    this.markChannelDeleted(record, channel);
     if (record.chanMeta?.[channel]) {
       record.chanMeta = { ...record.chanMeta };
       delete record.chanMeta[channel];
@@ -984,8 +1051,14 @@ export class Controller {
   }
 
   async sendChat(serverId, channel, text) {
-    await this.sendContent(serverId, { k: 'chat', ch: channel, text });
-    const message = { server: serverId, channel, sender: this.me, text, ts: Date.now() };
+    // The timestamp is the sender's, carried on the wire, so every device —
+    // and the kept-history log — stamps this message identically. Otherwise
+    // each recipient's own receive-clock ts would (a) order messages
+    // differently per member and (b) defeat the history dedup, which keys on
+    // ts, duplicating every backfilled line. See `messageTs`.
+    const ts = Date.now();
+    await this.sendContent(serverId, { k: 'chat', ch: channel, text, ts });
+    const message = { server: serverId, channel, sender: this.me, text, ts };
     await this.storeMessage(message);
     this.appendHistory(serverId, channel, message);
   }
@@ -996,8 +1069,9 @@ export class Controller {
   async sendGameCard(serverId, channel, game) {
     const ref = normalizeGameRef(game);
     if (!ref) return;
-    await this.sendContent(serverId, { k: 'game', ch: channel, game: ref });
-    const message = { server: serverId, channel, sender: this.me, game: ref, ts: Date.now() };
+    const ts = Date.now();
+    await this.sendContent(serverId, { k: 'game', ch: channel, game: ref, ts });
+    const message = { server: serverId, channel, sender: this.me, game: ref, ts };
     await this.storeMessage(message);
     this.appendHistory(serverId, channel, message);
   }
@@ -1485,8 +1559,9 @@ export class Controller {
       blob: blobId,
       key: b64.enc(key),
     };
-    await this.sendContent(serverId, { k: 'file', ch: channel, file });
-    const message = { server: serverId, channel, sender: this.me, file, ts: Date.now() };
+    const ts = Date.now();
+    await this.sendContent(serverId, { k: 'file', ch: channel, file, ts });
+    const message = { server: serverId, channel, sender: this.me, file, ts };
     await this.storeMessage(message);
     this.appendHistory(serverId, channel, message);
   }
@@ -1635,6 +1710,9 @@ export class Controller {
       epoch,
       lastSeq: sent.seq,
       joinedAt: prior?.joinedAt ?? Date.now(),
+      // Same as onWelcome: the log resumes past this join, so let the first
+      // meta rebroadcast reconcile a possibly-stale shape rather than union.
+      pendingMetaSync: true,
     };
     this.servers.set(group, record);
     await this.db.serverPut(record);
@@ -1713,6 +1791,17 @@ export class Controller {
   toast(text) {
     this.dispatch({ type: 'toast', text });
   }
+}
+
+/** A message's timestamp is the sender's clock, carried on the wire, so every
+    device orders and dedupes it identically and it matches the kept-history
+    copy. Older senders (or a hostile payload) may omit it or send garbage; a
+    non-finite/non-positive value falls back to this device's own clock. The
+    history log already trusts the sender's ts, so this only makes live
+    receipt consistent with it. */
+export function messageTs(claimed, now = Date.now()) {
+  const t = Number(claimed);
+  return Number.isFinite(t) && t > 0 ? t : now;
 }
 
 /** A call's conversation thread lives under `voice:<room>` — real E2EE chat

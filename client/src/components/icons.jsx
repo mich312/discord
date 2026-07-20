@@ -63,6 +63,21 @@ export const Wave = (p) => (
   </Svg>
 );
 
+export const Mic = (p) => (
+  <Svg {...p}>
+    <rect x="6" y="1.8" width="4" height="8" rx="2" />
+    <path d="M3.7 7.5a4.3 4.3 0 0 0 8.6 0M8 11.8v2.4" />
+  </Svg>
+);
+
+export const MicOff = (p) => (
+  <Svg {...p}>
+    <rect x="6" y="1.8" width="4" height="8" rx="2" />
+    <path d="M3.7 7.5a4.3 4.3 0 0 0 8.6 0M8 11.8v2.4" />
+    <path d="M2.3 2.3l11.4 11.4" />
+  </Svg>
+);
+
 export const Plus = (p) => (
   <Svg {...p}>
     <path d="M8 3.2v9.6M3.2 8h9.6" />
