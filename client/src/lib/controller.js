@@ -80,7 +80,7 @@ import {
   reconcileMeta,
   upsertNotice,
 } from './overview.js';
-import { freshPresence, normalizeGameRef, normalizePresence } from './games.js';
+import { freshPresence, normalizeGameRef, normalizePresence, normalizeWant } from './games.js';
 
 const KP_TOPUP = 2; // fresh KeyPackages published per connect
 const INVITE_TTL_SECONDS = 7 * 24 * 3600;
@@ -397,6 +397,8 @@ export class Controller {
         await this.voice.handleEnvelope(msg.group, event.sender, content);
       } else if (content.k === 'pres') {
         this.setLivePresence(msg.group, event.sender, normalizePresence(content));
+      } else if (content.k === 'want') {
+        this.setLiveWant(msg.group, event.sender, normalizeWant(content));
       }
     } catch (e) {
       console.warn(`ephemeral from ${msg.sender} undecryptable: ${e.message}`);
@@ -571,6 +573,12 @@ export class Controller {
         // Ephemeral by design: kept in a controller-side map, expired by
         // readers, never written to the record store or the backup.
         this.setLivePresence(record.id, sender, normalizePresence(content));
+        break;
+      }
+      case 'want': {
+        // A rally — same ephemeral discipline as presence: a controller-side
+        // map, reader-expired, never persisted to the record or the backup.
+        this.setLiveWant(record.id, sender, normalizeWant(content));
         break;
       }
       case 'react': {
@@ -1273,6 +1281,26 @@ export class Controller {
     const map = this.livePresence.get(serverId) ?? {};
     map[handle] = entry;
     this.livePresence.set(serverId, map);
+    this.dispatch({ type: 'servers', servers: this.snapshotServers() });
+  }
+
+  /** Ephemeral rally: "I want to play X — come join" (or, with a null ref,
+      that I'm standing down). Same wire and same discipline as setPlaying —
+      fanned out over MLS, kept only in memory, expired by readers — so the
+      relay learns nothing and a replay can't resurrect a stale rally. */
+  async setWant(serverId, gameRef) {
+    if (!this.servers.get(serverId)) return;
+    const want = gameRef ? normalizeGameRef(gameRef) : null;
+    const ts = Date.now();
+    this.setLiveWant(serverId, this.me, { want, ts });
+    await this.sendEphemeral(serverId, { k: 'want', want, ts });
+  }
+
+  setLiveWant(serverId, handle, entry) {
+    if (!this.liveWants) this.liveWants = new Map();
+    const map = this.liveWants.get(serverId) ?? {};
+    map[handle] = entry;
+    this.liveWants.set(serverId, map);
     this.dispatch({ type: 'servers', servers: this.snapshotServers() });
   }
 
@@ -2101,6 +2129,8 @@ export class Controller {
         chanMeta: JSON.parse(JSON.stringify(r.chanMeta ?? {})),
         // Live only: which game each member says they're in right now.
         presence: { ...(this.livePresence?.get(r.id) ?? {}) },
+        // Live only: open rallies — who wants to play what right now.
+        wants: { ...(this.liveWants?.get(r.id) ?? {}) },
       }));
   }
 

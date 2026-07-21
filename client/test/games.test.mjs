@@ -150,3 +150,20 @@ test('normalizePresence honors a sane claimed ts so replays age out', () => {
   const missing = normalizePresence({ playing: { id: 'g', name: 'G' } }, now);
   assert.equal(missing.ts, now, 'no claim falls back to receipt time');
 });
+
+test('rally claims are whitelisted and expire faster than presence', async () => {
+  const { normalizeWant, freshWant, WANT_TTL } = await import('../src/lib/games.js');
+  const NOW = 1_800_000_000_000;
+  const w = normalizeWant({ want: { id: 'g3', name: 'Tanks', kind: 'activity', url: 'https://evil' } }, NOW);
+  assert.deepEqual(w.want, { id: 'g3', name: 'Tanks', kind: 'activity' }); // url never rides along
+  assert.deepEqual(freshWant(w, NOW + WANT_TTL - 1), w.want);
+  assert.equal(freshWant(w, NOW + WANT_TTL + 1), null, 'a stale rally reads as expired');
+  assert.equal(normalizeWant({ want: null }, NOW).want, null, 'a stand-down carries no game');
+  assert.equal(normalizeWant('junk', NOW).want, null);
+  // Honors a sane claimed ts (replays age from when the rally was made) and
+  // clamps a future ts to now — same discipline as presence.
+  const old = normalizeWant({ want: { id: 'g', name: 'G' }, ts: NOW - WANT_TTL - 1 }, NOW);
+  assert.equal(freshWant(old, NOW), null, 'replayed rally ages out from its claimed ts');
+  const future = normalizeWant({ want: { id: 'g', name: 'G' }, ts: NOW + 9e9 }, NOW);
+  assert.equal(future.ts, NOW, 'future rally clamps to now');
+});

@@ -47,6 +47,10 @@ const servers = [
       bob: { playing: { id: 'g1', name: 'Hex Gambit', kind: 'activity' }, ts: now - 41 * 60e3 },
       dana: { playing: { id: 'g1', name: 'Hex Gambit', kind: 'activity' }, ts: now - 41 * 60e3 },
     },
+    // An open rally: charlie's up for Tanks and hoping someone joins in.
+    wants: {
+      charlie: { want: { id: 'g3', name: 'Tanks! Night Ops', kind: 'activity' }, ts: now - 4 * 60e3 },
+    },
     rsvps: { bob: { at: now + 52 * H, ts: now - 3 * H }, dana: { at: now + 52 * H, ts: now - 2 * H }, marek: { at: now + 52 * H, ts: now - H } },
     overview: {
       games: [
@@ -366,6 +370,7 @@ function PreviewShell({ empty = false, banner = false, modal = null, palette = f
                   setActive({ ...active, channel: activeServer.channels[0] });
                   setLiveGame(g);
                 }}
+                onRally={noop}
                 onRsvp={noop}
                 onSave={(ov) => setOverviews((o) => ({ ...o, [activeServer.id]: ov }))}
                 onAddNotice={(text) =>

@@ -211,3 +211,24 @@ export function freshPresence(entry, now = Date.now()) {
   if (!entry?.playing) return null;
   return now - entry.ts < PRESENCE_TTL ? entry.playing : null;
 }
+
+/** A rally as received: "I want to play X — come join." Like presence it
+    carries a bare game *ref* (no URL — the card resolves against the shelf
+    at click time) and rides the ephemeral fan-out. A rally is an active
+    call to gather, not a lasting status, so it ages out faster: twenty
+    minutes, then readers treat it as expired. */
+export const WANT_TTL = 20 * 60e3;
+
+export function normalizeWant(w, now = Date.now()) {
+  if (!w || typeof w !== 'object') return { want: null, ts: now };
+  const want = normalizeGameRef(w.want);
+  // Same ts discipline as presence: trust a sane claimed ts so a delayed or
+  // replayed rally ages from when it was made; clamp anything future to now.
+  const ts = Number(w.ts);
+  return { want, ts: Number.isFinite(ts) && ts > 0 ? Math.min(ts, now) : now };
+}
+
+export function freshWant(entry, now = Date.now()) {
+  if (!entry?.want) return null;
+  return now - entry.ts < WANT_TTL ? entry.want : null;
+}

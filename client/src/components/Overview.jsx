@@ -3,6 +3,7 @@ import Seal from './Seal.jsx';
 import { describeAgo, describeUntil, canRemoveNotice } from '../lib/overview.js';
 import {
   freshPresence,
+  freshWant,
   gameHost,
   lastPlayed,
   playCount,
@@ -14,7 +15,7 @@ import {
   normalizeGame,
 } from '../lib/games.js';
 import { nameHue } from '../lib/avatar.js';
-import { Hash, Wave, LinkGlyph, Plus, X, ArrowRight, Gamepad, External, Copy, Check } from './icons.jsx';
+import { Hash, Wave, Bell, LinkGlyph, Plus, X, ArrowRight, Gamepad, External, Copy, Check } from './icons.jsx';
 
 // The circle's game hub. Two faces off one page, so the thing the page is
 // named for leads:
@@ -70,6 +71,17 @@ const FILTER_LABEL = {
   web: 'web',
   servers: 'servers',
 };
+
+// "you want to play" / "alice wants to play" / "alice & bob want to play" /
+// "3 want to play" — verb agrees with the count, "you" replaces my own name.
+function ralliersLabel(who, me) {
+  const name = (h) => (h === me ? 'you' : h);
+  if (who.length === 1) {
+    return who[0] === me ? 'you want to play' : `${who[0]} wants to play`;
+  }
+  if (who.length === 2) return `${name(who[0])} & ${name(who[1])} want to play`;
+  return `${who.length} want to play`;
+}
 
 let linkSeq = 0;
 
@@ -248,7 +260,7 @@ function LiveBand({ game, players, me, onJoin }) {
 // its name, like a member's orb); the primary action reads the game's state —
 // join when the circle's already in it, launch when it's quiet, copy for a
 // native server — so one glance tells you the next move.
-function GameCard({ game, players, canManage, onLaunch, onRemove, onFavorite }) {
+function GameCard({ game, players, canManage, rallied, onLaunch, onRally, onRemove, onFavorite }) {
   const [copied, setCopied] = useState(false);
   const [fav, setFav] = useState(() => isFavorite(game.id));
   const hue = nameHue(game.name);
@@ -382,6 +394,18 @@ function GameCard({ game, players, canManage, onLaunch, onRemove, onFavorite }) 
             </>
           )}
         </div>
+        {!live && onRally && (
+          <button
+            className={rallied ? 'game-rally on' : 'game-rally'}
+            data-testid={`game-rally-${game.id}`}
+            aria-pressed={rallied}
+            title={rallied ? 'stand down your rally' : 'ping the circle — “I want to play this”'}
+            onClick={() => onRally(rallied ? null : game)}
+          >
+            <Bell size={12} />
+            {rallied ? 'you rallied — waiting for others' : 'rally the circle to play'}
+          </button>
+        )}
       </div>
     </li>
   );
@@ -453,6 +477,7 @@ export default function Overview({
   onSelectChannel,
   onVoiceJoin,
   onLaunchGame,
+  onRally,
   onRsvp,
   onSave,
   onAddNotice,
@@ -500,6 +525,19 @@ export default function Overview({
     if (g) (playingBy[g.id] ??= []).push(handle);
   }
   const liveGames = games.filter((g) => (playingBy[g.id] ?? []).length > 0);
+  // Open rallies: game -> who wants to play it right now. A game that's
+  // already live is joinable, so presence supersedes its rally; a rally for
+  // a game no longer on the shelf is dropped (nothing to launch).
+  const wantBy = {};
+  for (const [handle, entry] of Object.entries(server.wants ?? {})) {
+    const w = freshWant(entry, now);
+    if (!w) continue;
+    const g = games.find((x) => x.id === w.id);
+    if (!g || (playingBy[g.id]?.length ?? 0) > 0) continue;
+    (wantBy[g.id] ??= { game: g, who: [] }).who.push(handle);
+  }
+  const rallies = Object.values(wantBy);
+  const myWant = freshWant(server.wants?.[me], now);
   // The band features whoever has the most players in; ties go to a web game,
   // since that one you can actually join in place.
   const bandGame = liveGames
@@ -629,11 +667,44 @@ export default function Overview({
                 me={me}
                 onJoin={() => launchFromShelf(bandGame)}
               />
-            ) : games.length > 0 ? (
+            ) : games.length > 0 && rallies.length === 0 ? (
               <p className="hub-nudge" data-testid="hub-quiet">
-                No one&rsquo;s playing right now — launch one below to get a game going.
+                No one&rsquo;s playing right now — launch one below, or rally the circle to
+                gather a game.
               </p>
             ) : null}
+
+            {rallies.length > 0 && (
+              <section className="hub-rallies" data-testid="hub-rallies">
+                <span className="overline">rallying</span>
+                <ul className="rally-list">
+                  {rallies.map(({ game: g, who }) => (
+                    <li className="rally-row" key={g.id} data-testid={`rally-${g.id}`}>
+                      <span className="game-who-stack">
+                        {who.slice(0, 3).map((p) => (
+                          <Seal key={p} name={p} size={22} title={p} />
+                        ))}
+                      </span>
+                      <span className="rally-text">
+                        {ralliersLabel(who, me)} <strong>{g.name}</strong>
+                      </span>
+                      {g.kind === 'server' ? (
+                        <span className="rally-host mono">{gameHost(g)}</span>
+                      ) : (
+                        <button
+                          className="button live rally-join"
+                          data-testid={`rally-join-${g.id}`}
+                          onClick={() => launchFromShelf(g)}
+                        >
+                          <Gamepad size={13} />
+                          join in
+                        </button>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )}
 
             <section className="overview-section shelf-section">
               <span className="overline shelf-overline">
@@ -672,7 +743,9 @@ export default function Overview({
                       game={g}
                       players={playingBy[g.id] ?? []}
                       canManage={canManage}
+                      rallied={canSend && myWant?.id === g.id}
                       onLaunch={() => launchFromShelf(g)}
+                      onRally={canSend ? onRally : undefined}
                       onRemove={() => saveGames(games.filter((x) => x.id !== g.id))}
                       onFavorite={() => setFavTick((n) => n + 1)}
                     />

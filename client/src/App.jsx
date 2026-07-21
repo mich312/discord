@@ -336,6 +336,8 @@ export default function App() {
     if (game && server && !activeServer?.restored) {
       playingRef.current = { server, game };
       c.setPlaying(server, game).catch(() => {});
+      // Being in a game supersedes any rally I sent for it — stand it down.
+      c.setWant(server, null).catch(() => {});
     } else if (!game && prev) {
       playingRef.current = null;
       c.setPlaying(prev.server, null).catch(() => {});
@@ -693,6 +695,11 @@ export default function App() {
                     .catch((e) => dispatch({ type: 'toast', text: `voice: ${e.message}` }))
                 }
                 onLaunchGame={launchGame}
+                onRally={(g) =>
+                  controllerRef.current
+                    .setWant(server, g)
+                    .catch((e) => dispatch({ type: 'toast', text: e.message }))
+                }
                 onRsvp={(at, going) =>
                   controllerRef.current
                     .rsvp(server, at, going)
