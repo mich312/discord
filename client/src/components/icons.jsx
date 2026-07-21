@@ -96,6 +96,23 @@ export const HeadphoneOff = (p) => (
   </Svg>
 );
 
+// Video camera — the camera-on glyph: a body with a lens and a jutting
+// viewfinder nub.
+export const Camera = (p) => (
+  <Svg {...p}>
+    <rect x="1.8" y="4.5" width="8.5" height="7" rx="1.6" />
+    <path d="M10.3 7.2l3.9-2.1v5.8l-3.9-2.1z" />
+  </Svg>
+);
+
+export const CameraOff = (p) => (
+  <Svg {...p}>
+    <rect x="1.8" y="4.5" width="8.5" height="7" rx="1.6" />
+    <path d="M10.3 7.2l3.9-2.1v5.8l-3.9-2.1z" />
+    <path d="M2.3 2.3l11.4 11.4" />
+  </Svg>
+);
+
 export const Plus = (p) => (
   <Svg {...p}>
     <path d="M8 3.2v9.6M3.2 8h9.6" />

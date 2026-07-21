@@ -199,6 +199,7 @@ function fakeScreenStream() {
 
 const mockVoiceManager = {
   screenStreamFor: (name) => (name === 'bob' ? fakeScreenStream() : null),
+  cameraStreamFor: () => null,
 };
 
 const noop = () => {};

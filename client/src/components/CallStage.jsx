@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import Seal from './Seal.jsx';
 import VoiceMeter from './VoiceMeter.jsx';
-import { Wave, X, Lock, Screen, Mic, MicOff, Headphone, HeadphoneOff } from './icons.jsx';
+import { Wave, X, Lock, Screen, Mic, MicOff, Headphone, HeadphoneOff, Camera, CameraOff } from './icons.jsx';
 
 function timeOf(ts) {
   return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -31,6 +31,29 @@ function ScreenTile({ stream, name, mine }) {
   );
 }
 
+// A participant's camera, shown in place of their avatar in the bubble. Mine
+// is mirrored (like every selfie preview) and muted; remote legs carry no
+// audio track anyway, but muting is belt-and-braces against feedback.
+function CameraTile({ stream, name, mine }) {
+  const ref = useRef(null);
+  useEffect(() => {
+    const video = ref.current;
+    if (!video) return;
+    if (video.srcObject !== stream) video.srcObject = stream;
+    video.play?.().catch(() => {});
+  }, [stream]);
+  return (
+    <video
+      ref={ref}
+      className={mine ? 'bubble-cam mirror' : 'bubble-cam'}
+      autoPlay
+      playsInline
+      muted
+      data-testid={`bubble-cam-video-${name}`}
+    />
+  );
+}
+
 // The call stage: a full-pane dashboard for the room you're in — a bubble
 // per participant (speaking glow + live meter), the shared screen front and
 // center when someone presents, and the call's own conversation thread.
@@ -45,6 +68,8 @@ export default function CallStage({
   onSend,
   onShare,
   onStopShare,
+  onCamera,
+  onStopCamera,
   onToggleMute,
   onToggleDeafen,
   onLeave,
@@ -63,6 +88,8 @@ export default function CallStage({
   const participants = voice.presence[key] ?? [me];
   const sharing = voice.sharing ?? [];
   const iShare = sharing.includes(me);
+  const cameras = voice.cameras ?? [];
+  const iCam = cameras.includes(me);
   const direct = voice.direct;
   const title = direct ? `call · ${direct}` : channel;
 
@@ -111,6 +138,16 @@ export default function CallStage({
               {voice.deafened ? ' undeafen' : ' deafen'}
             </button>
           )}
+          {onCamera &&
+            (iCam ? (
+              <button className="call-btn muted-on" data-testid="camera-stop" onClick={onStopCamera}>
+                <CameraOff size={14} /> stop camera
+              </button>
+            ) : (
+              <button className="call-btn" data-testid="camera-start" onClick={onCamera}>
+                <Camera size={14} /> camera
+              </button>
+            ))}
           {iShare ? (
             <button className="call-btn decline" data-testid="share-stop" onClick={onStopShare}>
               <Screen size={14} /> stop sharing
@@ -158,6 +195,7 @@ export default function CallStage({
             {participants.map((p) => {
               const speaking = voice.speaking?.includes(p);
               const conn = p === me ? null : voice.connections[p];
+              const camStream = cameras.includes(p) ? manager.cameraStreamFor(p) : null;
               return (
                 <li
                   key={p}
@@ -165,11 +203,20 @@ export default function CallStage({
                   data-testid={`stage-bubble-${p}`}
                   data-speaking={speaking ? 'true' : 'false'}
                 >
-                  <span className="bubble-seal">
-                    <Seal name={p} size={shown ? 44 : 72} title={p} />
+                  <span className={camStream ? 'bubble-seal has-cam' : 'bubble-seal'}>
+                    {camStream ? (
+                      <CameraTile stream={camStream} name={p} mine={p === me} />
+                    ) : (
+                      <Seal name={p} size={shown ? 44 : 72} title={p} />
+                    )}
                   </span>
                   <span className="bubble-name">{p === me ? 'you' : p}</span>
                   <VoiceMeter name={p} />
+                  {cameras.includes(p) && !camStream && (
+                    <span className="bubble-badge" data-testid={`bubble-camera-waiting-${p}`}>
+                      <Camera size={11} /> camera…
+                    </span>
+                  )}
                   {sharing.includes(p) && (
                     <span className="bubble-badge" data-testid={`bubble-sharing-${p}`}>
                       <Screen size={11} /> sharing

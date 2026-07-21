@@ -879,8 +879,26 @@ kbd {
   border-radius: 50%;
   transition: box-shadow 0.12s ease;
 }
+/* A live camera fills a rounded rectangle in place of the round avatar —
+   video wants its 16:9 frame, not a circle-crop. */
+.stage-bubble .bubble-seal.has-cam { border-radius: 12px; overflow: hidden; }
+.stage-bubble .bubble-cam {
+  width: 128px;
+  height: 72px;
+  object-fit: cover;
+  border-radius: 12px;
+  background: #000;
+  display: block;
+  transition: box-shadow 0.12s ease;
+}
+.stage-bubbles.compact .stage-bubble .bubble-cam { width: 88px; height: 50px; }
+/* A selfie preview reads right only when mirrored. */
+.stage-bubble .bubble-cam.mirror { transform: scaleX(-1); }
 .stage-bubble.speaking { border-color: var(--ok); }
 .stage-bubble.speaking .bubble-seal svg {
+  box-shadow: 0 0 0 2px var(--ok), 0 0 14px var(--ok-soft);
+}
+.stage-bubble.speaking .bubble-cam {
   box-shadow: 0 0 0 2px var(--ok), 0 0 14px var(--ok-soft);
 }
 .stage-bubble .bubble-name {

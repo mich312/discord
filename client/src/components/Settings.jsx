@@ -41,6 +41,7 @@ export default function Settings({
     noiseSuppression: voice?.processing?.noiseSuppression ?? true,
     autoGainControl: voice?.processing?.autoGainControl ?? true,
   });
+  const [callSounds, setCallSounds] = useState(voice?.callSounds ?? true);
   const sinkSupported =
     typeof HTMLMediaElement !== 'undefined' && 'setSinkId' in HTMLMediaElement.prototype;
 
@@ -98,6 +99,11 @@ export default function Settings({
     const next = { ...processing, [key]: !processing[key] };
     setProcessing(next);
     voice?.setAudioProcessing?.({ [key]: next[key] });
+  }
+  function toggleCallSounds() {
+    const next = !callSounds;
+    setCallSounds(next);
+    voice?.setCallSounds?.(next);
   }
 
   const dspOptions = [
@@ -249,6 +255,25 @@ export default function Settings({
               On by default. Turn them off for raw capture — good hardware, or sharing music where
               the gate would clamp the quiet parts. Changes apply to a live call at once.
             </p>
+          </div>
+
+          <div className="settings-dsp">
+            <div className="settings-dsp-head">sounds</div>
+            <label className="settings-toggle">
+              <input
+                type="checkbox"
+                checked={callSounds}
+                onChange={toggleCallSounds}
+                data-testid="settings-call-sounds"
+              />
+              <span className="settings-toggle-body">
+                <span className="settings-toggle-label">Join &amp; leave chimes</span>
+                <span className="fineprint muted">
+                  A soft tone when someone enters or leaves the call you’re in. Silenced while
+                  you’re deafened.
+                </span>
+              </span>
+            </label>
           </div>
         </section>
 

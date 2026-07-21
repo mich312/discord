@@ -48,12 +48,17 @@ threat-model sections still apply verbatim.
 - **Voice channels** — audio WebRTC mesh (viable to ~6–8; a 1:1
   call is a two-person channel). Signaling is MLS-encrypted and never
   logged, which authenticates the DTLS fingerprints for free. Media is
-  peer-to-peer; the server carries none of it. No mic → listen-only.
+  peer-to-peer; the server carries none of it. The mic runs through the
+  browser's echo cancellation / noise suppression / auto-gain (all
+  toggleable), and every leg is Opus with DTX + a voice bitrate cap so
+  silence costs nothing and a mesh stays affordable. Mute, deafen
+  (silence everyone + yourself), and — no mic → listen-only.
 - **Call stage** — every call opens a dashboard: a bubble per
-  participant with live speaking meters, screen sharing (one extra
-  renegotiated video track per presenter, still fully P2P), and the
-  call's own conversation thread — regular MLS-sealed chat scoped to
-  the room under a `voice:<room>` channel id, never a sidebar room.
+  participant with live speaking meters, camera video and screen sharing
+  (each an extra renegotiated video track, still fully P2P — one person
+  can do both at once), soft join/leave chimes, and the call's own
+  conversation thread — regular MLS-sealed chat scoped to the room under
+  a `voice:<room>` channel id, never a sidebar room.
 - **Persistence** — MLS state snapshots in IndexedDB survive reloads
   with live ratchets; the identity key is mirrored to localStorage and
   exportable (file, paste-string, or passphrase-wrapped recovery file).

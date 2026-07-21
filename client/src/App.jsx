@@ -642,6 +642,12 @@ export default function App() {
                 .catch((e) => dispatch({ type: 'toast', text: `screen share: ${e.message}` }))
             }
             onStopShare={() => controllerRef.current.voice.stopShare()}
+            onCamera={() =>
+              controllerRef.current.voice
+                .startCamera()
+                .catch((e) => dispatch({ type: 'toast', text: `camera: ${e.message}` }))
+            }
+            onStopCamera={() => controllerRef.current.voice.stopCamera()}
             onToggleMute={() => controllerRef.current.voice.setMuted(!state.voice.muted)}
             onToggleDeafen={() => controllerRef.current.voice.setDeafened(!state.voice.deafened)}
             onLeave={() => controllerRef.current.voice.leave()}

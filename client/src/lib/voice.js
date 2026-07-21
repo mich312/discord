@@ -6,22 +6,95 @@
 // that swapped SDP would fail MLS authentication.
 //
 // Envelope shapes (inside MLS plaintext):
-//   {k:'voice', ch, action:'join'|'here'|'leave'|'probe'|'share'|'unshare',
-//    sharing?}                                  — 'here' carries sharing:true
-//                                                 when the sender has a live
-//                                                 screen share going
+//   {k:'voice', ch, action:'join'|'here'|'leave'|'probe'
+//                        |'share'|'unshare'|'camera'|'uncamera'
+//                        |'mute'|'unmute',
+//    sharing?, shareSid?, camera?, cameraSid?, muted?}
+//                                                — 'here' carries the live
+//                                                  share/camera flags (with
+//                                                  the stream id that routes
+//                                                  the incoming video) so a
+//                                                  joiner learns state up front
 //   {k:'rtc', ch, to, type:'offer'|'answer'|'candidate', sdp?, cand?}
+//
+// A screen share and a camera are each one extra outgoing video track. They
+// look identical on the wire (both are m=video), so every video announcement
+// carries the MediaStream id (`sid`); the receiver maps that id to 'screen'
+// or 'camera' and routes the arriving track to the right tile — which is what
+// lets one person share their screen and show their face at the same time.
 //
 // Mesh rule: for each pair, the lexicographically smaller name makes the
 // initial offer — no glare. Later renegotiation (screen share start/stop)
 // can come from either side; collisions resolve with the same ordering:
 // the smaller name's offer wins, the larger name rolls back and answers.
-// Audio-only keeps mesh viable to ~6–8 participants; screen video is one
-// extra sender track per sharer.
+// Audio-only keeps mesh viable to ~6–8 participants; each video track is one
+// more sender leg per peer, so camera + screen tighten that ceiling.
 
 import { frameRms, levelFromRms, nextSpeaking } from './meter.js';
 
 const DEFAULT_ICE = [{ urls: 'stun:stun.l.google.com:19302' }];
+
+// Opus fmtp knobs we stamp onto every offer/answer. DTX stops the encoder
+// sending steady packets through silence (big win in a mesh, where every
+// participant is a separate uplink); the bitrate cap keeps a mono voice
+// stream well under a music-grade default; FEC lets the decoder paper over
+// isolated packet loss. Mono only — voice gains nothing from stereo.
+const OPUS_PARAMS = {
+  useinbandfec: '1',
+  usedtx: '1',
+  maxaveragebitrate: '32000',
+  stereo: '0',
+  'sprop-stereo': '0',
+};
+
+/** Merge OPUS_PARAMS into an existing `a=fmtp` parameter string. */
+function mergeOpusParams(existing) {
+  const params = {};
+  for (const kv of existing.split(';')) {
+    const t = kv.trim();
+    if (!t) continue;
+    const eq = t.indexOf('=');
+    if (eq === -1) params[t] = null;
+    else params[t.slice(0, eq)] = t.slice(eq + 1);
+  }
+  Object.assign(params, OPUS_PARAMS);
+  return Object.entries(params)
+    .map(([k, v]) => (v === null ? k : `${k}=${v}`))
+    .join(';');
+}
+
+/** Rewrite an SDP so the Opus payload advertises DTX + a voice bitrate cap +
+    FEC. Pure string surgery: finds the opus payload type(s), merges the knobs
+    into their `a=fmtp` line (inserting one if absent), and leaves everything
+    else — including non-opus codecs — untouched. A no-op on SDP with no
+    opus line, so it is safe to run over every description unconditionally. */
+export function tuneOpus(sdp) {
+  if (!sdp || !/opus\/48000/i.test(sdp)) return sdp;
+  const eol = sdp.includes('\r\n') ? '\r\n' : '\n';
+  const lines = sdp.split(/\r?\n/);
+  const pts = [];
+  for (const l of lines) {
+    const m = /^a=rtpmap:(\d+) opus\/48000/i.exec(l);
+    if (m) pts.push(m[1]);
+  }
+  if (!pts.length) return sdp;
+  const handled = new Set();
+  const out = lines.map((line) => {
+    const fm = /^a=fmtp:(\d+) (.*)$/.exec(line);
+    if (fm && pts.includes(fm[1])) {
+      handled.add(fm[1]);
+      return `a=fmtp:${fm[1]} ${mergeOpusParams(fm[2])}`;
+    }
+    return line;
+  });
+  // Any opus payload without an fmtp line gets one right after its rtpmap.
+  for (const pt of pts) {
+    if (handled.has(pt)) continue;
+    const idx = out.findIndex((l) => new RegExp(`^a=rtpmap:${pt} opus`, 'i').test(l));
+    if (idx >= 0) out.splice(idx + 1, 0, `a=fmtp:${pt} ${mergeOpusParams('')}`);
+  }
+  return out.join(eol);
+}
 
 export class VoiceManager {
   /**
@@ -52,6 +125,16 @@ export class VoiceManager {
     this.share = null; // {stream, track}
     this.shares = new Map(); // name -> key(server, channel)
     this.remoteScreens = new Map(); // name -> MediaStream
+    // Camera: mirror of the screen-share bookkeeping. A separate outgoing
+    // video track, a map of who else has their camera on, and the remote
+    // camera streams as they arrive.
+    this.camera = null; // {stream, track}
+    this.cameras = new Map(); // name -> key(server, channel)
+    this.remoteCameras = new Map(); // name -> MediaStream
+    // Incoming video is just m=video — this maps a stream id to what it is
+    // ('screen'|'camera'), learned from the announcement that accompanies it.
+    this.videoKind = new Map(); // stream.id -> 'screen' | 'camera'
+    this.unroutedVideo = new Map(); // stream.id -> {name, stream, track} awaiting its kind
     this.mutedPeers = new Set(); // names that told us their mic is muted
     // Active-speaker metering (local + each remote), all client-side.
     this.levels = {}; // name -> 0..1 instantaneous loudness (read by the meter UI)
@@ -65,6 +148,11 @@ export class VoiceManager {
     const ls = typeof localStorage !== 'undefined' ? localStorage : null;
     this.inputDeviceId = ls?.getItem('quorum-audio-in') || null;
     this.outputDeviceId = ls?.getItem('quorum-audio-out') || null;
+    // A short chime when someone joins or leaves the call you're in — on by
+    // default, suppressed while deafened (you asked for silence). Synthesised
+    // with WebAudio so there is no asset to ship or fetch.
+    this.callSounds = ls?.getItem('quorum-call-sounds') !== '0';
+    this.chimeCtx = null;
     // Voice DSP the browser applies to the mic before it hits the wire. All
     // on by default — that is what turns "raw" capture into a call that
     // sounds like a call (echo gone, keyboard/fan hiss gate, level evened
@@ -103,6 +191,15 @@ export class VoiceManager {
           ].sort()
         : [],
       screens: [...this.remoteScreens.keys()].sort(),
+      // Who has their camera on in my room (me included), and whose camera
+      // stream has actually arrived — same announce-then-track split as shares.
+      cameras: activeKey
+        ? [
+            ...(this.camera ? [this.me] : []),
+            ...[...this.cameras.entries()].filter(([, k]) => k === activeKey).map(([n]) => n),
+          ].sort()
+        : [],
+      cams: [...this.remoteCameras.keys()].sort(),
       // Peers who told us their mic is muted (mic-off badge on their bubble).
       mutedPeers: [...this.mutedPeers].sort(),
       connections: Object.fromEntries(
@@ -123,6 +220,45 @@ export class VoiceManager {
     };
     if (typeof window !== 'undefined') window.__voice = state;
     this.onState(state);
+  }
+
+  /** Persist and toggle the join/leave chime preference. */
+  setCallSounds(on) {
+    this.callSounds = !!on;
+    this.persistDevice('quorum-call-sounds', on ? '' : '0');
+    this.publish();
+  }
+
+  /** A short synthesised blip when someone comes or goes: a rising two-tone
+      for a join, a falling one for a leave. No asset, no wire traffic — just
+      a couple of oscillator notes on a lazily-created context. Suppressed
+      when the user turned sounds off or is deafened. */
+  chime(kind) {
+    if (!this.callSounds || this.deafened) return;
+    if (typeof window === 'undefined') return;
+    try {
+      const Ctx = window.AudioContext || window.webkitAudioContext;
+      if (!Ctx) return;
+      if (!this.chimeCtx) this.chimeCtx = new Ctx();
+      const ctx = this.chimeCtx;
+      ctx.resume?.().catch?.(() => {});
+      const now = ctx.currentTime;
+      const osc = ctx.createOscillator();
+      const gain = ctx.createGain();
+      osc.type = 'sine';
+      const [f1, f2] = kind === 'join' ? [523.25, 783.99] : [659.25, 415.3];
+      osc.frequency.setValueAtTime(f1, now);
+      osc.frequency.setValueAtTime(f2, now + 0.09);
+      gain.gain.setValueAtTime(0.0001, now);
+      gain.gain.exponentialRampToValueAtTime(0.14, now + 0.02);
+      gain.gain.exponentialRampToValueAtTime(0.0001, now + 0.25);
+      osc.connect(gain);
+      gain.connect(ctx.destination);
+      osc.start(now);
+      osc.stop(now + 0.26);
+    } catch {
+      /* audio blocked or unavailable — a missing chime is not worth a throw */
+    }
   }
 
   // === active-speaker metering ===========================================
@@ -420,15 +556,25 @@ export class VoiceManager {
     this.peers.clear();
     this.stopMeter();
     stream.getTracks().forEach((t) => t.stop());
-    // Leaving implies unshare — the capture must not outlive the call.
+    // Leaving implies unshare / camera-off — no capture outlives the call.
     if (this.share) {
       this.share.stream.getTracks().forEach((t) => t.stop());
       this.share = null;
     }
+    if (this.camera) {
+      this.camera.stream.getTracks().forEach((t) => t.stop());
+      this.camera = null;
+    }
     this.remoteScreens.clear();
+    this.remoteCameras.clear();
+    this.cameras.clear();
+    this.videoKind.clear();
+    this.unroutedVideo.clear();
     this.mutedPeers.clear();
     this.audioCtx?.close?.().catch?.(() => {});
     this.audioCtx = null;
+    this.chimeCtx?.close?.().catch?.(() => {});
+    this.chimeCtx = null;
     this.track(server, channel, this.me, false);
     this.active = null;
     this.muted = false; // a fresh call always starts open-mic…
@@ -454,6 +600,8 @@ export class VoiceManager {
     this.peers.delete(name);
     this.removeMeter(name);
     this.remoteScreens.delete(name);
+    this.remoteCameras.delete(name);
+    this.cameras.delete(name);
     this.mutedPeers.delete(name);
     // A 1:1 call is over when the other party's leg is gone — whether they
     // left politely (leave envelope) or their tab/network died and the leg
@@ -468,16 +616,64 @@ export class VoiceManager {
     this.publish();
   }
 
-  // === screen sharing =====================================================
-  // The display capture is one extra video track on every existing peer
-  // connection, added (and removed) via renegotiation. The media itself is
-  // P2P DTLS-SRTP like the audio — the relay never carries a frame.
+  // === screen sharing + camera ============================================
+  // A screen or camera capture is one extra video track on every existing
+  // peer connection, added (and removed) via renegotiation. The media itself
+  // is P2P DTLS-SRTP like the audio — the relay never carries a frame. The
+  // two are symmetric; startVideo/stopVideo do the shared work and the
+  // share/camera entry points differ only in how they capture.
 
   /** The screen stream for `name`, if one is live: my own capture for me,
       the received remote stream for anyone else. */
   screenStreamFor(name) {
     if (name === this.me) return this.share?.stream ?? null;
     return this.remoteScreens.get(name) ?? null;
+  }
+
+  /** The camera stream for `name`, if one is live. */
+  cameraStreamFor(name) {
+    if (name === this.me) return this.camera?.stream ?? null;
+    return this.remoteCameras.get(name) ?? null;
+  }
+
+  /** Add `track`/`stream` (a screen or camera capture) to every peer,
+      renegotiate, and announce it with the stream id so receivers can tell
+      the two video kinds apart. `senderKey` is where the RTCRtpSender is
+      stashed on each peer ('shareSender' | 'cameraSender'). */
+  async startVideo(kind, stream, track, senderKey, action) {
+    this.videoKind.set(stream.id, kind);
+    const { server, channel } = this.active;
+    for (const [name, peer] of this.peers) {
+      try {
+        peer[senderKey] = peer.pc.addTrack(track, stream);
+        await this.renegotiate(server, name, peer);
+      } catch {
+        /* a dying leg misses it; its reconnect path re-adds the track */
+      }
+    }
+    await this.send(server, { k: 'voice', ch: channel, action, sid: stream.id });
+    this.publish();
+  }
+
+  /** Remove a screen/camera track from every peer, renegotiate, and retract
+      the announcement. */
+  async stopVideo(stream, senderKey, action) {
+    this.videoKind.delete(stream.id);
+    if (this.active) {
+      const { server, channel } = this.active;
+      for (const [name, peer] of this.peers) {
+        if (!peer[senderKey]) continue;
+        try {
+          peer.pc.removeTrack(peer[senderKey]);
+        } catch {
+          /* connection already closed */
+        }
+        peer[senderKey] = null;
+        await this.renegotiate(server, name, peer);
+      }
+      await this.send(server, { k: 'voice', ch: channel, action }).catch(() => {});
+    }
+    this.publish();
   }
 
   async startShare() {
@@ -496,17 +692,7 @@ export class VoiceManager {
       this.stopShare().catch(() => {});
     });
     this.share = { stream, track };
-    const { server, channel } = this.active;
-    for (const [name, peer] of this.peers) {
-      try {
-        peer.shareSender = peer.pc.addTrack(track, stream);
-        await this.renegotiate(server, name, peer);
-      } catch {
-        /* a dying leg misses the share; its reconnect path re-adds it */
-      }
-    }
-    await this.send(server, { k: 'voice', ch: channel, action: 'share' });
-    this.publish();
+    await this.startVideo('screen', stream, track, 'shareSender', 'share');
   }
 
   async stopShare() {
@@ -514,21 +700,43 @@ export class VoiceManager {
     if (!share) return;
     this.share = null;
     share.stream.getTracks().forEach((t) => t.stop());
-    if (this.active) {
-      const { server, channel } = this.active;
-      for (const [name, peer] of this.peers) {
-        if (!peer.shareSender) continue;
-        try {
-          peer.pc.removeTrack(peer.shareSender);
-        } catch {
-          /* connection already closed */
-        }
-        peer.shareSender = null;
-        await this.renegotiate(server, name, peer);
-      }
-      await this.send(server, { k: 'voice', ch: channel, action: 'unshare' }).catch(() => {});
+    await this.stopVideo(share.stream, 'shareSender', 'unshare');
+  }
+
+  /** Modest capture — a mesh pays for every video leg, so cap the camera
+      well below screen-share resolution. */
+  videoConstraint() {
+    return { width: { ideal: 640 }, height: { ideal: 360 }, frameRate: { ideal: 24 } };
+  }
+
+  async startCamera() {
+    if (!this.active || this.camera) return;
+    if (!navigator.mediaDevices?.getUserMedia) {
+      throw new Error('camera is not available in this browser');
     }
-    this.publish();
+    const stream = await navigator.mediaDevices.getUserMedia({
+      video: this.videoConstraint(),
+      audio: false,
+    });
+    const track = stream.getVideoTracks()[0];
+    if (!track) {
+      stream.getTracks().forEach((t) => t.stop());
+      throw new Error('no video track from the camera');
+    }
+    // A camera yanked mid-call (unplugged, revoked) ends the track — tear down.
+    track.addEventListener('ended', () => {
+      this.stopCamera().catch(() => {});
+    });
+    this.camera = { stream, track };
+    await this.startVideo('camera', stream, track, 'cameraSender', 'camera');
+  }
+
+  async stopCamera() {
+    const cam = this.camera;
+    if (!cam) return;
+    this.camera = null;
+    cam.stream.getTracks().forEach((t) => t.stop());
+    await this.stopVideo(cam.stream, 'cameraSender', 'uncamera');
   }
 
   /** Re-offer to one peer after a track change. Collisions (both sides
@@ -548,6 +756,7 @@ export class VoiceManager {
         return;
       }
       peer.renegotiateNeeded = false;
+      offer.sdp = tuneOpus(offer.sdp);
       await peer.pc.setLocalDescription(offer);
       await this.send(server, {
         k: 'rtc',
@@ -577,6 +786,9 @@ export class VoiceManager {
     }
     for (const [name, key] of [...this.shares]) {
       if (key.startsWith(`${server}\n`)) this.shares.delete(name);
+    }
+    for (const [name, key] of [...this.cameras]) {
+      if (key.startsWith(`${server}\n`)) this.cameras.delete(name);
     }
     this.publish();
     await this.send(server, { k: 'voice', ch: '*', action: 'probe' }).catch(() => {});
@@ -652,6 +864,9 @@ export class VoiceManager {
     for (const [name, key] of [...this.shares]) {
       if (key.startsWith(`${server}\n`) && !allowed.has(name)) this.shares.delete(name);
     }
+    for (const [name, key] of [...this.cameras]) {
+      if (key.startsWith(`${server}\n`) && !allowed.has(name)) this.cameras.delete(name);
+    }
     this.publish();
   }
 
@@ -661,16 +876,56 @@ export class VoiceManager {
     );
   }
 
-  /** Presence reply; carries the share flag so late joiners learn who is
-      already presenting without waiting for the video track to negotiate. */
+  /** Presence reply; carries the share/camera flags (and the stream ids that
+      route each incoming video) so late joiners learn who is already
+      presenting without waiting for the tracks to negotiate. */
   hereEnvelope(channel) {
     return {
       k: 'voice',
       ch: channel,
       action: 'here',
-      ...(this.share ? { sharing: true } : {}),
+      ...(this.share ? { sharing: true, shareSid: this.share.stream.id } : {}),
+      ...(this.camera ? { camera: true, cameraSid: this.camera.stream.id } : {}),
       ...(this.muted ? { muted: true } : {}),
     };
+  }
+
+  /** Record what an incoming video stream is (screen/camera) and, if its
+      track already arrived before the announcement, route it now. */
+  routeVideo(sid, kind) {
+    if (!sid) return;
+    this.videoKind.set(sid, kind);
+    const pending = this.unroutedVideo.get(sid);
+    if (pending) {
+      this.unroutedVideo.delete(sid);
+      this.attachRemoteVideo(pending.name, pending.stream, pending.track, kind);
+    }
+  }
+
+  /** File an arrived remote video stream into the screen or camera map. If we
+      don't yet know which it is (announcement in flight), park it in
+      unroutedVideo keyed by stream id — routeVideo drains it on arrival. */
+  attachRemoteVideo(name, stream, track, kind) {
+    if (!kind) {
+      this.unroutedVideo.set(stream.id, { name, stream, track });
+      const drop = () => {
+        this.unroutedVideo.delete(stream.id);
+      };
+      stream.onremovetrack = drop;
+      track.onended = drop;
+      return;
+    }
+    const map = kind === 'camera' ? this.remoteCameras : this.remoteScreens;
+    map.set(name, stream);
+    const gone = () => {
+      if (map.get(name) === stream && !stream.getVideoTracks().some((t) => t.readyState === 'live')) {
+        map.delete(name);
+        this.publish();
+      }
+    };
+    stream.onremovetrack = gone;
+    track.onended = gone;
+    this.publish();
   }
 
   async handleEnvelope(server, sender, content) {
@@ -718,12 +973,21 @@ export class VoiceManager {
         case 'join':
         case 'here': {
           this.track(server, content.ch, sender, true, content.action === 'join');
-          if (content.sharing) this.shares.set(sender, this.key(server, content.ch));
+          if (content.sharing) {
+            this.shares.set(sender, this.key(server, content.ch));
+            this.routeVideo(content.shareSid, 'screen');
+          }
+          if (content.camera) {
+            this.cameras.set(sender, this.key(server, content.ch));
+            this.routeVideo(content.cameraSid, 'camera');
+          }
           if (content.muted) this.mutedPeers.add(sender);
           else if (content.action === 'join') this.mutedPeers.delete(sender);
           if (this.inChannel(server, content.ch)) {
             if (content.action === 'join') {
-              // Tell the newcomer we're here (they can't know otherwise).
+              // Someone new arrived in my call — chime, then tell them we're
+              // here (they can't know otherwise).
+              this.chime('join');
               await this.send(server, this.hereEnvelope(content.ch));
             }
             await this.ensurePeer(server, sender);
@@ -740,6 +1004,7 @@ export class VoiceManager {
         }
         case 'share': {
           this.shares.set(sender, this.key(server, content.ch));
+          this.routeVideo(content.sid, 'screen');
           break;
         }
         case 'unshare': {
@@ -747,9 +1012,22 @@ export class VoiceManager {
           this.remoteScreens.delete(sender);
           break;
         }
+        case 'camera': {
+          this.cameras.set(sender, this.key(server, content.ch));
+          this.routeVideo(content.sid, 'camera');
+          break;
+        }
+        case 'uncamera': {
+          this.cameras.delete(sender);
+          this.remoteCameras.delete(sender);
+          break;
+        }
         case 'leave': {
+          const wasInMyCall = this.inChannel(server, content.ch);
           this.track(server, content.ch, sender, false);
           this.shares.delete(sender);
+          this.cameras.delete(sender);
+          if (wasInMyCall) this.chime('leave');
           this.dropPeer(sender);
           // A direct call ends when the *other party* leaves that same room —
           // not when some unrelated member leaves another voice room, which
@@ -792,6 +1070,7 @@ export class VoiceManager {
       // built — signaling a closed/replaced leg throws or, worse, sends an
       // offer to someone no longer in the call.
       if (this.peers.get(name) !== peer || !this.active) return;
+      offer.sdp = tuneOpus(offer.sdp);
       await peer.pc.setLocalDescription(offer);
       await this.send(server, {
         k: 'rtc',
@@ -812,13 +1091,15 @@ export class VoiceManager {
       pendingCandidates: [],
       makingOffer: false,
       shareSender: null,
+      cameraSender: null,
       renegotiateNeeded: false,
       reapTimer: null,
     };
     for (const t of this.active.stream.getTracks()) pc.addTrack(t, this.active.stream);
-    // Mid-share joiner: their very first negotiation already carries the
-    // screen track, no follow-up renegotiation needed.
+    // Mid-share / mid-camera joiner: their very first negotiation already
+    // carries whatever video I'm sending, no follow-up renegotiation needed.
     if (this.share) peer.shareSender = pc.addTrack(this.share.track, this.share.stream);
+    if (this.camera) peer.cameraSender = pc.addTrack(this.camera.track, this.camera.stream);
     pc.onicecandidate = ({ candidate }) => {
       if (!candidate || !this.active) return;
       this.send(server, {
@@ -831,19 +1112,11 @@ export class VoiceManager {
     };
     pc.ontrack = ({ track, streams }) => {
       if (track.kind === 'video') {
-        // The peer's screen. It rides its own MediaStream, distinct from the
-        // audio one, so the stage can hand it straight to a <video>.
+        // A screen or camera track — both are m=video, so which one it is
+        // comes from the stream id we were told about. If the announcement
+        // hasn't landed yet, attach routes it as soon as routeVideo learns.
         const stream = streams[0];
-        this.remoteScreens.set(name, stream);
-        const gone = () => {
-          if (this.remoteScreens.get(name) === stream && !stream.getVideoTracks().some((t) => t.readyState === 'live')) {
-            this.remoteScreens.delete(name);
-            this.publish();
-          }
-        };
-        stream.onremovetrack = gone;
-        track.onended = gone;
-        this.publish();
+        this.attachRemoteVideo(name, stream, track, this.videoKind.get(stream.id));
         return;
       }
       // Renegotiation/ICE restarts can re-fire ontrack for audio: drop the
@@ -940,6 +1213,7 @@ export class VoiceManager {
         for (const c of peer.pendingCandidates.splice(0)) await peer.pc.addIceCandidate(c);
         const answer = await peer.pc.createAnswer();
         if (this.peers.get(sender) !== peer) break;
+        answer.sdp = tuneOpus(answer.sdp);
         await peer.pc.setLocalDescription(answer);
         await this.send(server, {
           k: 'rtc',
