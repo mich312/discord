@@ -986,7 +986,7 @@ kbd {
 .self-card {
   flex-shrink: 0;
   display: flex;
-  flex-direction: column;
+  align-items: center;
   gap: 8px;
   padding: 10px 12px;
   border-top: 1px solid var(--hairline);
@@ -996,20 +996,24 @@ kbd {
   display: flex;
   align-items: center;
   gap: 9px;
+  flex: 1;
   min-width: 0;
 }
 .self-card .self-actions {
   display: flex;
   gap: 4px;
   justify-content: flex-end;
+  flex-shrink: 0;
 }
 .self-card .who { flex: 1; min-width: 0; }
 .self-card .handle {
   display: block;
   font: 600 13px var(--mono);
-  /* Spell the handle out in full — wrap rather than truncate; the actions
-     moved to their own row below, so the name owns this one. */
-  overflow-wrap: anywhere;
+  /* Name and icons share one row — truncate rather than wrap so a long
+     handle never grows the row or shoves the actions off. */
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
 }
 .self-card .status {
   display: block;
