@@ -821,7 +821,7 @@ async fn handle_request(
             }
         }
 
-        ClientMsg::Ephemeral { rid, group, payload, notify } => {
+        ClientMsg::Ephemeral { rid, group, payload, notify, notify_kind } => {
             if let Err(e) = require_member(app, &group, user).await {
                 return err(rid, e);
             }
@@ -874,11 +874,20 @@ async fn handle_request(
                 _ => Vec::new(),
             };
             if !targets.is_empty() {
+                // The push's JSON key is its kind, which the service worker
+                // turns into the right text. Allowlisted so a client can't
+                // inject arbitrary keys; unknown/absent falls back to "call".
+                let kind: &str = match notify_kind.as_deref() {
+                    Some("rally") => "rally",
+                    _ => "call",
+                };
                 let app = app.clone();
                 let group = group.clone();
                 tokio::spawn(async move {
                     for member in targets {
-                        app.push_notify(&member, serde_json::json!({"call": group})).await;
+                        let mut payload = serde_json::Map::new();
+                        payload.insert(kind.to_string(), serde_json::Value::String(group.clone()));
+                        app.push_notify(&member, serde_json::Value::Object(payload)).await;
                     }
                 });
             }

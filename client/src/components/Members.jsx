@@ -84,8 +84,8 @@ export default function Members({ server, me, canManage, voice, onAdd, onMember,
           {m === me ? (
             <span className="badge-you">you</span>
           ) : (server.verified ?? []).includes(m) ? (
-            <span className="badge-verified" title="safety number checked on this device">
-              <Check size={10} /> verified
+            <span className="badge-verified" title="verified — safety number checked on this device" aria-label="verified">
+              <Check size={11} />
             </span>
           ) : (server.linkJoined ?? []).includes(m) ? (
             <span className="badge-unverified" title="joined via invite link; safety number not checked">

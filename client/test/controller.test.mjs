@@ -317,8 +317,15 @@ test('a rally rides the ephemeral fan-out too, never the group log', async () =>
   await c.setWant('srv', { id: 'g3', name: 'Tanks', kind: 'activity' });
   assert.deepEqual(c.relay.requests.map((r) => r.t), ['ephemeral'], 'no log append for a rally');
   assert.equal(c.liveWants.get('srv').alice.want.id, 'g3');
-  // Standing down clears my rally, still over the ephemeral path.
+  // Starting a rally push-wakes the other members with a rally-labelled nudge.
+  const start = c.relay.requests[0];
+  assert.deepEqual(start.notify, ['bob'], 'rally push-wakes offline members');
+  assert.equal(start.notify_kind, 'rally', 'push is labelled a rally, not a call');
+  // Standing down clears my rally, still over the ephemeral path — and silently.
   await c.setWant('srv', null);
   assert.equal(c.liveWants.get('srv').alice.want, null, 'stand-down clears the rally');
   assert.deepEqual(c.relay.requests.map((r) => r.t), ['ephemeral', 'ephemeral']);
+  const standDown = c.relay.requests[1];
+  assert.equal(standDown.notify, undefined, 'standing down notifies no one');
+  assert.equal(standDown.notify_kind, undefined, 'standing down carries no push label');
 });

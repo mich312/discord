@@ -18,7 +18,7 @@ import GameStage from './components/GameStage.jsx';
 import { callChatChannel } from './lib/controller.js';
 import Settings from './components/Settings.jsx';
 import Seal from './components/Seal.jsx';
-import { Key, Bell, ShieldCheck, LinkGlyph, Sun, QuorumGlyph, Gear, LogOut } from './components/icons.jsx';
+import { Key, ShieldCheck, LinkGlyph, Sun, QuorumGlyph, Gear, LogOut } from './components/icons.jsx';
 import { markPlayed, bumpPlayCount } from './lib/games.js';
 
 /** Content identity of a message for merging a load snapshot with live
@@ -420,15 +420,6 @@ export default function App() {
       dispatch({ type: 'toast', text: e.message });
     }
   };
-  const enableAlerts = async () => {
-    try {
-      await controllerRef.current.enableNotifications();
-      dispatch({ type: 'toast', text: 'push notifications enabled for this device' });
-    } catch (e) {
-      dispatch({ type: 'toast', text: `notifications: ${e.message}` });
-    }
-  };
-
   const openAdminOverview = async () => {
     try {
       const reply = await controllerRef.current.adminList();
@@ -574,12 +565,6 @@ export default function App() {
               </span>
             </div>
             <div className="self-actions">
-              <button className="icon-btn" title="identity key" data-testid="identity-open" onClick={openIdentity}>
-                <Key size={14} />
-              </button>
-              <button className="icon-btn" title="enable push notifications" data-testid="enable-notifications" onClick={enableAlerts}>
-                <Bell size={14} />
-              </button>
               <button className="icon-btn" title="settings" data-testid="open-settings" onClick={openSettings}>
                 <Gear size={14} />
               </button>

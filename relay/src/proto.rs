@@ -81,13 +81,17 @@ pub enum ClientMsg {
     /// `notify` (optional) names group members to push-wake if they are
     /// not live-subscribed — how a call ring reaches a closed app. It
     /// reveals to the relay only that these members should look now; the
-    /// blob itself stays opaque.
+    /// blob itself stays opaque. `notify_kind` (optional) picks the label
+    /// of that push — "call" (default) or "rally" — so a closed app shows
+    /// the right text; it says nothing more about the opaque blob.
     Ephemeral {
         rid: u64,
         group: String,
         payload: String,
         #[serde(default)]
         notify: Option<Vec<String>>,
+        #[serde(default)]
+        notify_kind: Option<String>,
     },
     /// Append an opaque blob to a channel history log. `hid` is a
     /// client-chosen opaque id (the relay never learns which channel it
