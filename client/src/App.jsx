@@ -19,7 +19,7 @@ import { callChatChannel } from './lib/controller.js';
 import Settings from './components/Settings.jsx';
 import Seal from './components/Seal.jsx';
 import { Key, Bell, ShieldCheck, LinkGlyph, Sun, QuorumGlyph, Gear, LogOut } from './components/icons.jsx';
-import { markPlayed } from './lib/games.js';
+import { markPlayed, bumpPlayCount } from './lib/games.js';
 
 /** Content identity of a message for merging a load snapshot with live
     arrivals — same idea as history.js's fingerprint, plus the system flag. */
@@ -319,6 +319,7 @@ export default function App() {
     setGame(g);
     setDrawer(null);
     markPlayed(g.id);
+    bumpPlayCount(g.id);
     if (announce && !activeServer?.restored) {
       controllerRef.current?.sendGameCard(server, ch, g).catch(() => {});
     }

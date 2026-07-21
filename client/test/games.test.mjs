@@ -12,6 +12,8 @@ import {
   normalizeGame,
   normalizeGames,
   normalizePresence,
+  matchesFilter,
+  sortGames,
 } from '../src/lib/games.js';
 import { normalizeOverview } from '../src/lib/overview.js';
 
@@ -96,6 +98,46 @@ test('presence claims are whitelisted and expire', async () => {
   assert.equal(freshPresence(p, NOW + PRESENCE_TTL + 1), null);
   assert.equal(normalizePresence({ playing: null }, NOW).playing, null);
   assert.equal(normalizePresence('junk', NOW).playing, null);
+});
+
+// A tiny fixture shelf plus the accessor `facts` the pure shelf rules read.
+const SHELF = [
+  { id: 'a', name: 'Alpha', url: 'https://a.example', kind: 'activity' },
+  { id: 'b', name: 'Bravo', url: 'bravo.example:25565', kind: 'server' },
+  { id: 'c', name: 'Charlie', url: 'https://c.example', kind: 'activity' },
+];
+const facts = ({ live = [], fav = [], played = {} } = {}) => ({
+  isLive: (id) => live.includes(id),
+  isFav: (id) => fav.includes(id),
+  playedAt: (id) => played[id] ?? null,
+});
+
+test('matchesFilter routes each chip to the right games', () => {
+  const f = facts({ live: ['a'], fav: ['c'], played: { b: 1000 } });
+  const ids = (filter) => SHELF.filter((g) => matchesFilter(g, filter, f)).map((g) => g.id);
+  assert.deepEqual(ids('all'), ['a', 'b', 'c']);
+  assert.deepEqual(ids('live'), ['a']);
+  assert.deepEqual(ids('favorites'), ['c']);
+  assert.deepEqual(ids('recent'), ['b']); // has a played timestamp
+  assert.deepEqual(ids('web'), ['a', 'c']); // activities only
+  assert.deepEqual(ids('servers'), ['b']);
+  assert.deepEqual(ids('unknown'), ['a', 'b', 'c']); // unknown filter shows all
+});
+
+test('sortGames orders live, then starred, then recently played, stable', () => {
+  // c is live → first; b is starred → before plain a; among the rest, most
+  // recently played wins, and registry order breaks a true tie.
+  const f = facts({ live: ['c'], fav: ['b'], played: { a: 5000, b: 9000 } });
+  assert.deepEqual(sortGames(SHELF, f).map((g) => g.id), ['c', 'b', 'a']);
+
+  // No signal at all → registry order is preserved untouched.
+  assert.deepEqual(sortGames(SHELF, facts()).map((g) => g.id), ['a', 'b', 'c']);
+
+  // Recency separates two otherwise-equal games without disturbing the input.
+  const input = SHELF.slice();
+  const played = facts({ played: { a: 100, c: 900 } });
+  assert.deepEqual(sortGames(input, played).map((g) => g.id), ['c', 'a', 'b']);
+  assert.deepEqual(input.map((g) => g.id), ['a', 'b', 'c'], 'input array not mutated');
 });
 
 test('normalizePresence honors a sane claimed ts so replays age out', () => {

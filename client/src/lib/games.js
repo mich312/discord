@@ -99,6 +99,101 @@ export function markPlayed(gameId, now = Date.now()) {
   }
 }
 
+// Device-local stars: which games THIS device pins to the front. Personal,
+// never shared — a shortcut like last-played, no protocol behind it.
+const FAVORITES_KEY = 'quorum-favorites';
+
+export function isFavorite(gameId) {
+  try {
+    return !!JSON.parse(localStorage.getItem(FAVORITES_KEY) ?? '{}')[gameId];
+  } catch {
+    return false;
+  }
+}
+
+/** Flip a game's star and return its new state. */
+export function toggleFavorite(gameId) {
+  try {
+    const map = JSON.parse(localStorage.getItem(FAVORITES_KEY) ?? '{}');
+    const next = !map[gameId];
+    if (next) map[gameId] = 1;
+    else delete map[gameId];
+    localStorage.setItem(FAVORITES_KEY, JSON.stringify(map));
+    return next;
+  } catch {
+    return isFavorite(gameId);
+  }
+}
+
+// Device-local launch tally: how many times THIS device opened each game.
+// Honest and shared with no one — powers the play count on the card and the
+// sense of "yours".
+const PLAY_COUNT_KEY = 'quorum-play-count';
+
+export function playCount(gameId) {
+  try {
+    return JSON.parse(localStorage.getItem(PLAY_COUNT_KEY) ?? '{}')[gameId] ?? 0;
+  } catch {
+    return 0;
+  }
+}
+
+export function bumpPlayCount(gameId) {
+  try {
+    const map = JSON.parse(localStorage.getItem(PLAY_COUNT_KEY) ?? '{}');
+    map[gameId] = (map[gameId] ?? 0) + 1;
+    localStorage.setItem(PLAY_COUNT_KEY, JSON.stringify(map));
+  } catch {
+    // private mode etc. — the count just stays where it was
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Shelf ordering & filtering — pure rules for the hub's Play view. The
+// device-local and presence truths arrive as accessor `facts` so these stay
+// side-effect free and unit-testable:
+//   facts.isLive(id)   -> is anyone playing it right now
+//   facts.isFav(id)    -> is it starred on this device
+//   facts.playedAt(id) -> when THIS device last launched it (ms) or null
+
+export const SHELF_FILTERS = ['all', 'live', 'favorites', 'recent', 'web', 'servers'];
+
+/** Does a game belong under a given shelf filter? */
+export function matchesFilter(game, filter, facts) {
+  switch (filter) {
+    case 'live':
+      return facts.isLive(game.id);
+    case 'favorites':
+      return facts.isFav(game.id);
+    case 'recent':
+      return facts.playedAt(game.id) != null;
+    case 'web':
+      return game.kind !== 'server';
+    case 'servers':
+      return game.kind === 'server';
+    default:
+      return true; // 'all'
+  }
+}
+
+/** Scanning order for the shelf: live first, then starred, then whatever this
+    device played most recently, with registry order as the stable tiebreak.
+    Returns a new array; never mutates the input or the stored registry. */
+export function sortGames(games, facts) {
+  return games
+    .map((g, i) => [g, i])
+    .sort(([ga, ia], [gb, ib]) => {
+      const live = (facts.isLive(gb.id) ? 1 : 0) - (facts.isLive(ga.id) ? 1 : 0);
+      if (live) return live;
+      const fav = (facts.isFav(gb.id) ? 1 : 0) - (facts.isFav(ga.id) ? 1 : 0);
+      if (fav) return fav;
+      const played = (facts.playedAt(gb.id) ?? 0) - (facts.playedAt(ga.id) ?? 0);
+      if (played) return played;
+      return ia - ib;
+    })
+    .map(([g]) => g);
+}
+
 /** A presence claim as received: which game (if any) a member is in right
     now. Fresh for four hours, then treated as expired by readers. */
 export const PRESENCE_TTL = 4 * 3600e3;

@@ -1,26 +1,57 @@
 import React, { useEffect, useState } from 'react';
 import Seal from './Seal.jsx';
 import { describeAgo, describeUntil, canRemoveNotice } from '../lib/overview.js';
-import { freshPresence, gameHost, lastPlayed, makeGameId, normalizeGame } from '../lib/games.js';
+import {
+  freshPresence,
+  gameHost,
+  lastPlayed,
+  playCount,
+  isFavorite,
+  toggleFavorite,
+  matchesFilter,
+  sortGames,
+  makeGameId,
+  normalizeGame,
+} from '../lib/games.js';
 import { nameHue } from '../lib/avatar.js';
-import { Hash, Wave, Lock, LinkGlyph, Plus, X, ArrowRight, Gamepad, External, Copy, Check } from './icons.jsx';
+import { Hash, Wave, LinkGlyph, Plus, X, ArrowRight, Gamepad, External, Copy, Check } from './icons.jsx';
 
-// The circle's game hub: what you land on when you pick a circle. Not a
-// brochure — a briefing, with the shelf front and center:
-//   · what's coming up   — the next game night, with a live countdown
-//   · what's on the shelf — the games this circle plays, living on their
-//                          own servers; web games launch embedded here
-//   · what did I miss    — per-room unread counts + the latest line,
-//                          computed from this device's own store
-//   · what should I know — a noticeboard the whole roster pins to
-// Every word travels inside the MLS encryption; the relay reads none of it.
-// What the relay CAN'T hide: connecting to a game shows that game's host
-// your traffic — the shelf says so instead of pretending otherwise.
+// The circle's game hub. Two faces off one page, so the thing the page is
+// named for leads:
+//   · Play — what's live right now, and the shelf of games to start. The
+//            live band takes the top when anyone's in a game; the cards
+//            below adapt (join / launch / copy) and can be starred, filtered
+//            and sorted live-first.
+//   · Home — the circle briefing that used to crowd the top: the next event
+//            with its countdown + RSVP, the per-room catch-up, the
+//            noticeboard, pinned links, and the blurb.
+// Which face you're on is remembered per-device; nothing here changed about
+// what crosses the wire. Every synced word still travels inside MLS; the
+// relay reads none of it. What the relay CAN'T hide — that connecting to a
+// game shows that game's host your traffic — the shelf still says plainly.
 
 // Only ever link out to http(s) — anything else renders as inert text, so
 // a pinned "javascript:" or "data:" URL can't become a click target.
 function safeHref(url) {
   return /^https?:\/\//i.test(url) ? url : null;
+}
+
+// Which face of the hub you're on, remembered on this device — a view
+// preference, never shared, so it needs no protocol.
+const HUB_TAB_KEY = 'quorum-hub-tab';
+function readTab() {
+  try {
+    return localStorage.getItem(HUB_TAB_KEY) === 'home' ? 'home' : 'play';
+  } catch {
+    return 'play';
+  }
+}
+function writeTab(tab) {
+  try {
+    localStorage.setItem(HUB_TAB_KEY, tab);
+  } catch {
+    // private mode — the tab just resets to Play next time
+  }
 }
 
 // datetime-local <-> ms, in the device's own timezone.
@@ -30,6 +61,15 @@ function toLocalInput(ms) {
   const p = (n) => String(n).padStart(2, '0');
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
 }
+
+const FILTER_LABEL = {
+  all: 'all',
+  live: 'live',
+  favorites: 'starred',
+  recent: 'recent',
+  web: 'web',
+  servers: 'servers',
+};
 
 let linkSeq = 0;
 
@@ -144,15 +184,79 @@ function EditForm({ overview, onSave, onCancel }) {
   );
 }
 
-// One game on the shelf. The cover carries the game's own hue (derived from
-// its name, like a member's orb); actions differ by kind — web games launch
-// embedded, server games hand over the address.
-function GameCard({ game, players, canManage, onLaunch, onRemove }) {
+// The live band: the Play view's top slot when anyone in the circle is in a
+// game. It leads with who's in and one green way to join them — a door, not
+// a status line. Falls back to nothing when the circle is quiet.
+function LiveBand({ game, players, me, onJoin }) {
   const [copied, setCopied] = useState(false);
+  const hue = nameHue(game.name);
+  const isServer = game.kind === 'server';
+  const copyAddress = async () => {
+    try {
+      await navigator.clipboard.writeText(game.url);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1800);
+    } catch {
+      // clipboard denied — the address is still on the game's card below
+    }
+  };
+  return (
+    <section className="hub-band" data-testid="hub-live-band">
+      <div
+        className="hub-band-cover"
+        style={{
+          background: `linear-gradient(135deg, hsl(${hue} 45% 22%), hsl(${(hue + 40) % 360} 60% 40%))`,
+        }}
+        aria-hidden="true"
+      >
+        <span className={game.glyph ? 'game-cover-mark glyph' : 'game-cover-mark'}>
+          {game.glyph ?? game.name.slice(0, 1).toUpperCase()}
+        </span>
+      </div>
+      <div className="hub-band-body">
+        <span className="overline live hub-band-tag">
+          <Wave size={11} /> live in this circle
+        </span>
+        <strong className="hub-band-title">{game.name}</strong>
+        <span className="hub-band-who">
+          <span className="game-who-stack">
+            {players.slice(0, 4).map((p) => (
+              <Seal key={p} name={p} size={20} title={p} />
+            ))}
+          </span>
+          {players.length === 1
+            ? `${players[0] === me ? 'you are' : `${players[0]} is`} playing`
+            : `${players.length} playing right now`}
+        </span>
+      </div>
+      {isServer ? (
+        <button className="button" data-testid="hub-band-copy" onClick={copyAddress}>
+          <Copy size={13} />
+          {copied ? 'copied' : 'copy address'}
+        </button>
+      ) : (
+        <button className="button live hub-band-join" data-testid="hub-band-join" onClick={onJoin}>
+          <Gamepad size={13} />
+          join{players.length > 0 ? ` · ${players.length} in` : ''}
+        </button>
+      )}
+    </section>
+  );
+}
+
+// One game on the shelf. The cover carries the game's own hue (derived from
+// its name, like a member's orb); the primary action reads the game's state —
+// join when the circle's already in it, launch when it's quiet, copy for a
+// native server — so one glance tells you the next move.
+function GameCard({ game, players, canManage, onLaunch, onRemove, onFavorite }) {
+  const [copied, setCopied] = useState(false);
+  const [fav, setFav] = useState(() => isFavorite(game.id));
   const hue = nameHue(game.name);
   const host = gameHost(game);
   const played = lastPlayed(game.id);
+  const plays = playCount(game.id);
   const live = players.length > 0;
+  const isServer = game.kind === 'server';
   const copyAddress = async () => {
     try {
       await navigator.clipboard.writeText(game.url);
@@ -162,8 +266,20 @@ function GameCard({ game, players, canManage, onLaunch, onRemove }) {
       // clipboard denied — the address is printed on the card regardless
     }
   };
+  const flipFav = () => {
+    setFav(toggleFavorite(game.id));
+    onFavorite?.();
+  };
+  // How the card describes itself when nobody's in it: plays first, then when
+  // this device last opened it — the honest device-local memory of the shelf.
+  const idleNote = [
+    plays ? `${plays} play${plays === 1 ? '' : 's'}` : '',
+    played ? `last played ${describeAgo(played)}` : '',
+  ]
+    .filter(Boolean)
+    .join(' · ');
   return (
-    <li className="game-card" data-testid={`game-card-${game.id}`}>
+    <li className={live ? 'game-card live' : 'game-card'} data-testid={`game-card-${game.id}`}>
       <div
         className="game-cover"
         style={{
@@ -180,7 +296,7 @@ function GameCard({ game, players, canManage, onLaunch, onRemove }) {
             {players.length > 2 ? ` +${players.length - 2}` : ''}
           </span>
         ) : (
-          <span className="game-kind">{game.kind === 'server' ? 'game server' : 'web game'}</span>
+          <span className="game-kind">{isServer ? 'game server' : 'web game'}</span>
         )}
         {canManage && (
           <button
@@ -194,9 +310,20 @@ function GameCard({ game, players, canManage, onLaunch, onRemove }) {
         )}
       </div>
       <div className="game-body">
-        <span className="game-name">{game.name}</span>
+        <div className="game-name-row">
+          <span className="game-name">{game.name}</span>
+          <button
+            className={fav ? 'game-fav on' : 'game-fav'}
+            title={fav ? 'unstar — remove from your favorites' : 'star — pin to the front for you'}
+            aria-pressed={fav}
+            data-testid={`game-favorite-${game.id}`}
+            onClick={flipFav}
+          >
+            {fav ? '★' : '☆'}
+          </button>
+        </div>
         <span className="game-host mono" title="this host sees its own traffic — never your chat">
-          {game.kind === 'server' ? '⛭' : '◈'} {host}
+          {isServer ? '⛭' : '◈'} {host}
         </span>
         {game.note && <span className="game-note">{game.note}</span>}
         {live ? (
@@ -208,15 +335,35 @@ function GameCard({ game, players, canManage, onLaunch, onRemove }) {
             </span>
             {players.length === 1 ? `${players[0]} is in` : `${players.length} playing right now`}
           </span>
-        ) : played ? (
-          <span className="game-who muted">last played {describeAgo(played)}</span>
+        ) : idleNote ? (
+          <span className="game-who muted">{idleNote}</span>
         ) : null}
         <div className="game-actions">
-          {game.kind === 'server' ? (
+          {isServer ? (
             <button className="button primary" data-testid={`game-copy-${game.id}`} onClick={copyAddress}>
               <Copy size={13} />
               {copied ? 'copied' : 'copy address'}
             </button>
+          ) : live ? (
+            <>
+              <button
+                className="button live"
+                data-testid={`game-join-${game.id}`}
+                onClick={onLaunch}
+              >
+                <Gamepad size={13} />
+                join{players.length > 0 ? ` · ${players.length} in` : ''}
+              </button>
+              <a
+                className="button"
+                title="open in its own tab"
+                href={game.url}
+                target="_blank"
+                rel="noreferrer noopener"
+              >
+                <External size={13} />
+              </a>
+            </>
           ) : (
             <>
               <button className="button primary" data-testid={`game-launch-${game.id}`} onClick={onLaunch}>
@@ -311,8 +458,13 @@ export default function Overview({
   onAddNotice,
   onRemoveNotice,
 }) {
+  const [tab, setTab] = useState(readTab);
   const [editing, setEditing] = useState(false);
   const [addingGame, setAddingGame] = useState(false);
+  const [filter, setFilter] = useState('all');
+  // Bumped when a card's star flips, so the shelf re-sorts live-first /
+  // starred / recent without the parent tracking each card's state.
+  const [favTick, setFavTick] = useState(0);
   const [draft, setDraft] = useState('');
   const [digest, setDigest] = useState([]);
   // Countdown and "x min ago" labels drift; tick them along while open.
@@ -321,6 +473,11 @@ export default function Overview({
     const t = setInterval(() => setNow(Date.now()), 30000);
     return () => clearInterval(t);
   }, []);
+
+  const goTab = (next) => {
+    setTab(next);
+    writeTab(next);
+  };
 
   // Re-pull the digest whenever anything landed for this circle
   // (digestKey folds in lastSeq + the local-store revision).
@@ -342,7 +499,37 @@ export default function Overview({
     const g = freshPresence(entry, now);
     if (g) (playingBy[g.id] ??= []).push(handle);
   }
-  const liveGames = games.filter((g) => (playingBy[g.id] ?? []).length > 0).length;
+  const liveGames = games.filter((g) => (playingBy[g.id] ?? []).length > 0);
+  // The band features whoever has the most players in; ties go to a web game,
+  // since that one you can actually join in place.
+  const bandGame = liveGames
+    .slice()
+    .sort((a, b) => {
+      const byPlayers = (playingBy[b.id]?.length ?? 0) - (playingBy[a.id]?.length ?? 0);
+      if (byPlayers) return byPlayers;
+      return (a.kind === 'server' ? 1 : 0) - (b.kind === 'server' ? 1 : 0);
+    })[0];
+
+  // Device-local + presence truths, as pure accessors the shelf rules read.
+  // favTick is referenced so a star flip recomputes the order.
+  void favTick;
+  const facts = {
+    isLive: (id) => (playingBy[id]?.length ?? 0) > 0,
+    isFav: (id) => isFavorite(id),
+    playedAt: (id) => lastPlayed(id),
+  };
+  const shownGames = sortGames(
+    games.filter((g) => matchesFilter(g, filter, facts)),
+    facts
+  );
+  // Offer a filter chip only when it would land on something — no dead ends.
+  const filterChips = ['all'].concat(
+    ['live', 'favorites', 'recent', 'web', 'servers'].filter((f) =>
+      games.some((g) => matchesFilter(g, f, facts))
+    )
+  );
+  const showFilters = games.length >= 3 && filterChips.length > 2;
+
   // Who said "I'm in" for THIS event (answers are keyed to its timestamp).
   const going = event
     ? Object.entries(server.rsvps ?? {})
@@ -363,6 +550,11 @@ export default function Overview({
     return (db.last?.ts ?? 0) - (da.last?.ts ?? 0);
   });
 
+  const launchFromShelf = (g) => {
+    setAddingGame(false);
+    onLaunchGame(g);
+  };
+
   return (
     <main className="messages-pane overview-pane" data-testid="overview-pane">
       <header className="pane-head">
@@ -372,12 +564,36 @@ export default function Overview({
           </span>
           game hub
         </span>
+        {!editing && (
+          <span className="hub-tabs" role="tablist" aria-label="game hub view">
+            <button
+              className={tab === 'play' ? 'hub-tab on' : 'hub-tab'}
+              role="tab"
+              aria-selected={tab === 'play'}
+              data-testid="overview-tab-play"
+              onClick={() => goTab('play')}
+            >
+              play
+            </button>
+            <button
+              className={tab === 'home' ? 'hub-tab on' : 'hub-tab'}
+              role="tab"
+              aria-selected={tab === 'home'}
+              data-testid="overview-tab-home"
+              onClick={() => goTab('home')}
+            >
+              home
+            </button>
+          </span>
+        )}
         {canManage && !editing && (
           <span className="pane-actions">
-            <button className="button" data-testid="overview-edit" onClick={() => setEditing(true)}>
-              customize
-            </button>
-            {!addingGame && (
+            {tab === 'home' && (
+              <button className="button" data-testid="overview-edit" onClick={() => setEditing(true)}>
+                customize
+              </button>
+            )}
+            {tab === 'play' && !addingGame && (
               <button className="button" data-testid="game-add" onClick={() => setAddingGame(true)}>
                 <Plus size={13} />
                 register a game
@@ -387,23 +603,6 @@ export default function Overview({
         )}
       </header>
       <div className="scroll overview-scroll">
-        {!editing && (
-          <section className="hub-about">
-            {overview?.blurb && (
-              <p className="overview-blurb" data-testid="overview-blurb">
-                {overview.blurb}
-              </p>
-            )}
-            <div className="overview-stats mono">
-              <span>{server.members.length} member{server.members.length === 1 ? '' : 's'}</span>
-              <span>·</span>
-              <span data-testid="overview-unread-total">
-                {unreadTotal > 0 ? `${unreadTotal} unread` : 'all caught up'}
-              </span>
-            </div>
-          </section>
-        )}
-
         {editing ? (
           <section className="overview-section">
             <span className="overline">customize</span>
@@ -421,8 +620,131 @@ export default function Overview({
               onCancel={() => setEditing(false)}
             />
           </section>
+        ) : tab === 'play' ? (
+          <>
+            {bandGame ? (
+              <LiveBand
+                game={bandGame}
+                players={playingBy[bandGame.id] ?? []}
+                me={me}
+                onJoin={() => launchFromShelf(bandGame)}
+              />
+            ) : games.length > 0 ? (
+              <p className="hub-nudge" data-testid="hub-quiet">
+                No one&rsquo;s playing right now — launch one below to get a game going.
+              </p>
+            ) : null}
+
+            <section className="overview-section shelf-section">
+              <span className="overline shelf-overline">
+                <span>on the shelf</span>
+                {games.length > 0 && (
+                  <span className="shelf-meta">
+                    {games.length} game{games.length === 1 ? '' : 's'}
+                    {liveGames.length > 0 && <span className="shelf-live"> · {liveGames.length} live</span>}
+                  </span>
+                )}
+              </span>
+
+              {showFilters && (
+                <div className="shelf-filters" role="group" aria-label="filter the shelf">
+                  {filterChips.map((f) => (
+                    <button
+                      key={f}
+                      className={filter === f ? 'fchip on' : 'fchip'}
+                      data-testid={`game-filter-${f}`}
+                      aria-pressed={filter === f}
+                      onClick={() => setFilter(f)}
+                    >
+                      {f === 'live' && <span className="fchip-dot" aria-hidden="true" />}
+                      {f === 'favorites' && <span aria-hidden="true">★ </span>}
+                      {FILTER_LABEL[f]}
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {games.length > 0 || canManage ? (
+                <ul className="game-shelf" data-testid="game-shelf">
+                  {shownGames.map((g) => (
+                    <GameCard
+                      key={g.id}
+                      game={g}
+                      players={playingBy[g.id] ?? []}
+                      canManage={canManage}
+                      onLaunch={() => launchFromShelf(g)}
+                      onRemove={() => saveGames(games.filter((x) => x.id !== g.id))}
+                      onFavorite={() => setFavTick((n) => n + 1)}
+                    />
+                  ))}
+                  {games.length > 0 && shownGames.length === 0 && (
+                    <li className="shelf-empty-filter muted" data-testid="game-filter-empty">
+                      Nothing here under “{FILTER_LABEL[filter]}”.
+                    </li>
+                  )}
+                  {canManage && filter === 'all' && (
+                    <li className="game-card add-card">
+                      {addingGame ? (
+                        <AddGameForm
+                          onAdd={(game) => {
+                            setAddingGame(false);
+                            saveGames([...games, game]);
+                          }}
+                          onCancel={() => setAddingGame(false)}
+                        />
+                      ) : (
+                        <button
+                          className="add-card-btn"
+                          data-testid="game-add-tile"
+                          onClick={() => setAddingGame(true)}
+                        >
+                          <span className="add-card-plus">
+                            <Plus size={18} />
+                          </span>
+                          <span className="add-card-title">Register a game</span>
+                          <span className="add-card-sub">
+                            a URL is enough — it shows up here for the whole circle
+                          </span>
+                        </button>
+                      )}
+                    </li>
+                  )}
+                </ul>
+              ) : (
+                <p className="muted overview-empty-note" data-testid="game-shelf-empty">
+                  No games yet. Add one and it shows up here for the whole circle.
+                </p>
+              )}
+              <p className="shelf-honesty muted" data-testid="shelf-honesty">
+                Games live on their own servers — each card names where. That host sees your
+                connection, never your chat.
+              </p>
+            </section>
+
+            <p className="hub-jump muted">
+              Your circle&rsquo;s briefing — next event, room catch-up, noticeboard —{' '}
+              <button className="linklike" data-testid="hub-jump-home" onClick={() => goTab('home')}>
+                lives under Home →
+              </button>
+            </p>
+          </>
         ) : (
           <>
+            <section className="hub-about">
+              {overview?.blurb && (
+                <p className="overview-blurb" data-testid="overview-blurb">
+                  {overview.blurb}
+                </p>
+              )}
+              <div className="overview-stats mono">
+                <span>{server.members.length} member{server.members.length === 1 ? '' : 's'}</span>
+                <span>·</span>
+                <span data-testid="overview-unread-total">
+                  {unreadTotal > 0 ? `${unreadTotal} unread` : 'all caught up'}
+                </span>
+              </div>
+            </section>
+
             {event && (
               <section className="overview-upnext hub-hero" data-testid="overview-event">
                 <div className="hub-hero-body">
@@ -450,7 +772,7 @@ export default function Overview({
                         onClick={() => onRsvp(event.at, !iAmIn)}
                       >
                         {iAmIn ? <Check size={13} /> : null}
-                        {iAmIn ? ' you\u2019re in' : 'I\u2019m in'}
+                        {iAmIn ? ' you’re in' : 'I’m in'}
                       </button>
                       {going.length > 0 && (
                         <span className="hub-going" data-testid="rsvp-going">
@@ -484,63 +806,6 @@ export default function Overview({
                 })()}
               </section>
             )}
-
-            <section className="overview-section shelf-section">
-              <span className="overline shelf-overline">
-                <span>on the shelf</span>
-                {games.length > 0 && (
-                  <span className="shelf-meta">
-                    {games.length} game{games.length === 1 ? '' : 's'}
-                    {liveGames > 0 && <span className="shelf-live"> · {liveGames} live</span>}
-                  </span>
-                )}
-              </span>
-              {games.length > 0 || canManage ? (
-                <ul className="game-shelf" data-testid="game-shelf">
-                  {games.map((g) => (
-                    <GameCard
-                      key={g.id}
-                      game={g}
-                      players={playingBy[g.id] ?? []}
-                      canManage={canManage}
-                      onLaunch={() => onLaunchGame(g)}
-                      onRemove={() => saveGames(games.filter((x) => x.id !== g.id))}
-                    />
-                  ))}
-                  {canManage && (
-                    <li className="game-card add-card">
-                      {addingGame ? (
-                        <AddGameForm
-                          onAdd={(game) => {
-                            setAddingGame(false);
-                            saveGames([...games, game]);
-                          }}
-                          onCancel={() => setAddingGame(false)}
-                        />
-                      ) : (
-                        <button
-                          className="add-card-btn"
-                          data-testid="game-add-tile"
-                          onClick={() => setAddingGame(true)}
-                        >
-                          <span className="add-card-plus">
-                            <Plus size={18} />
-                          </span>
-                          <span className="add-card-title">Register a game</span>
-                          <span className="add-card-sub">
-                            a URL is enough — it shows up here for the whole circle
-                          </span>
-                        </button>
-                      )}
-                    </li>
-                  )}
-                </ul>
-              ) : (
-                <p className="muted overview-empty-note" data-testid="game-shelf-empty">
-                  No games yet. Add one and it shows up here for the whole circle.
-                </p>
-              )}
-            </section>
 
             <section className="overview-section">
               <span className="overline">while you were out</span>
@@ -709,7 +974,6 @@ export default function Overview({
             )}
           </>
         )}
-
       </div>
     </main>
   );
