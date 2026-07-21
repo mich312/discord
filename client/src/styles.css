@@ -451,16 +451,6 @@ kbd {
   opacity: 1;
   box-shadow: 0 0 0 2px var(--well), 0 0 0 4px var(--accent);
 }
-.circle-tile.active::before {
-  content: '';
-  position: absolute;
-  left: -10px;
-  top: 9px;
-  bottom: 9px;
-  width: 3px;
-  border-radius: 3px;
-  background: var(--accent);
-}
 .circle-tile.add {
   background: none;
   border: 1.5px dashed var(--hairline-strong);
