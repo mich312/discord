@@ -31,9 +31,15 @@ function toLocalInput(ms) {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
+let linkSeq = 0;
+
 function EditForm({ overview, onSave, onCancel }) {
   const [blurb, setBlurb] = useState(overview?.blurb ?? '');
-  const [links, setLinks] = useState(overview?.links ?? []);
+  // Each row gets a stable local id: with index keys, removing a middle
+  // link makes React reuse the wrong controlled inputs for the rows below.
+  const [links, setLinks] = useState(() =>
+    (overview?.links ?? []).map((l) => ({ ...l, _id: ++linkSeq }))
+  );
   const [eventTitle, setEventTitle] = useState(overview?.event?.title ?? '');
   const [eventAt, setEventAt] = useState(toLocalInput(overview?.event?.at));
   const [eventNote, setEventNote] = useState(overview?.event?.note ?? '');
@@ -50,7 +56,7 @@ function EditForm({ overview, onSave, onCancel }) {
         const at = eventAt ? new Date(eventAt).getTime() : NaN;
         onSave({
           blurb: blurb.trim(),
-          links,
+          links: links.map(({ _id, ...l }) => l),
           event:
             eventTitle.trim() && Number.isFinite(at)
               ? { title: eventTitle.trim(), at, note: eventNote.trim() }
@@ -90,7 +96,7 @@ function EditForm({ overview, onSave, onCancel }) {
       />
       <label className="overview-field-label">pinned links</label>
       {links.map((l, i) => (
-        <div className="overview-link-edit" key={i}>
+        <div className="overview-link-edit" key={l._id}>
           <input
             value={l.label}
             onChange={(e) => setLink(i, { label: e.target.value })}
@@ -117,7 +123,7 @@ function EditForm({ overview, onSave, onCancel }) {
         type="button"
         className="ghost overview-add-link"
         data-testid="overview-add-link"
-        onClick={() => setLinks((ls) => [...ls, { label: '', url: '' }])}
+        onClick={() => setLinks((ls) => [...ls, { label: '', url: '', _id: ++linkSeq }])}
       >
         <Plus size={12} />
         add a link
@@ -402,6 +408,10 @@ export default function Overview({
           <section className="overview-section">
             <span className="overline">customize</span>
             <EditForm
+              // Remount when a remote edit lands while the form is open:
+              // saving a form seeded from the old overview would silently
+              // overwrite the other admin's newer changes.
+              key={JSON.stringify([overview?.blurb, overview?.links, overview?.event])}
               overview={overview}
               onSave={(ov) => {
                 setEditing(false);

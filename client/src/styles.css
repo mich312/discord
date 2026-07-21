@@ -1111,6 +1111,15 @@ kbd {
   color: var(--ink);
 }
 .msg-line:hover { background: var(--hover); }
+/* Own message states: dimmed while in flight, marked when the send failed. */
+.msg-line.pending .text { opacity: 0.55; }
+.msg-line.failed .text { opacity: 0.75; text-decoration: underline dotted var(--danger, #c0392b); }
+.msg-retry {
+  font-size: 11px;
+  padding: 1px 8px;
+  color: var(--danger, #c0392b);
+  border-color: var(--danger, #c0392b);
+}
 .msg-line time {
   position: absolute;
   right: 6px;
@@ -1555,7 +1564,8 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
   max-width: 64ch;
   box-shadow: var(--overlay-shadow);
   animation: rise var(--slow) var(--ease);
-  z-index: 30;
+  /* Topmost: a toast must be readable over modals, drawers, everything. */
+  z-index: 70;
 }
 
 /* --------------------------------------------------------------- modals -- */
@@ -1566,7 +1576,9 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
   display: flex;
   align-items: center;
   justify-content: center;
-  z-index: 20;
+  /* Above the call panel (40), drawers (44/45) and palette (50): a modal
+     is the most deliberate thing on screen — nothing floats over it. */
+  z-index: 60;
   animation: fade var(--fast) var(--ease);
 }
 
@@ -1806,7 +1818,7 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
   justify-content: center;
   align-items: flex-start;
   padding-top: 14vh;
-  z-index: 40;
+  z-index: 50;
   animation: fade var(--fast) var(--ease);
 }
 .palette {

@@ -376,17 +376,42 @@ pub async fn handle_socket(mut socket: WebSocket, app: Arc<App>) {
     }
 
     // One task drains the outbound channel; requests are handled inline.
+    // A periodic protocol-level ping bounds half-open sockets: browsers
+    // auto-pong, and a dead link makes the ping write fail once TCP gives
+    // up — ending the writer, which ends the read loop below, which runs
+    // teardown. Without it a silently-dead socket keeps its subscription
+    // entries (and an unbounded outbound queue) until the OS notices.
     let (mut ws_tx, mut ws_rx) = socket.split();
-    let writer = tokio::spawn(async move {
-        while let Some(msg) = rx.recv().await {
-            let text = serde_json::to_string(&msg).unwrap();
-            if ws_tx.send(Message::Text(text.into())).await.is_err() {
-                break;
+    let mut writer = tokio::spawn(async move {
+        let mut ping = tokio::time::interval(std::time::Duration::from_secs(30));
+        ping.set_missed_tick_behavior(tokio::time::MissedTickBehavior::Delay);
+        ping.tick().await; // the first tick fires immediately — skip it
+        loop {
+            tokio::select! {
+                msg = rx.recv() => {
+                    let Some(msg) = msg else { break };
+                    let Ok(text) = serde_json::to_string(&msg) else { continue };
+                    if ws_tx.send(Message::Text(text.into())).await.is_err() {
+                        break;
+                    }
+                }
+                _ = ping.tick() => {
+                    if ws_tx.send(Message::Ping(Vec::new().into())).await.is_err() {
+                        break;
+                    }
+                }
             }
         }
     });
 
-    while let Some(Ok(frame)) = ws_rx.next().await {
+    loop {
+        let frame = tokio::select! {
+            frame = ws_rx.next() => frame,
+            // Writer died (dead socket detected via ping/write failure):
+            // stop reading so teardown runs now, not at TCP timeout.
+            _ = &mut writer => break,
+        };
+        let Some(Ok(frame)) = frame else { break };
         let Message::Text(text) = frame else { continue };
         let msg = match serde_json::from_str::<ClientMsg>(&text) {
             Ok(m) => m,
@@ -404,8 +429,15 @@ pub async fn handle_socket(mut socket: WebSocket, app: Arc<App>) {
     }
 
     let mut hub = app.hub.lock().await;
+    // Same guard as `online` below: only remove entries this connection
+    // owns. A half-open socket can outlive its replacement by minutes —
+    // an unguarded removal here would delete the *reconnected* socket's
+    // live subscriptions, leaving the user online-but-subscribed-to-nothing
+    // (no live delivery, and no push either since push skips online users).
     for subs in hub.subscribers.values_mut() {
-        subs.remove(&user);
+        if subs.get(&user).is_some_and(|t| t.same_channel(&tx)) {
+            subs.remove(&user);
+        }
     }
     if hub.online.get(&user).is_some_and(|t| t.same_channel(&tx)) {
         hub.online.remove(&user);
@@ -428,6 +460,8 @@ async fn handle_request(
         ClientMsg::Hello { .. } | ClientMsg::Auth { .. } => {
             Some(ServerMsg::Error { rid: None, message: "already authenticated".into() })
         }
+
+        ClientMsg::Ping { rid } => Some(ServerMsg::Ok { rid, seq: None }),
 
         ClientMsg::PublishKp { rid, payloads } => {
             let mut decoded = Vec::with_capacity(payloads.len());
@@ -598,18 +632,27 @@ async fn handle_request(
                 }
                 seq
             };
-            // Nudge members with no live connection. The membership read is a
-            // DB round-trip, so keep it off the hub lock — only the in-memory
-            // liveness check needs the lock. Push is a best-effort nudge, so a
-            // small liveness race here is harmless. Payload carries only what
-            // the relay knows anyway (the group id).
+            // Nudge members who did NOT just get the message live — i.e.
+            // anyone without a subscription to this group, not merely anyone
+            // offline: an online-but-unsubscribed member (reconnect race,
+            // pre-subscribe window) would otherwise get neither delivery nor
+            // nudge. The membership read is a DB round-trip, so keep it off
+            // the hub lock. Push is a best-effort nudge, so a small liveness
+            // race here is harmless. Payload carries only what the relay
+            // knows anyway (the group id).
             let offline: Vec<String> = match app.store.group_members(&group).await {
                 Ok(members) => {
                     let hub = app.hub.lock().await;
                     members
                         .into_iter()
                         .map(|(m, _)| m)
-                        .filter(|m| m != user && !hub.online.contains_key(m))
+                        .filter(|m| {
+                            m != user
+                                && !hub
+                                    .subscribers
+                                    .get(&group)
+                                    .is_some_and(|subs| subs.contains_key(m))
+                        })
                         .collect()
                 }
                 Err(_) => Vec::new(),
@@ -730,7 +773,7 @@ async fn handle_request(
             }
         }
 
-        ClientMsg::Ephemeral { rid, group, payload } => {
+        ClientMsg::Ephemeral { rid, group, payload, notify } => {
             if let Err(e) = require_member(app, &group, user).await {
                 return err(rid, e);
             }
@@ -749,6 +792,46 @@ async fn handle_request(
                         return true;
                     }
                     ch.send(out.clone()).is_ok()
+                });
+            }
+            // Call nudge: an ephemeral reaches only live subscribers, so a
+            // ring to a closed app would otherwise vanish. The sender may
+            // name members to push-wake; only actual group members that did
+            // not get the blob live are pushed. The payload stays opaque —
+            // the push carries the group id (which the relay knows anyway)
+            // and the fact that *something* wants attention now.
+            let targets: Vec<String> = match notify {
+                Some(names) if !names.is_empty() => {
+                    let subscribed: HashSet<String> = hub
+                        .subscribers
+                        .get(&group)
+                        .map(|s| s.keys().cloned().collect())
+                        .unwrap_or_default();
+                    drop(hub);
+                    match app.store.group_members(&group).await {
+                        Ok(members) => {
+                            let roster: HashSet<String> =
+                                members.into_iter().map(|(m, _)| m).collect();
+                            names
+                                .into_iter()
+                                .filter(|n| {
+                                    n != user && roster.contains(n) && !subscribed.contains(n)
+                                })
+                                .take(64)
+                                .collect()
+                        }
+                        Err(_) => Vec::new(),
+                    }
+                }
+                _ => Vec::new(),
+            };
+            if !targets.is_empty() {
+                let app = app.clone();
+                let group = group.clone();
+                tokio::spawn(async move {
+                    for member in targets {
+                        app.push_notify(&member, serde_json::json!({"call": group})).await;
+                    }
                 });
             }
             Some(ServerMsg::Ok { rid, seq: None })

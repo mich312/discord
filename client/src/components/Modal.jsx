@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useEffect, useState } from 'react';
 import { LinkGlyph, Key, ShieldCheck, Copy, Download, X, Check, Gear } from './icons.jsx';
 
 const RETENTION_CHOICES = [
@@ -30,6 +30,15 @@ export default function Modal({
   const [history, setHistory] = useState(!!meta.hid);
   const [retention, setRetention] = useState(meta.retention ?? 0);
   const [renameTo, setRenameTo] = useState(modal.type === 'channel' ? modal.channel ?? '' : '');
+
+  // Escape closes, like every other overlay in the app.
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
 
   async function attempt(fn) {
     setBusy(true);

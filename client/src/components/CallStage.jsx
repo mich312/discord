@@ -163,6 +163,11 @@ export default function CallStage({
                       <Screen size={11} /> sharing
                     </span>
                   )}
+                  {p !== me && voice.mutedPeers?.includes(p) && (
+                    <span className="bubble-badge muted-badge" data-testid={`bubble-muted-${p}`}>
+                      <MicOff size={11} /> muted
+                    </span>
+                  )}
                   {conn && conn !== 'connected' && <span className="bubble-conn">{conn}</span>}
                 </li>
               );

@@ -68,7 +68,17 @@ pub enum ClientMsg {
     /// appending it to the log. Carries WebRTC signaling and voice
     /// presence (MLS-encrypted like everything else) — transient by
     /// nature, so replaying it on catch-up would only confuse clients.
-    Ephemeral { rid: u64, group: String, payload: String },
+    /// `notify` (optional) names group members to push-wake if they are
+    /// not live-subscribed — how a call ring reaches a closed app. It
+    /// reveals to the relay only that these members should look now; the
+    /// blob itself stays opaque.
+    Ephemeral {
+        rid: u64,
+        group: String,
+        payload: String,
+        #[serde(default)]
+        notify: Option<Vec<String>>,
+    },
     /// Append an opaque blob to a channel history log. `hid` is a
     /// client-chosen opaque id (the relay never learns which channel it
     /// is); the payload is AES-GCM ciphertext under a key that travels
@@ -120,6 +130,10 @@ pub enum ClientMsg {
     /// the relay so a self-hoster can point every client at their own TURN
     /// without a client rebuild. Not secret; media itself stays P2P/E2EE.
     IceInfo { rid: u64 },
+    /// Liveness probe. Browsers can't send WebSocket protocol pings, so the
+    /// client heartbeats with this to detect a half-open socket (a send that
+    /// never acks) and reconnect instead of staying silently deaf.
+    Ping { rid: u64 },
 }
 
 #[derive(Debug, Clone, Serialize)]

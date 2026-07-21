@@ -16,6 +16,15 @@ export default function Settings({
   onSecure,
   onClose,
 }) {
+  // Escape closes, like every other overlay in the app.
+  useEffect(() => {
+    const onKey = (e) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [onClose]);
+
   const [perm, setPerm] = useState(
     typeof Notification !== 'undefined' ? Notification.permission : 'unsupported'
   );

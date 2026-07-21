@@ -2,7 +2,17 @@
 // automatic reconnect with backoff. Crypto is injected (sign/pubkey come
 // from the worker); this file never touches key material.
 export const b64 = {
-  enc: (bytes) => btoa(String.fromCharCode(...new Uint8Array(bytes))),
+  // Chunked: spreading a large blob into fromCharCode's argument list
+  // overflows the call stack (Welcomes/commits for big rosters easily
+  // clear the ~64k-arg limit some engines enforce).
+  enc: (bytes) => {
+    const u8 = new Uint8Array(bytes);
+    let s = '';
+    for (let i = 0; i < u8.length; i += 0x8000) {
+      s += String.fromCharCode.apply(null, u8.subarray(i, i + 0x8000));
+    }
+    return btoa(s);
+  },
   dec: (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0)),
 };
 
@@ -62,6 +72,7 @@ export class Relay {
       if (msg.t === 'ready') {
         this.ready = true;
         this.backoff = 500;
+        this.startHeartbeat();
         this.opts.onStatus('online');
         this.opts.onEvent(msg);
         return;
@@ -77,6 +88,7 @@ export class Relay {
 
     ws.onclose = () => {
       this.ready = false;
+      this.stopHeartbeat();
       for (const { reject } of this.pending.values()) reject(new Error('connection lost'));
       this.pending.clear();
       this.opts.onStatus('offline');
@@ -85,6 +97,33 @@ export class Relay {
         this.backoff = Math.min(this.backoff * 2, 15000);
       }
     };
+  }
+
+  // A WebSocket can die without ever firing onclose (network path change,
+  // sleeping laptop, NAT timeout): sends silently go nowhere while `ready`
+  // stays true. Browsers can't send protocol pings, so heartbeat with an
+  // app-level ping; a reply that never comes means the socket is dead —
+  // close it so the reconnect/backoff machinery takes over.
+  startHeartbeat() {
+    this.stopHeartbeat();
+    this.hb = setInterval(() => {
+      if (!this.ready) return;
+      const deadline = setTimeout(() => {
+        try {
+          this.ws.close();
+        } catch {
+          /* already closing */
+        }
+      }, 10000);
+      this.request({ t: 'ping' })
+        .then(() => clearTimeout(deadline))
+        .catch(() => clearTimeout(deadline)); // rejected = close already underway
+    }, 25000);
+  }
+
+  stopHeartbeat() {
+    clearInterval(this.hb);
+    this.hb = null;
   }
 
   request(msg) {
@@ -98,6 +137,7 @@ export class Relay {
 
   close() {
     this.closed = true;
+    this.stopHeartbeat();
     this.ws?.close();
   }
 }

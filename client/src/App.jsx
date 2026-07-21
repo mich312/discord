@@ -21,6 +21,13 @@ import Seal from './components/Seal.jsx';
 import { Key, Bell, ShieldCheck, LinkGlyph, Sun, QuorumGlyph, Gear } from './components/icons.jsx';
 import { markPlayed } from './lib/games.js';
 
+/** Content identity of a message for merging a load snapshot with live
+    arrivals — same idea as history.js's fingerprint, plus the system flag. */
+function messageKey(m) {
+  const body = m.file ? `f:${m.file.blob}` : m.game ? `g:${m.game.id}` : `t:${m.text ?? ''}`;
+  return `${m.system ? 's' : 'm'}|${m.sender}|${m.ts}|${body}`;
+}
+
 const initial = {
   phase: 'loading', // loading | onboarding | ready
   me: null,
@@ -68,14 +75,41 @@ function reducer(state, action) {
       }
       return { ...state, servers: action.servers, active };
     }
-    case 'select':
-      return { ...state, active: { server: action.server, channel: action.channel } };
-    case 'messages':
-      return { ...state, messages: action.messages };
+    case 'select': {
+      const same =
+        state.active.server === action.server && state.active.channel === action.channel;
+      return {
+        ...state,
+        active: { server: action.server, channel: action.channel },
+        // Switching rooms clears the pane: rendering the old room's
+        // messages until the new load resolves invites cross-channel
+        // flashes and races the live-append path below.
+        messages: same ? state.messages : [],
+      };
+    }
+    case 'messages': {
+      // A load snapshot can resolve late (fast channel switching) or early
+      // (a live message committed after the snapshot read). Ignore loads
+      // for rooms we've moved away from, and keep live arrivals the
+      // snapshot missed instead of replacing them away.
+      if (action.server !== state.active.server || action.channel !== state.active.channel) {
+        return state;
+      }
+      const seen = new Set(action.messages.map(messageKey));
+      const missed = state.messages.filter(
+        (m) =>
+          m.server === action.server && m.channel === action.channel && !seen.has(messageKey(m))
+      );
+      const merged = [...action.messages, ...missed].sort((a, b) => a.ts - b.ts);
+      return { ...state, messages: merged };
+    }
     case 'newMessage': {
       const { server, channel } = state.active;
       if (action.message.server === server && action.message.channel === channel) {
-        return { ...state, messages: [...state.messages, action.message] };
+        // Sender clocks skew: keep the pane sorted the same way a reload
+        // sorts, or day dividers and grouping drift until the next load.
+        const merged = [...state.messages, action.message].sort((a, b) => a.ts - b.ts);
+        return { ...state, messages: merged };
       }
       return state;
     }
@@ -191,15 +225,23 @@ export default function App() {
   const { server, channel } = state.active;
   useEffect(() => {
     if (!server || !channel) return;
+    let alive = true;
     controllerRef.current
       .loadMessages(server, channel)
-      .then((messages) => dispatch({ type: 'messages', messages }));
+      .then((messages) => alive && dispatch({ type: 'messages', messages, server, channel }));
+    return () => {
+      alive = false;
+    };
   }, [server, channel, state.messagesRev]);
 
   // Whatever is on screen is read: keep the device-local seen marker in
-  // step so the hub's unread counts mean "since you last looked".
+  // step so the hub's unread counts mean "since you last looked". Message
+  // timestamps are sender clocks — pass the newest visible ts so a sender
+  // whose clock runs ahead can't leave a just-read message forever unread.
   useEffect(() => {
-    if (server && channel) controllerRef.current?.markSeen(server, channel);
+    if (!server || !channel) return;
+    const newest = state.messages.reduce((t, m) => Math.max(t, m.ts ?? 0), 0);
+    controllerRef.current?.markSeen(server, channel, newest);
   }, [server, channel, state.messages]);
 
   useEffect(() => {
@@ -225,6 +267,23 @@ export default function App() {
     () => state.servers.find((s) => s.id === server) ?? null,
     [state.servers, server]
   );
+
+  // The stage must play the *live* shelf entry, not the snapshot captured
+  // at launch: an admin edit (new URL, renamed, removed) syncs to everyone
+  // else's shelf but would otherwise leave this player on the stale game.
+  const liveGame = useMemo(() => {
+    if (!game) return null;
+    return (activeServer?.overview?.games ?? []).find((g) => g.id === game.id) ?? null;
+  }, [game, activeServer]);
+
+  // The admin pulled the game from the shelf while it was being played:
+  // close the stage instead of keeping an unlisted iframe alive.
+  useEffect(() => {
+    if (game && !liveGame) {
+      setGame(null);
+      dispatch({ type: 'toast', text: `"${game.name}" was removed from the shelf` });
+    }
+  }, [game, liveGame]);
 
   // Open the stage for whatever call the VoiceManager is in right now.
   // Read it off the controller, not React state — this runs right after a
@@ -501,9 +560,9 @@ export default function App() {
           </div>
           </div>
         </nav>
-        {activeServer && game && channel ? (
+        {activeServer && liveGame && channel ? (
           <GameStage
-            game={game}
+            game={liveGame}
             server={activeServer}
             channel={channel}
             me={state.me}
@@ -523,7 +582,7 @@ export default function App() {
             onVoiceLeave={() => controllerRef.current.voice.leave()}
             onToggleMute={() => controllerRef.current.voice.setMuted(!state.voice.muted)}
             onInviteSeat={() =>
-              controllerRef.current.sendGameCard(server, channel, game).catch(() => {})
+              controllerRef.current.sendGameCard(server, channel, liveGame).catch(() => {})
             }
             onClose={closeGame}
           />
@@ -581,6 +640,11 @@ export default function App() {
                 onReact={(target, emo) =>
                   controllerRef.current
                     .react(server, channel, target, emo)
+                    .catch((e) => dispatch({ type: 'toast', text: e.message }))
+                }
+                onRetry={(m) =>
+                  controllerRef.current
+                    .retryMessage(server, channel, m)
                     .catch((e) => dispatch({ type: 'toast', text: e.message }))
                 }
               />

@@ -176,7 +176,7 @@ export class Controller {
   connectRelay() {
     this.voice = new VoiceManager({
       me: this.me,
-      send: (server, content) => this.sendEphemeral(server, content),
+      send: (server, content, notify) => this.sendEphemeral(server, content, notify),
       onState: (state) => this.dispatch({ type: 'voice', state }),
       onNotify: (text) => this.dispatch({ type: 'toast', text }),
       // First joiner in an empty room = a call started; say so in the
@@ -324,20 +324,34 @@ export class Controller {
       const content = JSON.parse(event.text);
       if (content.k === 'voice' || content.k === 'rtc' || content.k === 'ring') {
         await this.voice.handleEnvelope(msg.group, event.sender, content);
+      } else if (content.k === 'pres') {
+        this.setLivePresence(msg.group, event.sender, normalizePresence(content));
       }
     } catch (e) {
       console.warn(`ephemeral from ${msg.sender} undecryptable: ${e.message}`);
     }
   }
 
-  /** Encrypt with MLS, deliver via the relay's no-log fan-out. */
-  async sendEphemeral(serverId, content) {
+  /** Encrypt with MLS, deliver via the relay's no-log fan-out. `notify`
+      (optional) push-wakes members who aren't live — an array of handles,
+      or '*' for the whole roster minus me. This is how a ring reaches a
+      closed app; the relay learns only "these members should look now",
+      never what the blob says. */
+  async sendEphemeral(serverId, content, notify) {
     const { blob, state } = await this.crypto('send', {
       group: serverId,
       text: JSON.stringify(content),
     });
     await this.persistState(state);
-    await this.relay.request({ t: 'ephemeral', group: serverId, payload: b64.enc(blob) });
+    const record = this.servers.get(serverId);
+    const names =
+      notify === '*' ? (record?.members ?? []).filter((m) => m !== this.me) : notify;
+    await this.relay.request({
+      t: 'ephemeral',
+      group: serverId,
+      payload: b64.enc(blob),
+      ...(names?.length ? { notify: names } : {}),
+    });
   }
 
   async onWelcome(msg) {
@@ -594,7 +608,7 @@ export class Controller {
         // the relay never sees it). The sender's copy is authoritative.
         // Same advisory admin gate as `chan`: ignore senders we know are
         // not admins, fail open while roles are still syncing.
-        if (record.roles?.[sender] && record.roles[sender] !== 'admin') break;
+        if (!(await this.senderIsAdmin(record, sender))) break;
         if (!record.channels.includes(content.ch)) record.channels.push(content.ch);
         record.chanMeta = { ...(record.chanMeta ?? {}), [content.ch]: content.meta ?? {} };
         await this.addSystemMessage(
@@ -611,7 +625,7 @@ export class Controller {
         // The home base's admin-edited half changed. Same advisory admin
         // gate as `chanset`: MLS can't enforce roles, so ignore senders we
         // know are not admins and fail open while roles are still syncing.
-        if (record.roles?.[sender] && record.roles[sender] !== 'admin') break;
+        if (!(await this.senderIsAdmin(record, sender))) break;
         record.overview = normalizeOverview(content.ov);
         await this.addSystemMessage(record.id, `home base updated by ${sender}`);
         this.scheduleBackup();
@@ -651,7 +665,7 @@ export class Controller {
         // can't read content): ignore a chan from someone we know is not an
         // admin. Fail open if the sender's role isn't known yet, so a legit
         // creation racing role sync isn't dropped.
-        if (record.roles?.[sender] && record.roles[sender] !== 'admin') break;
+        if (!(await this.senderIsAdmin(record, sender))) break;
         this.clearChannelDeleted(record, content.ch);
         if (!record.channels.includes(content.ch)) {
           record.channels.push(content.ch);
@@ -661,7 +675,7 @@ export class Controller {
         break;
       }
       case 'vchan': {
-        if (record.roles?.[sender] && record.roles[sender] !== 'admin') break;
+        if (!(await this.senderIsAdmin(record, sender))) break;
         const rooms = record.voiceChannels ?? ['lounge'];
         if (!rooms.includes(content.ch)) {
           record.voiceChannels = [...rooms, content.ch];
@@ -670,7 +684,7 @@ export class Controller {
         break;
       }
       case 'chan-ren': {
-        if (record.roles?.[sender] && record.roles[sender] !== 'admin') break;
+        if (!(await this.senderIsAdmin(record, sender))) break;
         if (record.channels.includes(content.ch) && !record.channels.includes(content.to)) {
           record.channels = record.channels.map((c) => (c === content.ch ? content.to : c));
           this.markChannelDeleted(record, content.ch);
@@ -687,7 +701,7 @@ export class Controller {
         break;
       }
       case 'chan-del': {
-        if (record.roles?.[sender] && record.roles[sender] !== 'admin') break;
+        if (!(await this.senderIsAdmin(record, sender))) break;
         if (record.channels.includes(content.ch) && record.channels.length > 1) {
           record.channels = record.channels.filter((c) => c !== content.ch);
           this.markChannelDeleted(record, content.ch);
@@ -702,7 +716,7 @@ export class Controller {
         break;
       }
       case 'vchan-ren': {
-        if (record.roles?.[sender] && record.roles[sender] !== 'admin') break;
+        if (!(await this.senderIsAdmin(record, sender))) break;
         const rooms = record.voiceChannels ?? ['lounge'];
         if (rooms.includes(content.ch) && !rooms.includes(content.to)) {
           record.voiceChannels = rooms.map((c) => (c === content.ch ? content.to : c));
@@ -715,7 +729,7 @@ export class Controller {
         break;
       }
       case 'vchan-del': {
-        if (record.roles?.[sender] && record.roles[sender] !== 'admin') break;
+        if (!(await this.senderIsAdmin(record, sender))) break;
         const rooms = record.voiceChannels ?? ['lounge'];
         if (rooms.includes(content.ch)) {
           record.voiceChannels = rooms.filter((c) => c !== content.ch);
@@ -919,10 +933,12 @@ export class Controller {
   /** Viewing a room marks it read on this device. `seen` is deliberately
       per-device state: what *you* have caught up on, not account data —
       it stays out of the meta envelopes and the backup. */
-  async markSeen(serverId, channel) {
+  async markSeen(serverId, channel, atLeastTs = 0) {
     const record = this.servers.get(serverId);
     if (!record || !channel) return;
-    record.seen = { ...(record.seen ?? {}), [channel]: Date.now() };
+    // Message ts is the *sender's* clock; take the max with our own so a
+    // fast sender clock can't leave an already-read message counted unread.
+    record.seen = { ...(record.seen ?? {}), [channel]: Math.max(Date.now(), atLeastTs) };
     await this.db.serverPut(record);
   }
 
@@ -1056,11 +1072,42 @@ export class Controller {
     // each recipient's own receive-clock ts would (a) order messages
     // differently per member and (b) defeat the history dedup, which keys on
     // ts, duplicating every backfilled line. See `messageTs`.
+    //
+    // Store-then-send: the user's own line renders immediately and, if the
+    // network send fails (offline, half-open socket), it stays visible as
+    // *failed* with a retry — instead of silently vanishing from the input.
     const ts = Date.now();
-    await this.sendContent(serverId, { k: 'chat', ch: channel, text, ts });
-    const message = { server: serverId, channel, sender: this.me, text, ts };
-    await this.storeMessage(message);
-    this.appendHistory(serverId, channel, message);
+    await this.storeMessage({ server: serverId, channel, sender: this.me, text, ts, pending: true });
+    await this.deliverChat(serverId, channel, text, ts);
+  }
+
+  /** Network half of sendChat; also the retry path for a failed line. */
+  async deliverChat(serverId, channel, text, ts) {
+    try {
+      await this.sendContent(serverId, { k: 'chat', ch: channel, text, ts });
+    } catch (e) {
+      await this.db.msgPatch(serverId, channel, this.me, ts, (m) => ({
+        ...m,
+        pending: false,
+        failed: true,
+      }));
+      this.dispatch({ type: 'refreshMessages' });
+      throw e;
+    }
+    await this.db.msgPatch(serverId, channel, this.me, ts, ({ pending, failed, ...m }) => m);
+    this.dispatch({ type: 'refreshMessages' });
+    this.appendHistory(serverId, channel, { server: serverId, channel, sender: this.me, text, ts });
+  }
+
+  /** Retry a message that failed to send (still stored locally). */
+  async retryMessage(serverId, channel, message) {
+    await this.db.msgPatch(serverId, channel, this.me, message.ts, (m) => ({
+      ...m,
+      pending: true,
+      failed: false,
+    }));
+    this.dispatch({ type: 'refreshMessages' });
+    await this.deliverChat(serverId, channel, message.text, message.ts);
   }
 
   /** Announce a game launch as a first-class message: renders as a join
@@ -1082,8 +1129,12 @@ export class Controller {
   async setPlaying(serverId, gameRef) {
     if (!this.servers.get(serverId)) return;
     const playing = gameRef ? normalizeGameRef(gameRef) : null;
-    this.setLivePresence(serverId, this.me, { playing, ts: Date.now() });
-    await this.sendContent(serverId, { k: 'pres', playing });
+    const ts = Date.now();
+    this.setLivePresence(serverId, this.me, { playing, ts });
+    // Ephemeral fan-out, not the group log: a presence claim replayed from
+    // the log on catch-up would resurrect "in game" long after the game
+    // ended. The ts rides along so even a delayed copy ages out correctly.
+    await this.sendEphemeral(serverId, { k: 'pres', playing, ts });
   }
 
   setLivePresence(serverId, handle, entry) {
@@ -1291,6 +1342,21 @@ export class Controller {
 
   // === roles ==============================================================
 
+  /** Advisory admin gate for admin-only envelopes (overview, chanset,
+      channel create/rename/delete). MLS can't enforce roles; the relay's
+      ACL is the source of truth, but our cache of it can lag a promotion —
+      an admin's edit arriving just after they were promoted must not be
+      silently dropped because this device still has them as "member".
+      Fail open while the role is unknown; on a cache that disagrees,
+      re-pull the ACL once and re-check before dropping. */
+  async senderIsAdmin(record, sender) {
+    const cached = record.roles?.[sender];
+    if (!cached || cached === 'admin') return true;
+    await this.refreshRoles(record.id);
+    const fresh = record.roles?.[sender];
+    return !fresh || fresh === 'admin';
+  }
+
   /** Pull the relay's roster roles (admin/member) into the local record.
       Best-effort: the ACL is advisory, so failures only affect badges. */
   async refreshRoles(serverId) {
@@ -1348,8 +1414,10 @@ export class Controller {
   async uploadBackup() {
     if (!this.relay?.ready || !this.servers.size) return;
     const identity = this.identityBytes();
+    // Restored stubs are included: their shape (and channel history keys)
+    // came from the previous backup, and omitting them here would overwrite
+    // that backup with one that has forgotten those circles entirely.
     const servers = [...this.servers.values()]
-      .filter((r) => !r.restored) // a restored stub is itself from a backup
       .map((r) => ({
         id: r.id,
         name: r.name,
@@ -1592,6 +1660,16 @@ export class Controller {
     if (!('serviceWorker' in navigator)) return null;
     try {
       this.swReg = await navigator.serviceWorker.register('/sw.js');
+      // Notification clicks route here: land on the circle the push was
+      // about instead of wherever the app happened to be.
+      if (!this.swMessageBound) {
+        this.swMessageBound = true;
+        navigator.serviceWorker.addEventListener('message', ({ data }) => {
+          if (data?.type === 'open-group' && this.servers.has(data.group)) {
+            this.dispatch({ type: 'select', server: data.group, channel: null });
+          }
+        });
+      }
       return this.swReg;
     } catch (e) {
       console.warn(`service worker registration failed: ${e.message}`);
@@ -1762,6 +1840,9 @@ export class Controller {
 
   snapshotServers() {
     // Plain-object projection for React (sorted stable by join time).
+    // Everything is copied — overview and chanMeta included, since some
+    // receive paths patch them in place and a shared reference would let
+    // memoized components miss the change.
     return [...this.servers.values()]
       .sort((a, b) => (a.joinedAt ?? 0) - (b.joinedAt ?? 0))
       .map((r) => ({
@@ -1772,6 +1853,8 @@ export class Controller {
         roles: { ...(r.roles ?? {}) },
         notices: [...(r.notices ?? [])],
         rsvps: { ...(r.rsvps ?? {}) },
+        overview: r.overview ? JSON.parse(JSON.stringify(r.overview)) : r.overview,
+        chanMeta: JSON.parse(JSON.stringify(r.chanMeta ?? {})),
         // Live only: which game each member says they're in right now.
         presence: { ...(this.livePresence?.get(r.id) ?? {}) },
       }));

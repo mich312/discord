@@ -50,6 +50,7 @@ export class VoiceManager {
     this.share = null; // {stream, track}
     this.shares = new Map(); // name -> key(server, channel)
     this.remoteScreens = new Map(); // name -> MediaStream
+    this.mutedPeers = new Set(); // names that told us their mic is muted
     // Active-speaker metering (local + each remote), all client-side.
     this.levels = {}; // name -> 0..1 instantaneous loudness (read by the meter UI)
     this.speaking = new Set(); // names currently over the speaking threshold
@@ -88,6 +89,8 @@ export class VoiceManager {
           ].sort()
         : [],
       screens: [...this.remoteScreens.keys()].sort(),
+      // Peers who told us their mic is muted (mic-off badge on their bubble).
+      mutedPeers: [...this.mutedPeers].sort(),
       connections: Object.fromEntries(
         [...this.peers.entries()].map(([name, p]) => [name, p.pc.connectionState])
       ),
@@ -205,20 +208,32 @@ export class VoiceManager {
     if (typeof window !== 'undefined') window.__voiceLevels = {};
   }
 
-  track(server, channel, name, present) {
+  /** `announce`: whether a 0 -> 1 transition means a call actually started
+      right now. 'here' replies to a probe describe a call that has been
+      running — announcing those would drop a bogus "started a call" line
+      on every reconnect. */
+  track(server, channel, name, present, announce = true) {
     const key = this.key(server, channel);
     if (!this.presence.has(key)) this.presence.set(key, new Set());
     const set = this.presence.get(key);
-    if (present && set.size === 0) this.onCallStarted(server, channel, name);
+    if (present && announce && set.size === 0) this.onCallStarted(server, channel, name);
     present ? set.add(name) : set.delete(name);
   }
 
   /** Mute/unmute my mic without renegotiating: the track keeps flowing,
-      disabled tracks carry silence. */
+      disabled tracks carry silence. Announced so peers can show a mic-off
+      badge instead of wondering why someone is silent. */
   setMuted(muted) {
     this.muted = !!muted;
     const stream = this.active?.stream;
     if (stream) for (const t of stream.getAudioTracks()) t.enabled = !this.muted;
+    if (this.active) {
+      this.send(this.active.server, {
+        k: 'voice',
+        ch: this.active.channel,
+        action: this.muted ? 'mute' : 'unmute',
+      }).catch(() => {});
+    }
     this.publish();
   }
 
@@ -299,10 +314,15 @@ export class VoiceManager {
     if (this.active) await this.leave();
     const stream = await this.captureAudio();
     this.muted = false; // every call starts open-mic; muting is a per-call act
+    // Joining an *empty* group room starts a call: push-wake the roster so
+    // members with the app closed learn about it (a 1:1 room rings its one
+    // peer explicitly instead — see callUser).
+    const startsCall =
+      this.participants(server, channel).length === 0 && !this.directPeer(channel);
     this.active = { server, channel, stream };
     this.addMeter(this.me, stream); // show my own level even before anyone joins
     this.track(server, channel, this.me, true);
-    await this.send(server, { k: 'voice', ch: channel, action: 'join' });
+    await this.send(server, { k: 'voice', ch: channel, action: 'join' }, startsCall ? '*' : undefined);
     this.publish();
   }
 
@@ -320,6 +340,7 @@ export class VoiceManager {
       this.share = null;
     }
     this.remoteScreens.clear();
+    this.mutedPeers.clear();
     this.audioCtx?.close?.().catch?.(() => {});
     this.audioCtx = null;
     this.track(server, channel, this.me, false);
@@ -329,6 +350,7 @@ export class VoiceManager {
   }
 
   teardownPeer(peer) {
+    clearTimeout(peer.reapTimer);
     try {
       peer.pc.close();
     } catch {
@@ -344,6 +366,17 @@ export class VoiceManager {
     this.peers.delete(name);
     this.removeMeter(name);
     this.remoteScreens.delete(name);
+    this.mutedPeers.delete(name);
+    // A 1:1 call is over when the other party's leg is gone — whether they
+    // left politely (leave envelope) or their tab/network died and the leg
+    // was reaped. Without this, a crashed peer leaves you in a dead call.
+    if (
+      this.active &&
+      name === this.directPeer(this.active.channel) &&
+      this.peers.size === 0
+    ) {
+      this.leave().catch(() => {});
+    }
     this.publish();
   }
 
@@ -412,14 +445,21 @@ export class VoiceManager {
 
   /** Re-offer to one peer after a track change. Collisions (both sides
       renegotiating at once) resolve like the initial mesh rule: the smaller
-      name's offer wins; see the offer handler in handleSignal. */
+      name's offer wins; see the offer handler in handleSignal. A re-offer
+      that can't go out right now (signaling mid-flight) is *queued*, not
+      dropped — signalingstatechange retries it once the pc is stable again,
+      otherwise a track added during glare would never be negotiated. */
   async renegotiate(server, name, peer) {
     try {
       peer.makingOffer = true;
       const offer = await peer.pc.createOffer();
       // An offer arrived while we were building ours and the peer applied
-      // it — ours is stale; the answer path re-syncs the tracks.
-      if (peer.pc.signalingState !== 'stable') return;
+      // it — ours is stale; retry once the signaling settles.
+      if (peer.pc.signalingState !== 'stable') {
+        peer.renegotiateNeeded = true;
+        return;
+      }
+      peer.renegotiateNeeded = false;
       await peer.pc.setLocalDescription(offer);
       await this.send(server, {
         k: 'rtc',
@@ -433,8 +473,24 @@ export class VoiceManager {
     }
   }
 
-  /** Ask who's in voice (on connect/reconnect) — participants answer 'here'. */
+  /** Ask who's in voice (on connect/reconnect) — participants answer 'here'.
+      A probe round is authoritative: everyone still present replies, so
+      presence learned before the probe is cleared and rebuilt. Without this,
+      a member who left while we were disconnected shows "in call" forever
+      (their leave envelope is gone for good). My own active room survives. */
   async probe(server) {
+    for (const [key, set] of this.presence) {
+      if (!key.startsWith(`${server}\n`)) continue;
+      for (const name of [...set]) {
+        if (!(name === this.me && this.active && this.key(this.active.server, this.active.channel) === key)) {
+          set.delete(name);
+        }
+      }
+    }
+    for (const [name, key] of [...this.shares]) {
+      if (key.startsWith(`${server}\n`)) this.shares.delete(name);
+    }
+    this.publish();
     await this.send(server, { k: 'voice', ch: '*', action: 'probe' }).catch(() => {});
   }
 
@@ -460,7 +516,9 @@ export class VoiceManager {
     if (name === this.me || this.active || this.dial) return;
     const room = this.directRoom(this.me, name);
     this.dial = { server, room, to: name };
-    await this.send(server, { k: 'ring', to: name, ch: room, action: 'invite' });
+    // notify: if the callee's app is closed, the relay push-wakes them —
+    // otherwise the ring only ever reaches an already-open tab.
+    await this.send(server, { k: 'ring', to: name, ch: room, action: 'invite' }, [name]);
     await this.join(server, room); // the caller waits in the room for an answer
   }
 
@@ -518,7 +576,13 @@ export class VoiceManager {
   /** Presence reply; carries the share flag so late joiners learn who is
       already presenting without waiting for the video track to negotiate. */
   hereEnvelope(channel) {
-    return { k: 'voice', ch: channel, action: 'here', ...(this.share ? { sharing: true } : {}) };
+    return {
+      k: 'voice',
+      ch: channel,
+      action: 'here',
+      ...(this.share ? { sharing: true } : {}),
+      ...(this.muted ? { muted: true } : {}),
+    };
   }
 
   async handleEnvelope(server, sender, content) {
@@ -565,8 +629,10 @@ export class VoiceManager {
       switch (content.action) {
         case 'join':
         case 'here': {
-          this.track(server, content.ch, sender, true);
+          this.track(server, content.ch, sender, true, content.action === 'join');
           if (content.sharing) this.shares.set(sender, this.key(server, content.ch));
+          if (content.muted) this.mutedPeers.add(sender);
+          else if (content.action === 'join') this.mutedPeers.delete(sender);
           if (this.inChannel(server, content.ch)) {
             if (content.action === 'join') {
               // Tell the newcomer we're here (they can't know otherwise).
@@ -574,6 +640,14 @@ export class VoiceManager {
             }
             await this.ensurePeer(server, sender);
           }
+          break;
+        }
+        case 'mute': {
+          this.mutedPeers.add(sender);
+          break;
+        }
+        case 'unmute': {
+          this.mutedPeers.delete(sender);
           break;
         }
         case 'share': {
@@ -626,6 +700,10 @@ export class VoiceManager {
     this.peers.set(name, peer);
     if (initiator) {
       const offer = await peer.pc.createOffer();
+      // The peer may have left (or we may have) while the offer was being
+      // built — signaling a closed/replaced leg throws or, worse, sends an
+      // offer to someone no longer in the call.
+      if (this.peers.get(name) !== peer || !this.active) return;
       await peer.pc.setLocalDescription(offer);
       await this.send(server, {
         k: 'rtc',
@@ -640,7 +718,15 @@ export class VoiceManager {
 
   createPeer(server, name) {
     const pc = new RTCPeerConnection({ iceServers: this.iceServers });
-    const peer = { pc, audio: null, pendingCandidates: [], makingOffer: false, shareSender: null };
+    const peer = {
+      pc,
+      audio: null,
+      pendingCandidates: [],
+      makingOffer: false,
+      shareSender: null,
+      renegotiateNeeded: false,
+      reapTimer: null,
+    };
     for (const t of this.active.stream.getTracks()) pc.addTrack(t, this.active.stream);
     // Mid-share joiner: their very first negotiation already carries the
     // screen track, no follow-up renegotiation needed.
@@ -672,6 +758,9 @@ export class VoiceManager {
         this.publish();
         return;
       }
+      // Renegotiation/ICE restarts can re-fire ontrack for audio: drop the
+      // previous element first or it keeps playing, detached and doubled.
+      peer.audio?.remove?.();
       const audio = new Audio();
       audio.srcObject = streams[0];
       audio.autoplay = true;
@@ -701,11 +790,34 @@ export class VoiceManager {
       this.addMeter(name, streams[0]); // measure this peer's speaking level
     };
     pc.onconnectionstatechange = () => {
-      if (['failed', 'closed', 'disconnected'].includes(pc.connectionState)) {
+      const state = pc.connectionState;
+      if (state === 'failed' || state === 'closed') {
         // Peer vanished without a leave (tab kill, network drop).
-        if (pc.connectionState === 'failed') this.dropPeer(name);
+        this.dropPeer(name);
+      } else if (state === 'disconnected') {
+        // Some browsers sit in 'disconnected' forever instead of reaching
+        // 'failed'. A leg that stays dead must be reaped — a lingering
+        // zombie blocks ensurePeer from rebuilding on the next 'here'.
+        clearTimeout(peer.reapTimer);
+        peer.reapTimer = setTimeout(() => {
+          if (this.peers.get(name) === peer && pc.connectionState !== 'connected') {
+            this.dropPeer(name);
+          }
+        }, 8000);
+      } else if (state === 'connected') {
+        clearTimeout(peer.reapTimer);
+        peer.reapTimer = null;
       }
       this.publish();
+    };
+    pc.onsignalingstatechange = () => {
+      // A re-offer postponed by glare goes out once the pc settles.
+      if (pc.signalingState === 'stable' && peer.renegotiateNeeded && !peer.makingOffer) {
+        peer.renegotiateNeeded = false;
+        if (this.peers.get(name) === peer && this.active) {
+          this.renegotiate(server, name, peer).catch(() => {});
+        }
+      }
     };
     return peer;
   }
@@ -732,8 +844,12 @@ export class VoiceManager {
           // local offer; our track change re-offers once this settles.
         }
         await peer.pc.setRemoteDescription({ type: 'offer', sdp: content.sdp });
+        // The sender may have left (dropPeer closed this leg) while the
+        // description was being applied — answering a closed pc throws.
+        if (this.peers.get(sender) !== peer) break;
         for (const c of peer.pendingCandidates.splice(0)) await peer.pc.addIceCandidate(c);
         const answer = await peer.pc.createAnswer();
+        if (this.peers.get(sender) !== peer) break;
         await peer.pc.setLocalDescription(answer);
         await this.send(server, {
           k: 'rtc',

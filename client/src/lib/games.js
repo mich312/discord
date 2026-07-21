@@ -106,7 +106,10 @@ export const PRESENCE_TTL = 4 * 3600e3;
 export function normalizePresence(p, now = Date.now()) {
   if (!p || typeof p !== 'object') return { playing: null, ts: now };
   const playing = normalizeGameRef(p.playing);
-  return { playing, ts: now };
+  // Trust a sane claimed ts so a delayed or replayed claim ages from when
+  // it was made, not from when it arrived; clamp future claims to now.
+  const ts = Number(p.ts);
+  return { playing, ts: Number.isFinite(ts) && ts > 0 ? Math.min(ts, now) : now };
 }
 
 export function freshPresence(entry, now = Date.now()) {

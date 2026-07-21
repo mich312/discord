@@ -4,7 +4,15 @@
 // a script injector.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { GAMES_MAX, activitySrc, gameHost, normalizeGame, normalizeGames } from '../src/lib/games.js';
+import {
+  GAMES_MAX,
+  activitySrc,
+  freshPresence,
+  gameHost,
+  normalizeGame,
+  normalizeGames,
+  normalizePresence,
+} from '../src/lib/games.js';
 import { normalizeOverview } from '../src/lib/overview.js';
 
 test('normalizeGame keeps whitelisted, bounded fields', () => {
@@ -88,4 +96,15 @@ test('presence claims are whitelisted and expire', async () => {
   assert.equal(freshPresence(p, NOW + PRESENCE_TTL + 1), null);
   assert.equal(normalizePresence({ playing: null }, NOW).playing, null);
   assert.equal(normalizePresence('junk', NOW).playing, null);
+});
+
+test('normalizePresence honors a sane claimed ts so replays age out', () => {
+  const now = 1_000_000_000;
+  const old = normalizePresence({ playing: { id: 'g', name: 'G' }, ts: now - 5 * 3600e3 }, now);
+  assert.equal(old.ts, now - 5 * 3600e3, 'claimed ts kept');
+  assert.equal(freshPresence(old, now), null, 'stale claim reads as expired');
+  const future = normalizePresence({ playing: { id: 'g', name: 'G' }, ts: now + 9e9 }, now);
+  assert.equal(future.ts, now, 'future claims clamp to now');
+  const missing = normalizePresence({ playing: { id: 'g', name: 'G' } }, now);
+  assert.equal(missing.ts, now, 'no claim falls back to receipt time');
 });

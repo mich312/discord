@@ -126,7 +126,7 @@ function Attachment({ file, fetchFile }) {
       alive = false;
       if (objectUrl) URL.revokeObjectURL(objectUrl);
     };
-  }, []);
+  }, [file.blob]);
 
   if (isImage) {
     if (error) return <span className="muted">attachment: {error}</span>;
@@ -223,9 +223,14 @@ export default function Messages({
   onOpenStage,
   onLaunchGame,
   onReact,
+  onRetry,
 }) {
   const [draft, setDraft] = useState('');
   const scroller = useRef(null);
+  // Stay pinned to the newest line only while the user is already at (or
+  // near) the bottom — a reaction or backfill elsewhere must not yank
+  // someone out of their scrollback.
+  const pinned = useRef(true);
   const folded = useMemo(() => fold(messages), [messages]);
   const members = server.members.length;
   const meta = server.chanMeta?.[channel] ?? {};
@@ -241,7 +246,7 @@ export default function Messages({
       .sort((a, b) => b.n - a.n)[0] ?? null;
 
   useEffect(() => {
-    scroller.current?.scrollTo(0, scroller.current.scrollHeight);
+    if (pinned.current) scroller.current?.scrollTo(0, scroller.current.scrollHeight);
   }, [messages]);
 
   return (
@@ -285,7 +290,15 @@ export default function Messages({
           </button>
         ) : null}
       </header>
-      <div className="scroll" ref={scroller} data-testid="message-scroll">
+      <div
+        className="scroll"
+        ref={scroller}
+        data-testid="message-scroll"
+        onScroll={(e) => {
+          const el = e.currentTarget;
+          pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
+        }}
+      >
         <div className="watermark" data-testid="watermark">
           <span className="wm-tag">start of record — #{channel}</span>
           {keepsHistory ? (
@@ -331,9 +344,12 @@ export default function Messages({
                 <time>{timeOf(item.ts)}</time>
               </div>
               {item.lines.map((m, i) => (
-                <div className="msg-line" key={i}>
+                <div
+                  className={m.failed ? 'msg-line failed' : m.pending ? 'msg-line pending' : 'msg-line'}
+                  key={`${m.ts}:${i}`}
+                >
                   {m.file ? (
-                    <Attachment file={m.file} fetchFile={fetchFile} />
+                    <Attachment key={m.file.blob} file={m.file} fetchFile={fetchFile} />
                   ) : m.game ? (
                     <GameInvite
                       game={m.game}
@@ -346,6 +362,16 @@ export default function Messages({
                     <span className="text">{m.text}</span>
                   )}
                   {i > 0 && <time>{timeOf(m.ts)}</time>}
+                  {m.failed && onRetry ? (
+                    <button
+                      className="button msg-retry"
+                      data-testid="msg-retry"
+                      title="this message never reached the relay"
+                      onClick={() => onRetry(m)}
+                    >
+                      failed — retry
+                    </button>
+                  ) : null}
                   <Reactions message={m} me={me} onReact={server.restored ? null : onReact} />
                 </div>
               ))}
@@ -390,6 +416,7 @@ export default function Messages({
             value={draft}
             onChange={(e) => setDraft(e.target.value)}
             placeholder={`Message #${channel}`}
+            aria-label={`Message #${channel}`}
             data-testid="composer"
           />
           <span className="send-hint mono" aria-hidden="true">↩ send</span>
