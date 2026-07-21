@@ -1,5 +1,5 @@
 import React, { useEffect, useState } from 'react';
-import { LinkGlyph, Key, ShieldCheck, Copy, Download, X, Check, Gear } from './icons.jsx';
+import { LinkGlyph, Key, ShieldCheck, Copy, Download, X, Check, Gear, LogOut } from './icons.jsx';
 
 const RETENTION_CHOICES = [
   { value: 0, label: 'keep until deleted by hand' },
@@ -19,6 +19,8 @@ export default function Modal({
   onChannelSettings,
   onChannelRename,
   onChannelDelete,
+  onLogout,
+  unsecured,
   identityKey,
 }) {
   const [password, setPassword] = useState('');
@@ -70,6 +72,7 @@ export default function Modal({
     secure: { glyph: <ShieldCheck />, title: 'Secure your account' },
     safety: { glyph: <ShieldCheck />, title: `Safety number — ${modal.peer ?? ''}` },
     identity: { glyph: <Key />, title: 'Identity key' },
+    logout: { glyph: <LogOut />, title: 'Log out of this device' },
     admin: { glyph: <ShieldCheck />, title: 'Relay admin overview' },
     channel: {
       glyph: <Gear />,
@@ -359,6 +362,40 @@ export default function Modal({
               into “restore → identity key” on another device to sign in there. It restores
               your account, not your old messages.
             </p>
+          </>
+        )}
+        {modal.type === 'logout' && (
+          <>
+            <p className="muted">
+              Logging out wipes this browser&rsquo;s copy of your identity and every
+              circle&rsquo;s keys, then returns to the sign-in screen.
+            </p>
+            {unsecured ? (
+              <p className="error" data-testid="logout-unsecured-warning">
+                This account isn&rsquo;t secured yet — there is no passkey, password, or
+                exported key. If you log out now it is gone <strong>for good</strong>.
+              </p>
+            ) : (
+              <p className="fineprint muted">
+                You&rsquo;ll need your passkey, password, or recovery/identity key to sign
+                back in. Messages don&rsquo;t come back — their keys lived only on this device.
+              </p>
+            )}
+            <div className="row">
+              <button
+                className="button danger"
+                data-testid="logout-confirm"
+                disabled={busy}
+                onClick={() => attempt(onLogout)}
+              >
+                <LogOut size={14} />
+                {busy ? 'logging out…' : 'log out'}
+              </button>
+              <button className="button" data-testid="logout-cancel" onClick={onClose}>
+                cancel
+              </button>
+            </div>
+            {error && <p className="error">{error}</p>}
           </>
         )}
         <button className="ghost close" onClick={onClose} data-testid="close-modal" title="close">

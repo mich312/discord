@@ -119,6 +119,43 @@ test('overview edit from a stale-cached "member" is re-checked against the ACL, 
   clearTimeout(c.backupTimer);
 });
 
+test('a room whose gated chan/vchan event was dropped is repaired by the meta snapshot', async () => {
+  // The reported bug: a user creates channels/voice rooms that show for them
+  // but never for the admin. Root cause is the role gate dropping their
+  // `chan`/`vchan` events (a global admin who is only a circle member reads
+  // as a non-admin here). createChannel/createVoiceChannel now trail a meta
+  // snapshot, and the ungated union path adopts it — so the room appears.
+  const { c } = makeController({
+    relayHandler: (msg) =>
+      msg.t === 'members'
+        ? Promise.resolve({ members: [{ user: 'alice', role: 'admin' }, { user: 'bob', role: 'member' }] })
+        : Promise.resolve({ seq: 1 }),
+  });
+  const r = record({ roles: { bob: 'member' } });
+  c.servers.set('srv', r);
+
+  // The gated events alone are dropped for a non-admin sender.
+  await c.onContent(r, 'bob', JSON.stringify({ k: 'chan', ch: 'design' }));
+  await c.onContent(r, 'bob', JSON.stringify({ k: 'vchan', ch: 'standup' }));
+  assert.ok(!r.channels.includes('design'), 'gated chan event stays dropped');
+  assert.ok(!(r.voiceChannels ?? []).includes('standup'), 'gated vchan event stays dropped');
+
+  // The meta snapshot that trails them repairs both via the union path.
+  await c.onContent(
+    r,
+    'bob',
+    JSON.stringify({
+      k: 'meta',
+      name: 'circle',
+      channels: ['general', 'design'],
+      voiceChannels: ['lounge', 'standup'],
+    })
+  );
+  assert.ok(r.channels.includes('design'), 'the channel is adopted from the meta union');
+  assert.ok(r.voiceChannels.includes('standup'), 'the voice room is adopted too');
+  clearTimeout(c.backupTimer);
+});
+
 test('overview edit from a genuine non-admin is dropped', async () => {
   const { c } = makeController({
     relayHandler: (msg) =>

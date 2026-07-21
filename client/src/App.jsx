@@ -18,7 +18,7 @@ import GameStage from './components/GameStage.jsx';
 import { callChatChannel } from './lib/controller.js';
 import Settings from './components/Settings.jsx';
 import Seal from './components/Seal.jsx';
-import { Key, Bell, ShieldCheck, LinkGlyph, Sun, QuorumGlyph, Gear } from './components/icons.jsx';
+import { Key, Bell, ShieldCheck, LinkGlyph, Sun, QuorumGlyph, Gear, LogOut } from './components/icons.jsx';
 import { markPlayed } from './lib/games.js';
 
 /** Content identity of a message for merging a load snapshot with live
@@ -400,6 +400,7 @@ export default function App() {
     });
   const openSecure = () => dispatch({ type: 'modal', modal: { type: 'secure' } });
   const openSettings = () => dispatch({ type: 'modal', modal: { type: 'settings' } });
+  const openLogout = () => dispatch({ type: 'modal', modal: { type: 'logout' } });
   const openInvite = async () => {
     try {
       const url = await controllerRef.current.createInvite(server);
@@ -543,20 +544,27 @@ export default function App() {
             />
           )}
           <div className="self-card">
-            <Seal name={state.me} size={32} title={state.me} />
-            <span className="who">
-              <span className="handle" data-testid="self-name">{state.me}</span>
-              <span className={`status ${state.connection}`}>{state.connection}</span>
-            </span>
-            <button className="icon-btn" title="identity key" data-testid="identity-open" onClick={openIdentity}>
-              <Key size={14} />
-            </button>
-            <button className="icon-btn" title="enable push notifications" data-testid="enable-notifications" onClick={enableAlerts}>
-              <Bell size={14} />
-            </button>
-            <button className="icon-btn" title="settings" data-testid="open-settings" onClick={openSettings}>
-              <Gear size={14} />
-            </button>
+            <div className="self-id">
+              <Seal name={state.me} size={32} title={state.me} />
+              <span className="who">
+                <span className="handle" data-testid="self-name">{state.me}</span>
+                <span className={`status ${state.connection}`}>{state.connection}</span>
+              </span>
+            </div>
+            <div className="self-actions">
+              <button className="icon-btn" title="identity key" data-testid="identity-open" onClick={openIdentity}>
+                <Key size={14} />
+              </button>
+              <button className="icon-btn" title="enable push notifications" data-testid="enable-notifications" onClick={enableAlerts}>
+                <Bell size={14} />
+              </button>
+              <button className="icon-btn" title="settings" data-testid="open-settings" onClick={openSettings}>
+                <Gear size={14} />
+              </button>
+              <button className="icon-btn danger" title="log out" data-testid="logout" onClick={openLogout}>
+                <LogOut size={14} />
+              </button>
+            </div>
           </div>
           </div>
         </nav>
@@ -785,6 +793,8 @@ export default function App() {
           <Modal
             modal={state.modal}
             onClose={() => dispatch({ type: 'modal', modal: null })}
+            unsecured={unsecured}
+            onLogout={() => controllerRef.current.logout()}
             onVerify={async (srv, peer) => {
               await controllerRef.current.markVerified(srv, peer);
               dispatch({ type: 'modal', modal: null });

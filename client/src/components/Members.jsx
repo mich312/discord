@@ -163,9 +163,6 @@ export default function Members({ server, me, canManage, voice, onAdd, onMember,
       ) : (
         <p className="fineprint muted">Only admins of this circle can add members.</p>
       )}
-      <p className="fineprint muted">
-        New members can&rsquo;t see messages sent before they joined.
-      </p>
     </aside>
   );
 }

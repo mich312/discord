@@ -30,6 +30,8 @@ function tx(db, store, mode, fn) {
 
 function wrap(db) {
   return {
+    // Release the connection so a logout's deleteDatabase isn't blocked.
+    close: () => db.close(),
     kvGet: (key) =>
       new Promise((resolve, reject) => {
         const req = db.transaction('kv').objectStore('kv').get(key);

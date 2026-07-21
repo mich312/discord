@@ -91,6 +91,15 @@ export const Gear = (p) => (
   </Svg>
 );
 
+// A door with an arrow leaving through it — sign out.
+export const LogOut = (p) => (
+  <Svg {...p}>
+    <path d="M6 2H3.6A1.6 1.6 0 0 0 2 3.6v8.8A1.6 1.6 0 0 0 3.6 14H6" />
+    <path d="M10.4 11 13.5 8l-3.1-3" />
+    <path d="M13.5 8H6" />
+  </Svg>
+);
+
 export const Phone = (p) => (
   <Svg {...p}>
     <g transform="scale(0.667)">

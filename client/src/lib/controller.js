@@ -157,6 +157,49 @@ export class Controller {
     return localStorage.getItem(IDENTITY_LS_KEY);
   }
 
+  /** Sign out of this device: wipe the local identity and every circle's
+      keys, then reload to the onboarding gate. Nothing is sent to the relay
+      — the account only ever lived here. Destructive: if the account was
+      never secured (no vault, no exported key), this is unrecoverable, which
+      is why the UI confirms first. */
+  async logout() {
+    try {
+      this.relay?.close?.();
+    } catch {
+      /* already down */
+    }
+    // Drop the identity that would otherwise auto-restore on next boot
+    // (see boot(): a surviving localStorage key resurrects the account even
+    // with IndexedDB gone).
+    localStorage.removeItem(IDENTITY_LS_KEY);
+    // Release our connection so the delete isn't blocked, then wipe the DB.
+    try {
+      this.db?.close?.();
+    } catch {
+      /* not open */
+    }
+    await new Promise((resolve) => {
+      let done = false;
+      const finish = () => {
+        if (!done) {
+          done = true;
+          resolve();
+        }
+      };
+      try {
+        const req = indexedDB.deleteDatabase('e2ee-client');
+        req.onsuccess = finish;
+        req.onerror = finish;
+        req.onblocked = finish;
+      } catch {
+        finish();
+      }
+      // Never hang the sign-out on a wedged delete.
+      setTimeout(finish, 1500);
+    });
+    location.reload();
+  }
+
   async completeOnboarding(securedLocal = true) {
     await this.db.kvPut('session', { name: this.me, createdAt: Date.now() });
     await this.db.kvPut('securedLocal', securedLocal);
@@ -431,16 +474,7 @@ export class Controller {
           // group rebroadcasts the metadata they missed (including channel
           // history keys — sharing them with the roster is their design).
           if (record.invites?.length) {
-            await this.sendContent(record.id, {
-              k: 'meta',
-              name: record.name,
-              channels: record.channels,
-              voiceChannels: record.voiceChannels ?? ['lounge'],
-              chanMeta: record.chanMeta ?? {},
-              overview: record.overview ?? null,
-              notices: record.notices ?? [],
-              rsvps: record.rsvps ?? {},
-            });
+            await this.sendContent(record.id, this.metaContent(record));
           }
         } else {
           await this.addSystemMessage(
@@ -813,6 +847,23 @@ export class Controller {
     }
   }
 
+  /** The full metadata snapshot a joiner (or a peer that missed an event)
+      needs to reconstruct the circle's shape. Rebroadcast on member add and
+      after a structural change so the ungated `meta` union self-heals any
+      device that dropped the original, role-gated `chan`/`vchan` event. */
+  metaContent(record) {
+    return {
+      k: 'meta',
+      name: record.name,
+      channels: record.channels,
+      voiceChannels: record.voiceChannels ?? ['lounge'],
+      chanMeta: record.chanMeta ?? {},
+      overview: record.overview ?? null,
+      notices: record.notices ?? [],
+      rsvps: record.rsvps ?? {},
+    };
+  }
+
   async createChannel(serverId, channel) {
     const record = this.servers.get(serverId);
     const ch = channel.toLowerCase().replace(/[^a-z0-9-]+/g, '-');
@@ -820,6 +871,11 @@ export class Controller {
     record.channels.push(ch);
     this.clearChannelDeleted(record, ch);
     await this.sendContent(serverId, { k: 'chan', ch });
+    // The `chan` event above is dropped by any peer that doesn't yet see us
+    // as an admin (stale role cache, or a global admin who is only a circle
+    // member). Follow it with a meta snapshot so the ungated union repairs
+    // them — otherwise the room shows for us and never for them.
+    await this.sendContent(serverId, this.metaContent(record));
     await this.db.serverPut(record);
     this.dispatch({ type: 'servers', servers: this.snapshotServers() });
     this.scheduleBackup();
@@ -986,6 +1042,9 @@ export class Controller {
     if (!ch || rooms.includes(ch)) return;
     record.voiceChannels = [...rooms, ch];
     await this.sendContent(serverId, { k: 'vchan', ch });
+    // Same self-heal as createChannel: a meta snapshot after the gated
+    // `vchan` so peers that dropped it still pick the voice room up.
+    await this.sendContent(serverId, this.metaContent(record));
     await this.db.serverPut(record);
     this.dispatch({ type: 'servers', servers: this.snapshotServers() });
     this.scheduleBackup();
@@ -1325,16 +1384,7 @@ export class Controller {
     await this.addSystemMessage(serverId, `${user} added (epoch ${epoch}) — unverified until you check their safety number`);
     // Joiners have no scrollback: rebroadcast name + channels (and channel
     // settings, incl. history keys) so their placeholder record fills in.
-    await this.sendContent(serverId, {
-      k: 'meta',
-      name: record.name,
-      channels: record.channels,
-      voiceChannels: record.voiceChannels ?? ['lounge'],
-      chanMeta: record.chanMeta ?? {},
-      overview: record.overview ?? null,
-      notices: record.notices ?? [],
-      rsvps: record.rsvps ?? {},
-    });
+    await this.sendContent(serverId, this.metaContent(record));
     await this.db.serverPut(record);
     this.dispatch({ type: 'servers', servers: this.snapshotServers() });
     this.refreshRoles(serverId);

@@ -225,6 +225,8 @@ kbd {
   transition: color var(--fast) var(--ease), background var(--fast) var(--ease);
 }
 .icon-btn:hover { color: var(--ink); background: var(--hover); }
+.icon-btn.danger { color: var(--ink-mute); }
+.icon-btn.danger:hover { color: var(--danger); background: var(--danger-soft); }
 
 .linkish {
   background: none;
@@ -976,19 +978,30 @@ kbd {
 .self-card {
   flex-shrink: 0;
   display: flex;
-  align-items: center;
-  gap: 9px;
+  flex-direction: column;
+  gap: 8px;
   padding: 10px 12px;
   border-top: 1px solid var(--hairline);
   background: var(--panel);
+}
+.self-card .self-id {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+}
+.self-card .self-actions {
+  display: flex;
+  gap: 4px;
+  justify-content: flex-end;
 }
 .self-card .who { flex: 1; min-width: 0; }
 .self-card .handle {
   display: block;
   font: 600 13px var(--mono);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  /* Spell the handle out in full — wrap rather than truncate; the actions
+     moved to their own row below, so the name owns this one. */
+  overflow-wrap: anywhere;
 }
 .self-card .status {
   display: block;
