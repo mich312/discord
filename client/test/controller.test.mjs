@@ -156,6 +156,34 @@ test('a room whose gated chan/vchan event was dropped is repaired by the meta sn
   clearTimeout(c.backupTimer);
 });
 
+test('a meta rebroadcast never resurrects a channel or voice room this device deleted', async () => {
+  // The connect-time heal rebroadcasts meta from every device. A peer that
+  // missed a deletion still lists the room; the union must respect this
+  // device's tombstones instead of bringing the room back.
+  const { c } = makeController();
+  const r = record({
+    channels: ['general'],
+    voiceChannels: ['lounge'],
+    deletedChannels: ['photos'],
+    deletedVoice: ['standup'],
+    roles: { bob: 'admin' },
+  });
+  c.servers.set('srv', r);
+  await c.onContent(
+    r,
+    'bob',
+    JSON.stringify({
+      k: 'meta',
+      name: 'circle',
+      channels: ['general', 'photos'],
+      voiceChannels: ['lounge', 'standup'],
+    })
+  );
+  assert.ok(!r.channels.includes('photos'), 'deleted channel stays deleted through the union');
+  assert.ok(!r.voiceChannels.includes('standup'), 'deleted voice room stays deleted too');
+  clearTimeout(c.backupTimer);
+});
+
 test('overview edit from a genuine non-admin is dropped', async () => {
   const { c } = makeController({
     relayHandler: (msg) =>

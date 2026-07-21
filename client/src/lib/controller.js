@@ -334,6 +334,24 @@ export class Controller {
             console.warn(`history backfill ${record.id}: ${e.message}`)
           );
         }
+        // One-shot per session: rebroadcast our own view of each circle's
+        // shape. Members can't create channels/voice rooms, so a room that
+        // exists on one device but not another is pure sync divergence — a
+        // role-gated chan/vchan event some peer dropped, or one sent while a
+        // peer was offline. The `meta` union (ungated) adopts any room the
+        // receiver is missing, so a single rebroadcast per device converges
+        // everyone. Skip restored stubs (no MLS state to send with) and
+        // pendingMetaSync records (their shape is unreconciled — sending it
+        // could spread a stale view instead of healing).
+        if (!this.metaHealed) {
+          this.metaHealed = true;
+          for (const record of this.servers.values()) {
+            if (record.restored || record.pendingMetaSync) continue;
+            this.sendContent(record.id, this.metaContent(record)).catch((e) =>
+              console.warn(`meta heal ${record.id}: ${e.message}`)
+            );
+          }
+        }
         this.scheduleBackup();
         this.checkVault();
         // Refresh the push subscription silently if permission was already
@@ -570,23 +588,35 @@ export class Controller {
           record.pendingMetaSync = false;
           Object.assign(record, reconcileMeta(content));
           // The snapshot is authoritative about what exists now, so a channel
-          // it lists is not a tombstone — drop any stale one so it isn't
-          // wrongly blocked from re-appearing.
+          // or voice room it lists is not a tombstone — drop any stale one so
+          // it isn't wrongly blocked from re-appearing.
           if (record.deletedChannels?.length) {
             record.deletedChannels = record.deletedChannels.filter(
               (c) => !record.channels.includes(c)
+            );
+          }
+          if (record.deletedVoice?.length) {
+            record.deletedVoice = record.deletedVoice.filter(
+              (c) => !(record.voiceChannels ?? []).includes(c)
             );
           }
           this.backfillHistory(record).catch((e) => console.warn(`history: ${e.message}`));
           this.scheduleBackup();
           break;
         }
+        // Union gap-fill: adopt rooms this device is missing, but never a room
+        // it has seen deleted — otherwise a peer that missed the deletion
+        // would resurrect it on every meta rebroadcast (now one per connect).
         for (const ch of content.channels ?? []) {
-          if (!record.channels.includes(ch)) record.channels.push(ch);
+          if (!record.channels.includes(ch) && !(record.deletedChannels ?? []).includes(ch)) {
+            record.channels.push(ch);
+          }
         }
         if (content.voiceChannels) {
           const rooms = record.voiceChannels ?? ['lounge'];
-          for (const ch of content.voiceChannels) if (!rooms.includes(ch)) rooms.push(ch);
+          for (const ch of content.voiceChannels) {
+            if (!rooms.includes(ch) && !(record.deletedVoice ?? []).includes(ch)) rooms.push(ch);
+          }
           record.voiceChannels = rooms;
         }
         // Gap-fill the home base the same way: a joiner has none, and
@@ -710,6 +740,7 @@ export class Controller {
       }
       case 'vchan': {
         if (!(await this.senderIsAdmin(record, sender))) break;
+        this.clearVoiceDeleted(record, content.ch);
         const rooms = record.voiceChannels ?? ['lounge'];
         if (!rooms.includes(content.ch)) {
           record.voiceChannels = [...rooms, content.ch];
@@ -754,6 +785,8 @@ export class Controller {
         const rooms = record.voiceChannels ?? ['lounge'];
         if (rooms.includes(content.ch) && !rooms.includes(content.to)) {
           record.voiceChannels = rooms.map((c) => (c === content.ch ? content.to : c));
+          this.markVoiceDeleted(record, content.ch);
+          this.clearVoiceDeleted(record, content.to);
           if (this.voice?.active?.server === record.id && this.voice.active.channel === content.ch) {
             await this.voice.leave();
           }
@@ -767,6 +800,7 @@ export class Controller {
         const rooms = record.voiceChannels ?? ['lounge'];
         if (rooms.includes(content.ch)) {
           record.voiceChannels = rooms.filter((c) => c !== content.ch);
+          this.markVoiceDeleted(record, content.ch);
           if (this.voice?.active?.server === record.id && this.voice.active.channel === content.ch) {
             await this.voice.leave();
           }
@@ -844,6 +878,21 @@ export class Controller {
   clearChannelDeleted(record, ch) {
     if (record.deletedChannels?.length) {
       record.deletedChannels = record.deletedChannels.filter((c) => c !== ch);
+    }
+  }
+
+  /** Voice rooms get the same tombstone treatment as text channels, so the
+      meta union (now rebroadcast on every connect to heal divergence) can't
+      resurrect a room this device has seen deleted. */
+  markVoiceDeleted(record, ch) {
+    record.deletedVoice = [...new Set([...(record.deletedVoice ?? []), ch])].slice(
+      -Controller.DELETED_MAX
+    );
+  }
+
+  clearVoiceDeleted(record, ch) {
+    if (record.deletedVoice?.length) {
+      record.deletedVoice = record.deletedVoice.filter((c) => c !== ch);
     }
   }
 
@@ -1041,6 +1090,7 @@ export class Controller {
     const rooms = record.voiceChannels ?? ['lounge'];
     if (!ch || rooms.includes(ch)) return;
     record.voiceChannels = [...rooms, ch];
+    this.clearVoiceDeleted(record, ch);
     await this.sendContent(serverId, { k: 'vchan', ch });
     // Same self-heal as createChannel: a meta snapshot after the gated
     // `vchan` so peers that dropped it still pick the voice room up.
@@ -1100,6 +1150,8 @@ export class Controller {
     const ch = Controller.slugChannel(to);
     if (!ch || ch === from || !rooms.includes(from) || rooms.includes(ch)) return;
     record.voiceChannels = rooms.map((c) => (c === from ? ch : c));
+    this.markVoiceDeleted(record, from);
+    this.clearVoiceDeleted(record, ch);
     if (this.voice?.active?.server === serverId && this.voice.active.channel === from) {
       await this.voice.leave();
     }
@@ -1115,6 +1167,7 @@ export class Controller {
     const rooms = record.voiceChannels ?? ['lounge'];
     if (!rooms.includes(channel)) return;
     record.voiceChannels = rooms.filter((c) => c !== channel);
+    this.markVoiceDeleted(record, channel);
     if (this.voice?.active?.server === serverId && this.voice.active.channel === channel) {
       await this.voice.leave();
     }
