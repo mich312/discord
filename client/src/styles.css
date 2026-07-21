@@ -2173,6 +2173,75 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
   border-color: color-mix(in srgb, var(--accent) 34%, var(--hairline));
 }
 
+/* Game nights — upcoming events tied to a game, surfaced on the Play tab
+   right where the shelf is. Coral clock marker; RSVP turns live-green. */
+.hub-nights { padding: 6px 0 2px; margin-bottom: 4px; }
+.hub-nights > .overline { display: block; margin-bottom: 8px; }
+.nights-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 6px; }
+.night-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 13px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--r);
+  background: var(--panel);
+}
+.night-mark {
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: var(--r-sm);
+  color: var(--accent-ink);
+  background: var(--accent-soft);
+}
+.night-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.night-title { font-weight: 650; font-size: var(--text-base); letter-spacing: -0.01em; }
+.night-game { color: var(--accent-ink); font-weight: 550; }
+.night-when {
+  font-size: var(--text-xs);
+  color: var(--ink-mute);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.night-going {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  font-size: var(--text-sm);
+  color: var(--ink-dim);
+}
+.night-going .game-who-stack .seal-avatar { margin-right: -8px; box-shadow: 0 0 0 2px var(--panel); }
+.night-going .game-who-stack .seal-avatar:last-child { margin-right: 0; }
+.night-action { flex-shrink: 0; padding: 6px 14px; }
+
+/* Game night named on the up-next hero and calendar rows. */
+.hero-game { color: var(--accent-ink); font-weight: 600; }
+
+/* The rest of the schedule under the hero, on Home. */
+.cal-list .cal-row { cursor: default; }
+.cal-list .cal-row:hover { border-color: var(--hairline); background: var(--panel); color: var(--ink); }
+.cal-row .glyph { color: var(--accent-ink); }
+.cal-rsvp { flex-shrink: 0; padding: 4px 12px; margin-left: 4px; }
+
+/* Multiple events in the customize form: a title/time row over a note+game row. */
+.overview-event-row { display: grid; gap: 6px; padding: 8px 0; border-bottom: 1px dashed var(--hairline); }
+.overview-event-row:first-of-type { padding-top: 0; }
+.overview-event-edit2 { display: grid; grid-template-columns: 1fr auto auto; gap: 6px; align-items: center; }
+.overview-event-edit2 select {
+  background: var(--well);
+  color: var(--ink);
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--r);
+  padding: 8px 10px;
+  font: inherit;
+}
+.overview-event-edit2 select:focus { border-color: var(--ink-dim); outline: none; }
+
 .hub-hero {
   position: relative;
   display: flex;

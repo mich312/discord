@@ -15,7 +15,7 @@ import {
   normalizeGame,
 } from '../lib/games.js';
 import { nameHue } from '../lib/avatar.js';
-import { Hash, Wave, Bell, LinkGlyph, Plus, X, ArrowRight, Gamepad, External, Copy, Check } from './icons.jsx';
+import { Hash, Wave, Bell, Clock, LinkGlyph, Plus, X, ArrowRight, Gamepad, External, Copy, Check } from './icons.jsx';
 
 // The circle's game hub. Two faces off one page, so the thing the page is
 // named for leads:
@@ -84,20 +84,41 @@ function ralliersLabel(who, me) {
 }
 
 let linkSeq = 0;
+let eventSeq = 0;
 
-function EditForm({ overview, onSave, onCancel }) {
+// The events an EditForm starts from — the new array, or a lone legacy event,
+// or one blank row so the form always has a place to type (and so the first
+// row's fields keep their stable ids).
+function seedEvents(overview) {
+  const src = overview?.events?.length
+    ? overview.events
+    : overview?.event
+      ? [overview.event]
+      : [];
+  const rows = src.map((e) => ({
+    _id: ++eventSeq,
+    id: e.id,
+    title: e.title ?? '',
+    at: toLocalInput(e.at),
+    note: e.note ?? '',
+    gameId: e.gameId ?? '',
+  }));
+  return rows.length ? rows : [{ _id: ++eventSeq, title: '', at: '', note: '', gameId: '' }];
+}
+
+function EditForm({ overview, games, onSave, onCancel }) {
   const [blurb, setBlurb] = useState(overview?.blurb ?? '');
   // Each row gets a stable local id: with index keys, removing a middle
   // link makes React reuse the wrong controlled inputs for the rows below.
   const [links, setLinks] = useState(() =>
     (overview?.links ?? []).map((l) => ({ ...l, _id: ++linkSeq }))
   );
-  const [eventTitle, setEventTitle] = useState(overview?.event?.title ?? '');
-  const [eventAt, setEventAt] = useState(toLocalInput(overview?.event?.at));
-  const [eventNote, setEventNote] = useState(overview?.event?.note ?? '');
+  const [events, setEvents] = useState(() => seedEvents(overview));
 
   const setLink = (i, patch) =>
     setLinks((ls) => ls.map((l, j) => (j === i ? { ...l, ...patch } : l)));
+  const setEvent = (i, patch) =>
+    setEvents((es) => es.map((e, j) => (j === i ? { ...e, ...patch } : e)));
 
   return (
     <form
@@ -105,38 +126,82 @@ function EditForm({ overview, onSave, onCancel }) {
       data-testid="overview-edit-form"
       onSubmit={(e) => {
         e.preventDefault();
-        const at = eventAt ? new Date(eventAt).getTime() : NaN;
         onSave({
           blurb: blurb.trim(),
           links: links.map(({ _id, ...l }) => l),
-          event:
-            eventTitle.trim() && Number.isFinite(at)
-              ? { title: eventTitle.trim(), at, note: eventNote.trim() }
-              : null,
+          events: events
+            .map((ev) => ({
+              ...(ev.id ? { id: ev.id } : {}),
+              title: ev.title.trim(),
+              at: ev.at ? new Date(ev.at).getTime() : NaN,
+              note: ev.note.trim(),
+              ...(ev.gameId ? { gameId: ev.gameId } : {}),
+            }))
+            .filter((ev) => ev.title && Number.isFinite(ev.at)),
         });
       }}
     >
-      <label className="overview-field-label">up next — your circle&rsquo;s next event</label>
-      <div className="overview-event-edit">
-        <input
-          value={eventTitle}
-          onChange={(e) => setEventTitle(e.target.value)}
-          placeholder="what's happening (leave empty for none)"
-          data-testid="overview-event-title"
-        />
-        <input
-          type="datetime-local"
-          value={eventAt}
-          onChange={(e) => setEventAt(e.target.value)}
-          data-testid="overview-event-at"
-        />
-      </div>
-      <input
-        value={eventNote}
-        onChange={(e) => setEventNote(e.target.value)}
-        placeholder="one line of detail — where, what to bring… (optional)"
-        data-testid="overview-event-note"
-      />
+      <label className="overview-field-label">events — game nights &amp; gatherings</label>
+      {events.map((ev, i) => (
+        <div className="overview-event-row" key={ev._id}>
+          <div className="overview-event-edit">
+            <input
+              value={ev.title}
+              onChange={(e) => setEvent(i, { title: e.target.value })}
+              placeholder="what's happening (leave empty to drop)"
+              data-testid={i === 0 ? 'overview-event-title' : `overview-event-title-${i}`}
+            />
+            <input
+              type="datetime-local"
+              value={ev.at}
+              onChange={(e) => setEvent(i, { at: e.target.value })}
+              data-testid={i === 0 ? 'overview-event-at' : `overview-event-at-${i}`}
+            />
+          </div>
+          <div className="overview-event-edit2">
+            <input
+              value={ev.note}
+              onChange={(e) => setEvent(i, { note: e.target.value })}
+              placeholder="one line of detail — where, what to bring… (optional)"
+              data-testid={i === 0 ? 'overview-event-note' : `overview-event-note-${i}`}
+            />
+            <select
+              value={ev.gameId}
+              onChange={(e) => setEvent(i, { gameId: e.target.value })}
+              title="tie this to a game — makes it a game night on the Play tab"
+              data-testid={`overview-event-game-${i}`}
+            >
+              <option value="">no game</option>
+              {games.map((g) => (
+                <option key={g.id} value={g.id}>
+                  {g.name}
+                </option>
+              ))}
+            </select>
+            {events.length > 1 && (
+              <button
+                type="button"
+                className="ghost"
+                title="remove event"
+                onClick={() => setEvents((es) => es.filter((_, j) => j !== i))}
+              >
+                <X size={12} />
+              </button>
+            )}
+          </div>
+        </div>
+      ))}
+      <button
+        type="button"
+        className="ghost overview-add-link"
+        data-testid="overview-add-event"
+        onClick={() =>
+          setEvents((es) => [...es, { _id: ++eventSeq, title: '', at: '', note: '', gameId: '' }])
+        }
+      >
+        <Plus size={12} />
+        add an event
+      </button>
       <label className="overview-field-label">about this circle</label>
       <textarea
         aria-label="about this circle"
@@ -516,8 +581,27 @@ export default function Overview({
   }, [server.id, digestKey]);
 
   const overview = server.overview ?? null;
-  const event = overview?.event ?? null;
   const games = overview?.games ?? [];
+  const gamesById = Object.fromEntries(games.map((g) => [g.id, g]));
+  // The schedule: the events array, or a lone legacy event from an older
+  // client's payload. A just-passed event lingers as "up next" for a grace
+  // window, then drops out of the upcoming list.
+  const events = overview?.events?.length
+    ? overview.events
+    : overview?.event
+      ? [{ id: 'legacy', ...overview.event }]
+      : [];
+  const EVENT_GRACE = 6 * 3600e3;
+  const upcoming = events.filter((e) => e.at >= now - EVENT_GRACE).sort((a, b) => a.at - b.at);
+  const soonest = upcoming[0] ?? null;
+  // Game nights: upcoming events tied to a game still on the shelf — these
+  // also surface on the Play tab, next to the shelf they belong with.
+  const gameNights = upcoming.filter((e) => e.gameId && gamesById[e.gameId]);
+  // Who said "I'm in" for the event at this timestamp (RSVPs key on the time).
+  const goingFor = (at) =>
+    Object.entries(server.rsvps ?? {})
+      .filter(([, v]) => v.at === at)
+      .map(([handle]) => handle);
   // Live claims: game id -> member handles playing it right now.
   const playingBy = {};
   for (const [handle, entry] of Object.entries(server.presence ?? {})) {
@@ -568,13 +652,6 @@ export default function Overview({
   );
   const showFilters = games.length >= 3 && filterChips.length > 2;
 
-  // Who said "I'm in" for THIS event (answers are keyed to its timestamp).
-  const going = event
-    ? Object.entries(server.rsvps ?? {})
-        .filter(([, v]) => v.at === event.at)
-        .map(([handle]) => handle)
-    : [];
-  const iAmIn = going.includes(me);
   const saveGames = (next) => onSave({ ...(overview ?? {}), games: next });
   const notices = server.notices ?? [];
   const voiceRooms = server.voiceChannels ?? ['lounge'];
@@ -648,8 +725,9 @@ export default function Overview({
               // Remount when a remote edit lands while the form is open:
               // saving a form seeded from the old overview would silently
               // overwrite the other admin's newer changes.
-              key={JSON.stringify([overview?.blurb, overview?.links, overview?.event])}
+              key={JSON.stringify([overview?.blurb, overview?.links, overview?.events, overview?.event])}
               overview={overview}
+              games={games}
               onSave={(ov) => {
                 setEditing(false);
                 // The form edits the written half; the shelf rides along.
@@ -702,6 +780,74 @@ export default function Overview({
                       )}
                     </li>
                   ))}
+                </ul>
+              </section>
+            )}
+
+            {gameNights.length > 0 && (
+              <section className="hub-nights" data-testid="hub-nights">
+                <span className="overline">game nights</span>
+                <ul className="nights-list">
+                  {gameNights.map((ev) => {
+                    const g = gamesById[ev.gameId];
+                    const going = goingFor(ev.at);
+                    const iAmIn = going.includes(me);
+                    const live = (playingBy[g.id]?.length ?? 0) > 0;
+                    return (
+                      <li className="night-row" key={ev.id} data-testid={`night-${ev.id}`}>
+                        <span className="night-mark" aria-hidden="true">
+                          <Clock size={14} />
+                        </span>
+                        <div className="night-body">
+                          <span className="night-title">
+                            {ev.title} <span className="night-game">· {g.name}</span>
+                          </span>
+                          <span className="night-when mono">
+                            {new Date(ev.at).toLocaleString([], {
+                              weekday: 'short',
+                              month: 'short',
+                              day: 'numeric',
+                              hour: '2-digit',
+                              minute: '2-digit',
+                            })}
+                            {' · '}
+                            {describeUntil(ev.at, now)}
+                            {ev.note ? ` — ${ev.note}` : ''}
+                          </span>
+                        </div>
+                        {going.length > 0 && (
+                          <span className="night-going" data-testid={`night-going-${ev.id}`}>
+                            <span className="game-who-stack">
+                              {going.slice(0, 3).map((p) => (
+                                <Seal key={p} name={p} size={20} title={p} />
+                              ))}
+                            </span>
+                            {going.length}
+                          </span>
+                        )}
+                        {live && g.kind !== 'server' ? (
+                          <button
+                            className="button live night-action"
+                            onClick={() => launchFromShelf(g)}
+                          >
+                            <Gamepad size={13} />
+                            join now
+                          </button>
+                        ) : (
+                          canSend && (
+                            <button
+                              className={iAmIn ? 'button live night-action' : 'button night-action'}
+                              data-testid={`night-rsvp-${ev.id}`}
+                              onClick={() => onRsvp(ev.at, !iAmIn)}
+                            >
+                              {iAmIn ? <Check size={13} /> : null}
+                              {iAmIn ? ' in' : 'I’m in'}
+                            </button>
+                          )
+                        )}
+                      </li>
+                    );
+                  })}
                 </ul>
               </section>
             )}
@@ -818,65 +964,118 @@ export default function Overview({
               </div>
             </section>
 
-            {event && (
-              <section className="overview-upnext hub-hero" data-testid="overview-event">
-                <div className="hub-hero-body">
-                  <span className="wm-tag">
-                    up next · <span data-testid="overview-countdown">{describeUntil(event.at, now)}</span>
-                  </span>
-                  <strong className="upnext-title hub-hero-title">{event.title}</strong>
-                  <p className="upnext-note">
-                    <span className="upnext-when mono">
-                      {new Date(event.at).toLocaleString([], {
-                        weekday: 'short',
-                        month: 'short',
-                        day: 'numeric',
-                        hour: '2-digit',
-                        minute: '2-digit',
-                      })}
-                    </span>
-                    {event.note && <> — {event.note}</>}
-                  </p>
-                  {canSend && (
-                    <div className="hub-rsvp">
-                      <button
-                        className={iAmIn ? 'button live' : 'button primary'}
-                        data-testid="rsvp-toggle"
-                        onClick={() => onRsvp(event.at, !iAmIn)}
-                      >
-                        {iAmIn ? <Check size={13} /> : null}
-                        {iAmIn ? ' you’re in' : 'I’m in'}
-                      </button>
-                      {going.length > 0 && (
-                        <span className="hub-going" data-testid="rsvp-going">
-                          <span className="hub-going-stack">
-                            {going.slice(0, 5).map((p) => (
-                              <Seal key={p} name={p} size={20} title={p} />
-                            ))}
-                          </span>
-                          {going.length} going
+            {soonest &&
+              (() => {
+                const going = goingFor(soonest.at);
+                const iAmIn = going.includes(me);
+                const heroGame = soonest.gameId ? gamesById[soonest.gameId] : null;
+                return (
+                  <section className="overview-upnext hub-hero" data-testid="overview-event">
+                    <div className="hub-hero-body">
+                      <span className="wm-tag">
+                        up next ·{' '}
+                        <span data-testid="overview-countdown">{describeUntil(soonest.at, now)}</span>
+                      </span>
+                      <strong className="upnext-title hub-hero-title">
+                        {soonest.title}
+                        {heroGame && <span className="hero-game"> · {heroGame.name}</span>}
+                      </strong>
+                      <p className="upnext-note">
+                        <span className="upnext-when mono">
+                          {new Date(soonest.at).toLocaleString([], {
+                            weekday: 'short',
+                            month: 'short',
+                            day: 'numeric',
+                            hour: '2-digit',
+                            minute: '2-digit',
+                          })}
                         </span>
+                        {soonest.note && <> — {soonest.note}</>}
+                      </p>
+                      {canSend && (
+                        <div className="hub-rsvp">
+                          <button
+                            className={iAmIn ? 'button live' : 'button primary'}
+                            data-testid="rsvp-toggle"
+                            onClick={() => onRsvp(soonest.at, !iAmIn)}
+                          >
+                            {iAmIn ? <Check size={13} /> : null}
+                            {iAmIn ? ' you’re in' : 'I’m in'}
+                          </button>
+                          {going.length > 0 && (
+                            <span className="hub-going" data-testid="rsvp-going">
+                              <span className="hub-going-stack">
+                                {going.slice(0, 5).map((p) => (
+                                  <Seal key={p} name={p} size={20} title={p} />
+                                ))}
+                              </span>
+                              {going.length} going
+                            </span>
+                          )}
+                        </div>
                       )}
                     </div>
-                  )}
-                </div>
-                {(() => {
-                  const d = event.at - now;
-                  const [n, u] =
-                    d <= 0
-                      ? ['now', 'happening']
-                      : d < 2 * 3600e3
-                        ? [Math.max(1, Math.round(d / 60e3)), 'min to go']
-                        : d < 48 * 3600e3
-                          ? [Math.round(d / 3600e3), 'hours to go']
-                          : [Math.round(d / 86400e3), 'days to go'];
-                  return (
-                    <div className="hub-count" aria-hidden="true">
-                      <span className="n">{n}</span>
-                      <span className="u">{u}</span>
-                    </div>
-                  );
-                })()}
+                    {(() => {
+                      const d = soonest.at - now;
+                      const [n, u] =
+                        d <= 0
+                          ? ['now', 'happening']
+                          : d < 2 * 3600e3
+                            ? [Math.max(1, Math.round(d / 60e3)), 'min to go']
+                            : d < 48 * 3600e3
+                              ? [Math.round(d / 3600e3), 'hours to go']
+                              : [Math.round(d / 86400e3), 'days to go'];
+                      return (
+                        <div className="hub-count" aria-hidden="true">
+                          <span className="n">{n}</span>
+                          <span className="u">{u}</span>
+                        </div>
+                      );
+                    })()}
+                  </section>
+                );
+              })()}
+
+            {upcoming.length > 1 && (
+              <section className="overview-section">
+                <span className="overline">on the calendar</span>
+                <ul className="overview-rooms cal-list">
+                  {upcoming.slice(1).map((ev) => {
+                    const going = goingFor(ev.at);
+                    const iAmIn = going.includes(me);
+                    const g = ev.gameId ? gamesById[ev.gameId] : null;
+                    return (
+                      <li key={ev.id}>
+                        <div className="overview-room cal-row" data-testid={`cal-${ev.id}`}>
+                          <span className="glyph">
+                            <Clock size={13} />
+                          </span>
+                          <span className="room">{ev.title}</span>
+                          <span className="last">
+                            {new Date(ev.at).toLocaleString([], {
+                              weekday: 'short',
+                              month: 'short',
+                              day: 'numeric',
+                              hour: '2-digit',
+                              minute: '2-digit',
+                            })}
+                            {g ? ` · ${g.name}` : ''}
+                          </span>
+                          <span className="when mono">{describeUntil(ev.at, now)}</span>
+                          {canSend && (
+                            <button
+                              className={iAmIn ? 'button live cal-rsvp' : 'button cal-rsvp'}
+                              data-testid={`cal-rsvp-${ev.id}`}
+                              onClick={() => onRsvp(ev.at, !iAmIn)}
+                            >
+                              {iAmIn ? 'in' : 'I’m in'}
+                            </button>
+                          )}
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
               </section>
             )}
 

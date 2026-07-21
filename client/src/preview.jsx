@@ -51,7 +51,13 @@ const servers = [
     wants: {
       charlie: { want: { id: 'g3', name: 'Tanks! Night Ops', kind: 'activity' }, ts: now - 4 * 60e3 },
     },
-    rsvps: { bob: { at: now + 52 * H, ts: now - 3 * H }, dana: { at: now + 52 * H, ts: now - 2 * H }, marek: { at: now + 52 * H, ts: now - H } },
+    rsvps: {
+      bob: { at: now + 52 * H, ts: now - 3 * H },
+      dana: { at: now + 52 * H, ts: now - 2 * H },
+      marek: { at: now + 52 * H, ts: now - H },
+      alice: { at: now + 26 * H, ts: now - 2 * H },
+      charlie: { at: now + 26 * H, ts: now - H },
+    },
     overview: {
       games: [
         { id: 'g1', name: 'Hex Gambit', url: '/games/hexgambit.html', kind: 'activity', note: 'bundled demo — local two-player chess', glyph: '♞' },
@@ -65,11 +71,21 @@ const servers = [
         { label: 'stint sheet', url: 'https://example.com/stints' },
         { label: 'tyre pressure log', url: 'https://example.com/tyres' },
       ],
-      event: {
-        title: 'Qualifying — Round 4, Spa',
-        at: now + 52 * H,
-        note: 'Trailer leaves 6am. Pack the spare diffuser tonight.',
-      },
+      events: [
+        {
+          id: 'ev1',
+          title: 'Qualifying — Round 4, Spa',
+          at: now + 52 * H,
+          note: 'Trailer leaves 6am. Pack the spare diffuser tonight.',
+        },
+        {
+          id: 'ev2',
+          title: 'Hex Gambit ladder night',
+          at: now + 26 * H,
+          note: 'best of five, bring your openings',
+          gameId: 'g1',
+        },
+      ],
     },
     notices: [
       { id: 'n1', text: 'Scrutineering forms due Thursday — hand them to dana.', ts: now - 5 * H, author: 'dana' },
