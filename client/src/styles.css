@@ -1287,7 +1287,14 @@ kbd {
   border: 1px solid;
   padding: 1px 6px;
 }
-.badge-verified { color: var(--ok); border-color: var(--ok); }
+.badge-verified {
+  color: var(--ok);
+  border-color: var(--ok);
+  /* Icon-only now: a tight square check chip, not a text pill. */
+  gap: 0;
+  padding: 2px;
+  line-height: 0;
+}
 .badge-unverified { color: var(--accent-ink); border-color: var(--accent-ink); }
 .badge-admin { color: var(--ink-mute); border-color: var(--hairline-strong); margin-right: 4px; }
 

@@ -21,7 +21,7 @@ import Onboarding from './components/Onboarding.jsx';
 import CallStage from './components/CallStage.jsx';
 import GameStage from './components/GameStage.jsx';
 import Seal from './components/Seal.jsx';
-import { Key, Bell, ShieldCheck, QuorumGlyph } from './components/icons.jsx';
+import { Key, ShieldCheck, QuorumGlyph, Gear, LogOut } from './components/icons.jsx';
 
 const params = new URLSearchParams(location.search);
 const view = params.get('view') ?? 'app';
@@ -301,13 +301,17 @@ function PreviewShell({ empty = false, banner = false, modal = null, palette = f
             />
           )}
           <div className="self-card">
-            <Seal name={me} size={32} />
-            <span className="who">
-              <span className="handle">{me}</span>
-              <span className="status online">online</span>
-            </span>
-            <button className="icon-btn" title="identity key"><Key size={14} /></button>
-            <button className="icon-btn" title="alerts"><Bell size={14} /></button>
+            <div className="self-id">
+              <Seal name={me} size={32} />
+              <span className="who">
+                <span className="handle">{me}</span>
+                <span className="status online">online</span>
+              </span>
+            </div>
+            <div className="self-actions">
+              <button className="icon-btn" title="settings"><Gear size={14} /></button>
+              <button className="icon-btn danger" title="log out"><LogOut size={14} /></button>
+            </div>
           </div>
           </div>
         </nav>

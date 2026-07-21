@@ -354,7 +354,11 @@ try {
   if (!emptyText.includes('bob')) throw new Error('identity lost after IndexedDB wipe');
 
   console.log('12. identity key export/import: paste alice into a fresh profile');
-  await alice.click('[data-testid=identity-open]');
+  // The identity-key export now lives in the command palette (no self-card icon).
+  await alice.keyboard.press('Control+KeyK');
+  await alice.waitForSelector('.palette-input');
+  await alice.fill('.palette-input', 'identity');
+  await alice.keyboard.press('Enter');
   await alice.waitForSelector('[data-testid=identity-key]');
   const aliceKey = await alice.inputValue('[data-testid=identity-key]');
   await alice.click('[data-testid=close-modal]');
@@ -416,17 +420,12 @@ try {
   }
   await charlie.click('[data-testid=close-modal]');
 
-  console.log('15. service worker registered; notifications button behaves');
+  console.log('15. service worker registered');
   const swRegistered = await alice.evaluate(async () => {
     const reg = await navigator.serviceWorker.getRegistration();
     return !!reg;
   });
   if (!swRegistered) throw new Error('service worker did not register');
-  // Headless chromium has no push service; the button must fail gracefully
-  // (toast), never crash.
-  await aliceCtx.grantPermissions(['notifications'], { origin: `http://127.0.0.1:${HTTP}` });
-  await alice.click('[data-testid=enable-notifications]');
-  await alice.waitForSelector('.toast', { timeout: 10000 });
 
   console.log('15b. settings panel: opens, shows audio + theme controls, theme toggles');
   await alice.click('[data-testid=open-settings]');
