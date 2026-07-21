@@ -257,6 +257,37 @@ impl Store for PgStore {
         Ok(())
     }
 
+    async fn disallow_member(&self, group: &str, user: &str) -> Result<(), StoreError> {
+        sqlx::query("DELETE FROM group_members WHERE group_id = $1 AND user_id = $2")
+            .bind(group)
+            .bind(user)
+            .execute(&self.pool)
+            .await
+            .map_err(backend)?;
+        Ok(())
+    }
+
+    async fn delete_group(&self, group: &str) -> Result<(), StoreError> {
+        // Children first: every table that references groups(group_id) has no
+        // ON DELETE CASCADE, so the parent row can't go until they do. welcomes
+        // and history_counters aren't FK-bound but are keyed by group, so clear
+        // them too. One transaction so a delete is all-or-nothing.
+        let mut tx = self.pool.begin().await.map_err(backend)?;
+        for stmt in [
+            "DELETE FROM invites WHERE group_id = $1",
+            "DELETE FROM history WHERE group_id = $1",
+            "DELETE FROM history_counters WHERE group_id = $1",
+            "DELETE FROM messages WHERE group_id = $1",
+            "DELETE FROM group_members WHERE group_id = $1",
+            "DELETE FROM welcomes WHERE group_id = $1",
+            "DELETE FROM groups WHERE group_id = $1",
+        ] {
+            sqlx::query(stmt).bind(group).execute(&mut *tx).await.map_err(backend)?;
+        }
+        tx.commit().await.map_err(backend)?;
+        Ok(())
+    }
+
     async fn is_member(&self, group: &str, user: &str) -> Result<bool, StoreError> {
         let row = sqlx::query("SELECT 1 FROM group_members WHERE group_id = $1 AND user_id = $2")
             .bind(group)

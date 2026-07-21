@@ -19,6 +19,9 @@ export default function Modal({
   onChannelSettings,
   onChannelRename,
   onChannelDelete,
+  onRenameServer,
+  onLeaveServer,
+  onDeleteServer,
   onLogout,
   unsecured,
   identityKey,
@@ -32,6 +35,8 @@ export default function Modal({
   const [history, setHistory] = useState(!!meta.hid);
   const [retention, setRetention] = useState(meta.retention ?? 0);
   const [renameTo, setRenameTo] = useState(modal.type === 'channel' ? modal.channel ?? '' : '');
+  const [serverName, setServerName] = useState(modal.type === 'circle' ? modal.name ?? '' : '');
+  const [confirmDelete, setConfirmDelete] = useState(false);
 
   // Escape closes, like every other overlay in the app.
   useEffect(() => {
@@ -72,6 +77,7 @@ export default function Modal({
     secure: { glyph: <ShieldCheck />, title: 'Secure your account' },
     safety: { glyph: <ShieldCheck />, title: `Safety number — ${modal.peer ?? ''}` },
     identity: { glyph: <Key />, title: 'Identity key' },
+    circle: { glyph: <Gear />, title: modal.name ? `${modal.name} — circle settings` : 'Circle settings' },
     logout: { glyph: <LogOut />, title: 'Log out of this device' },
     admin: { glyph: <ShieldCheck />, title: 'Relay admin overview' },
     channel: {
@@ -362,6 +368,96 @@ export default function Modal({
               into “restore → identity key” on another device to sign in there. It restores
               your account, not your old messages.
             </p>
+          </>
+        )}
+        {modal.type === 'circle' && (
+          <>
+            {modal.canManage ? (
+              <form
+                onSubmit={(e) => {
+                  e.preventDefault();
+                  attempt(async () => {
+                    await onRenameServer(modal.server, serverName.trim());
+                    onClose();
+                  });
+                }}
+              >
+                <label className="field">
+                  <span>circle name</span>
+                  <input
+                    type="text"
+                    value={serverName}
+                    onChange={(e) => setServerName(e.target.value)}
+                    data-testid="circle-rename-input"
+                  />
+                </label>
+                <button
+                  className="button primary"
+                  disabled={busy || !serverName.trim() || serverName.trim() === modal.name}
+                  data-testid="circle-rename"
+                >
+                  rename circle
+                </button>
+              </form>
+            ) : (
+              <p className="muted">
+                Only an admin can rename or delete this circle. You can leave it below.
+              </p>
+            )}
+
+            <div className="divider">leaving</div>
+            <p className="fineprint muted">
+              Leaving removes this circle and its messages from this device. You&rsquo;ll
+              need a new invite to come back — the others keep the circle.
+            </p>
+            <button
+              className="button danger"
+              data-testid="circle-leave"
+              disabled={busy}
+              onClick={() => {
+                const ok = window.confirm(`Leave "${modal.name}"? It will be removed from this device.`);
+                if (!ok) return;
+                attempt(async () => {
+                  await onLeaveServer(modal.server);
+                  onClose();
+                });
+              }}
+            >
+              leave circle
+            </button>
+
+            {modal.canManage && (
+              <>
+                <div className="divider">danger zone</div>
+                <p className="fineprint muted">
+                  Deleting removes every member (their access is re-keyed away) and purges
+                  the circle from the relay. This can&rsquo;t be undone.
+                </p>
+                <label className="check">
+                  <input
+                    type="checkbox"
+                    checked={confirmDelete}
+                    onChange={(e) => setConfirmDelete(e.target.checked)}
+                    data-testid="circle-delete-confirm"
+                  />
+                  I understand this deletes <strong>{modal.name}</strong> for everyone
+                </label>
+                <button
+                  className="button danger wide"
+                  data-testid="circle-delete"
+                  disabled={busy || !confirmDelete}
+                  onClick={() =>
+                    attempt(async () => {
+                      await onDeleteServer(modal.server);
+                      onClose();
+                    })
+                  }
+                >
+                  {busy ? 'deleting…' : 'delete circle'}
+                </button>
+              </>
+            )}
+            {error && <p className="error">{error}</p>}
           </>
         )}
         {modal.type === 'logout' && (

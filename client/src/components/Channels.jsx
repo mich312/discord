@@ -19,6 +19,7 @@ export default function Channels({
   onVoiceJoin,
   onVoiceLeave,
   onOpenStage,
+  onManage,
 }) {
   const [adding, setAdding] = useState(false);
   const [name, setName] = useState('');
@@ -28,10 +29,20 @@ export default function Channels({
   return (
     <aside className="channels">
       <div className="circle-head">
-        <div className="circle-head-name">{server.name}</div>
-        <div className="circle-head-meta mono">
-          {server.members.length} member{server.members.length === 1 ? '' : 's'}
+        <div className="circle-head-text">
+          <div className="circle-head-name">{server.name}</div>
+          <div className="circle-head-meta mono">
+            {server.members.length} member{server.members.length === 1 ? '' : 's'}
+          </div>
         </div>
+        <button
+          className="icon-btn circle-manage"
+          title="circle settings"
+          data-testid="circle-manage"
+          onClick={onManage}
+        >
+          <Gear size={14} />
+        </button>
       </div>
       {/* The circle's game hub — where clicking the circle drops you.
           activeChannel === null means "on the hub". */}

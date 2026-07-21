@@ -24,6 +24,12 @@ function fakeDb() {
       messages.filter((m) => m.server === server && m.channel === channel),
     msgsPrune: async () => 0,
     serverPut: async () => {},
+    serverDelete: async () => {},
+    msgsDeleteServer: async (server) => {
+      for (let i = messages.length - 1; i >= 0; i--) {
+        if (messages[i].server === server) messages.splice(i, 1);
+      }
+    },
     kvPut: async () => {},
     kvGet: async () => null,
   };
@@ -181,6 +187,75 @@ test('a meta rebroadcast never resurrects a channel or voice room this device de
   );
   assert.ok(!r.channels.includes('photos'), 'deleted channel stays deleted through the union');
   assert.ok(!r.voiceChannels.includes('standup'), 'deleted voice room stays deleted too');
+  clearTimeout(c.backupTimer);
+});
+
+test('renameServer sets the trimmed name and rebroadcasts it', async () => {
+  const { c } = makeController();
+  const r = record({ name: 'old' });
+  c.servers.set('srv', r);
+  await c.renameServer('srv', '  Book Club  ');
+  assert.equal(r.name, 'Book Club', 'name trimmed and applied');
+  const sends = c.relay.requests.filter((m) => m.t === 'send');
+  assert.ok(sends.length >= 1, 'the new name went out on a group message');
+  clearTimeout(c.backupTimer);
+});
+
+test('removeMember re-keys the group, revokes the ACL, and drops the role', async () => {
+  const disallowed = [];
+  const { c } = makeController({
+    relayHandler: (msg) => {
+      if (msg.t === 'disallow') disallowed.push(msg.user);
+      return Promise.resolve({ seq: 2 });
+    },
+  });
+  const base = c.crypto;
+  c.crypto = async (cmd, args) =>
+    cmd === 'removeMember'
+      ? { commit: new Uint8Array([9]), epoch: 3, members: ['alice'], state: null }
+      : base(cmd, args);
+  const r = record({ members: ['alice', 'bob'], roles: { alice: 'admin', bob: 'member' } });
+  c.servers.set('srv', r);
+  await c.removeMember('srv', 'bob');
+  assert.deepEqual(r.members, ['alice'], 'bob is gone from the MLS roster');
+  assert.ok(!r.roles.bob, 'and from the local roles map');
+  assert.deepEqual(disallowed, ['bob'], 'the relay ACL was revoked for bob');
+  clearTimeout(c.backupTimer);
+});
+
+test('being removed by someone else forgets the circle on this device', async () => {
+  const { c } = makeController();
+  c.crypto = async (cmd) => {
+    if (cmd === 'receive') {
+      return {
+        event: { kind: 'membershipChange', epoch: 4, sender: 'admin', members: ['admin', 'carol'] },
+        state: null,
+      };
+    }
+    if (cmd === 'forgetGroup') return { state: null };
+    return {};
+  };
+  const r = record({ members: ['alice', 'admin', 'carol'] });
+  c.servers.set('srv', r);
+  await c.onGroupMessage({ group: 'srv', seq: 5, payload: '' });
+  assert.ok(!c.servers.has('srv'), 'the circle we were kicked from is gone locally');
+  clearTimeout(c.backupTimer);
+});
+
+test('leaveServer forgets the circle and revokes our own ACL', async () => {
+  const disallowed = [];
+  const { c } = makeController({
+    relayHandler: (msg) => {
+      if (msg.t === 'disallow') disallowed.push(msg.user);
+      return Promise.resolve({ seq: 1 });
+    },
+  });
+  const base = c.crypto;
+  c.crypto = async (cmd, args) => (cmd === 'forgetGroup' ? { state: null } : base(cmd, args));
+  c.servers.set('srv', record());
+  await c.leaveServer('srv');
+  assert.ok(!c.servers.has('srv'), 'the circle is forgotten locally');
+  assert.deepEqual(disallowed, ['alice'], 'we removed ourselves from the relay ACL');
   clearTimeout(c.backupTimer);
 });
 

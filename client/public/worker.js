@@ -63,6 +63,12 @@ const commands = {
       state: snapshot(),
     };
   },
+  /** Drop a group from the local MLS client — used when leaving, being
+      kicked, or deleting. No ratchet turn; just forget the keys. */
+  forgetGroup({ group }) {
+    client.forgetGroup(group);
+    return { state: snapshot() };
+  },
   exportGroupInfo({ group }) {
     // Read-only: GroupInfo export doesn't turn any ratchet.
     return client.exportGroupInfo(group);

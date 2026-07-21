@@ -33,6 +33,16 @@ pub enum ClientMsg {
     /// Promote/demote a member ("admin" | "member"). Group admins only;
     /// the last admin of a group cannot be demoted.
     SetRole { rid: u64, group: String, user: String, role: String },
+    /// Remove `user` from `group`'s server-side ACL (the roster the relay
+    /// serves). Group admins may remove anyone; any member may remove
+    /// themselves (leaving). The last admin cannot be removed. The
+    /// cryptographic removal is the MLS commit the client sends alongside —
+    /// this just stops the relay listing/serving them.
+    Disallow { rid: u64, group: String, user: String },
+    /// Tear a group down: purge its log, roster, history, and invites. Group
+    /// admins only. The MLS side (removing every member) is the client's job;
+    /// this reclaims the relay's storage.
+    DeleteGroup { rid: u64, group: String },
     /// The group's roster with roles. Members (or a global admin).
     Members { rid: u64, group: String },
     /// Global admins only: every registered user and every group the relay

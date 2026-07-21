@@ -66,10 +66,18 @@ function reducer(state, action) {
       if (!active.server && action.servers.length > 0) {
         active = { server: action.servers[0].id, channel: null };
       } else if (active.server) {
-        // If the active channel was renamed or deleted out from under us,
-        // fall back to the first remaining channel so the view isn't stranded.
         const srv = action.servers.find((s) => s.id === active.server);
-        if (srv && active.channel && !srv.channels.includes(active.channel)) {
+        if (!srv) {
+          // The active circle vanished out from under us (we left it, it was
+          // deleted, or we were removed): land on the first remaining circle,
+          // or the empty state if none are left.
+          const first = action.servers[0];
+          active = first
+            ? { server: first.id, channel: null }
+            : { server: null, channel: null };
+        } else if (active.channel && !srv.channels.includes(active.channel)) {
+          // The active channel was renamed or deleted out from under us —
+          // fall back to the first remaining channel so the view isn't stranded.
           active = { ...active, channel: srv.channels[0] };
         }
       }
@@ -541,6 +549,17 @@ export default function App() {
               }
               onVoiceLeave={() => controllerRef.current.voice.leave()}
               onOpenStage={openStage}
+              onManage={() =>
+                dispatch({
+                  type: 'modal',
+                  modal: {
+                    type: 'circle',
+                    server,
+                    name: activeServer.name,
+                    canManage: canManage && !activeServer.restored,
+                  },
+                })
+              }
             />
           )}
           <div className="self-card">
@@ -717,6 +736,11 @@ export default function App() {
                   .setRole(server, user, role)
                   .catch((e) => dispatch({ type: 'toast', text: e.message }))
               }
+              onRemoveMember={(user) =>
+                controllerRef.current
+                  .removeMember(server, user)
+                  .catch((e) => dispatch({ type: 'toast', text: `remove: ${e.message}` }))
+              }
               onMember={async (peer) => {
                 try {
                   const number = await controllerRef.current.safetyNumber(server, peer);
@@ -827,6 +851,9 @@ export default function App() {
                 ? controllerRef.current.deleteVoiceChannel(srv, ch)
                 : controllerRef.current.deleteChannel(srv, ch)
             }
+            onRenameServer={(srv, name) => controllerRef.current.renameServer(srv, name)}
+            onLeaveServer={(srv) => controllerRef.current.leaveServer(srv)}
+            onDeleteServer={(srv) => controllerRef.current.deleteServer(srv)}
             identityKey={controllerRef.current?.identityKeyString()}
           />
         )}

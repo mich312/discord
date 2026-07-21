@@ -296,7 +296,17 @@ export class Controller {
           }
           await this.relay
             .request({ t: 'subscribe', group: record.id, after: record.lastSeq })
-            .catch((e) => this.toast(`subscribe ${record.id}: ${e.message}`));
+            .catch((e) => {
+              // The relay says we're not a member (removed while offline) or
+              // the group is gone (deleted): forget it here instead of
+              // retrying forever against a circle we can no longer see.
+              if (/not a member|no such group/i.test(e.message)) {
+                this.toast(`you no longer have access to "${record.name}"`);
+                this.forgetServerLocal(record.id).catch(() => {});
+              } else {
+                this.toast(`subscribe ${record.id}: ${e.message}`);
+              }
+            });
           this.refreshRoles(record.id);
         }
         // A fresh sign-in has an identity but no circles: pull the
@@ -475,6 +485,15 @@ export class Controller {
       if (event.kind === 'message') {
         await this.onContent(record, event.sender, event.text);
       } else if (event.kind === 'membershipChange') {
+        // Were we the one dropped? A re-key that no longer lists us means we
+        // were removed (kicked, or the circle is being deleted). Forget it
+        // here and stop — the record is gone, so don't fall through to the
+        // serverPut below, which would resurrect it.
+        if (!event.members.includes(this.me)) {
+          this.toast(`you were removed from "${record.name}"`);
+          await this.forgetServerLocal(record.id);
+          return;
+        }
         const before = new Set(record.members);
         record.members = event.members;
         record.epoch = event.epoch;
@@ -1443,6 +1462,123 @@ export class Controller {
     this.refreshRoles(serverId);
   }
 
+  // === circle management (rename / remove / leave / delete) ===============
+
+  /** Rename a circle. The new name rides the same meta envelope joiners
+      already adopt, so every device picks it up. UI-gated to admins. */
+  async renameServer(serverId, name) {
+    const record = this.servers.get(serverId);
+    const next = String(name ?? '').trim().slice(0, 60);
+    if (!record || !next || next === record.name) return;
+    record.name = next;
+    await this.sendContent(serverId, this.metaContent(record));
+    await this.addSystemMessage(serverId, `circle renamed to "${next}" by you`);
+    await this.db.serverPut(record);
+    this.dispatch({ type: 'servers', servers: this.snapshotServers() });
+    this.scheduleBackup();
+  }
+
+  /** Remove a member: the MLS commit re-keys the group so they can read and
+      send nothing further (the real boundary), and the relay drops them from
+      the ACL so they stop being listed and served. UI-gated to admins. */
+  async removeMember(serverId, user) {
+    const record = this.servers.get(serverId);
+    if (!record || user === this.me) return;
+    const { commit, epoch, members, state } = await this.crypto('removeMember', {
+      group: serverId,
+      name: user,
+    });
+    await this.persistState(state);
+    const sent = await this.relay.request({
+      t: 'send',
+      group: serverId,
+      epoch,
+      payload: b64.enc(commit),
+    });
+    record.lastSeq = Math.max(record.lastSeq, sent.seq);
+    record.members = members;
+    record.epoch = epoch;
+    if (record.roles?.[user]) {
+      record.roles = { ...record.roles };
+      delete record.roles[user];
+    }
+    // Revoke the server-side ACL too (best-effort; the MLS re-key already
+    // locked them out cryptographically).
+    await this.relay
+      .request({ t: 'disallow', group: serverId, user })
+      .catch((e) => console.warn(`disallow ${user}: ${e.message}`));
+    await this.addSystemMessage(serverId, `${user} was removed from the circle by you (epoch ${epoch})`);
+    // The epoch moved: any parked invite GroupInfo blob is now stale.
+    await this.refreshInvites(record);
+    await this.db.serverPut(record);
+    this.dispatch({ type: 'servers', servers: this.snapshotServers() });
+    this.scheduleBackup();
+  }
+
+  /** Leave a circle: forget it on this device and drop ourselves from the
+      relay ACL. The group's MLS roster still lists us until an admin re-keys
+      — a clean self-removal commit isn't ours to make — but nothing about
+      the circle remains here. Any member may leave. */
+  async leaveServer(serverId) {
+    if (!this.servers.get(serverId)) return;
+    await this.relay
+      .request({ t: 'disallow', group: serverId, user: this.me })
+      .catch((e) => console.warn(`leave ${serverId}: ${e.message}`));
+    await this.forgetServerLocal(serverId);
+  }
+
+  /** Delete a circle: re-key every other member out (each removal commit is
+      how their device learns to forget the circle), purge the relay's copy,
+      then forget it here. UI-gated to admins. */
+  async deleteServer(serverId) {
+    const record = this.servers.get(serverId);
+    if (!record) return;
+    for (const user of (record.members ?? []).filter((m) => m !== this.me)) {
+      try {
+        const { commit, epoch, members, state } = await this.crypto('removeMember', {
+          group: serverId,
+          name: user,
+        });
+        await this.persistState(state);
+        const sent = await this.relay.request({
+          t: 'send',
+          group: serverId,
+          epoch,
+          payload: b64.enc(commit),
+        });
+        record.lastSeq = Math.max(record.lastSeq, sent.seq);
+        record.members = members;
+        record.epoch = epoch;
+      } catch (e) {
+        console.warn(`delete: removing ${user}: ${e.message}`);
+      }
+    }
+    await this.relay
+      .request({ t: 'delete_group', group: serverId })
+      .catch((e) => console.warn(`delete_group ${serverId}: ${e.message}`));
+    await this.forgetServerLocal(serverId);
+  }
+
+  /** Tear down every local trace of a circle: MLS keys, the record, its
+      messages, any live call. Shared by leave, delete, and being kicked. */
+  async forgetServerLocal(serverId) {
+    const wasActiveCall = this.voice?.active?.server === serverId;
+    this.servers.delete(serverId);
+    try {
+      const { state } = await this.crypto('forgetGroup', { group: serverId });
+      await this.persistState(state);
+    } catch (e) {
+      // A restored (read-only) stub has no MLS group to forget — fine.
+      console.warn(`forget group ${serverId}: ${e.message}`);
+    }
+    await this.db.serverDelete(serverId);
+    await this.db.msgsDeleteServer(serverId);
+    if (wasActiveCall) await this.voice.leave().catch(() => {});
+    this.dispatch({ type: 'servers', servers: this.snapshotServers() });
+    // Re-park the backup without this circle so a restore won't resurrect it.
+    this.scheduleBackup();
+  }
+
   // === roles ==============================================================
 
   /** Advisory admin gate for admin-only envelopes (overview, chanset,
@@ -1515,7 +1651,7 @@ export class Controller {
   }
 
   async uploadBackup() {
-    if (!this.relay?.ready || !this.servers.size) return;
+    if (!this.relay?.ready) return;
     const identity = this.identityBytes();
     // Restored stubs are included: their shape (and channel history keys)
     // came from the previous backup, and omitting them here would overwrite
@@ -1530,7 +1666,12 @@ export class Controller {
         overview: r.overview ?? null,
         notices: r.notices ?? [],
       }));
-    if (!servers.length) return;
+    // An empty list must only overwrite a parked backup once this device has
+    // actually held circles — so leaving/deleting your last one clears the
+    // ghost — never during boot before circles have loaded (which would wipe
+    // a good backup) or for an account that simply has none yet.
+    if (!servers.length && !this.everHadCircles) return;
+    if (servers.length) this.everHadCircles = true;
     const payload = await sealBackup(identity, { v: 1, servers });
     await this.relay.request({ t: 'backup_set', payload });
   }
