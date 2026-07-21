@@ -532,6 +532,54 @@ async fn handle_request(
             }
         }
 
+        ClientMsg::Disallow { rid, group, user: target } => {
+            // Admins may remove anyone; anyone may remove themselves (leave).
+            let is_self = target == user;
+            if !is_self {
+                if let Err(e) = require_admin(app, &group, user).await {
+                    return err(rid, e);
+                }
+            }
+            // A group must always keep at least one admin — the same guard
+            // SetRole applies to demotion, here applied to removal.
+            let members = match app.store.group_members(&group).await {
+                Ok(m) => m,
+                Err(e) => return err(rid, e),
+            };
+            let target_is_admin =
+                members.iter().any(|(m, r)| m == &target && r == ROLE_ADMIN);
+            let admins = members.iter().filter(|(_, r)| r == ROLE_ADMIN).count();
+            if target_is_admin && admins <= 1 {
+                return err(rid, "cannot remove the last admin — delete the group instead");
+            }
+            match app.store.disallow_member(&group, &target).await {
+                Ok(()) => {
+                    // Drop their live subscription so the fan-out stops at once.
+                    let mut hub = app.hub.lock().await;
+                    if let Some(subs) = hub.subscribers.get_mut(&group) {
+                        subs.remove(&target);
+                    }
+                    Some(ServerMsg::Ok { rid, seq: None })
+                }
+                Err(e) => err(rid, e),
+            }
+        }
+
+        ClientMsg::DeleteGroup { rid, group } => {
+            if let Err(e) = require_admin(app, &group, user).await {
+                return err(rid, e);
+            }
+            match app.store.delete_group(&group).await {
+                Ok(()) => {
+                    // Tear down the live fan-out for the now-gone group.
+                    let mut hub = app.hub.lock().await;
+                    hub.subscribers.remove(&group);
+                    Some(ServerMsg::Ok { rid, seq: None })
+                }
+                Err(e) => err(rid, e),
+            }
+        }
+
         ClientMsg::Members { rid, group } => {
             if !app.admins.contains(user) {
                 if let Err(e) = require_member(app, &group, user).await {

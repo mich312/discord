@@ -2,7 +2,7 @@ import React, { useState } from 'react';
 import Seal from './Seal.jsx';
 import { freshPresence } from '../lib/games.js';
 import { describeAgo } from '../lib/overview.js';
-import { Check, Phone } from './icons.jsx';
+import { Check, Phone, X } from './icons.jsx';
 
 // The roster is the security boundary: it is, exactly, who can read this
 // circle. Adding someone happens here, not in a settings page, because it
@@ -12,9 +12,10 @@ import { Check, Phone } from './icons.jsx';
 // Presence shown here is only what this device truly knows: who is in a
 // call (MLS voice signaling) and who says they're in a game (MLS rich
 // presence, expired client-side). No invented "online" dots.
-export default function Members({ server, me, canManage, voice, onAdd, onMember, onSetRole, onCall }) {
+export default function Members({ server, me, canManage, voice, onAdd, onMember, onSetRole, onCall, onRemoveMember }) {
   const [name, setName] = useState('');
   const roles = server.roles ?? {};
+  const adminCount = Object.values(roles).filter((r) => r === 'admin').length;
   const now = Date.now();
 
   // Who is in which of this circle's voice rooms right now.
@@ -101,6 +102,20 @@ export default function Members({ server, me, canManage, voice, onAdd, onMember,
               {roles[m] === 'admin' ? '− admin' : '+ admin'}
             </button>
           )}
+          {canManage && m !== me && onRemoveMember && !(roles[m] === 'admin' && adminCount <= 1) && (
+            <button
+              className="ghost member-remove danger"
+              data-testid={`remove-member-${m}`}
+              title={`remove ${m} from the circle`}
+              onClick={() => {
+                if (window.confirm(`Remove ${m} from "${server.name}"? They lose access immediately.`)) {
+                  onRemoveMember(m);
+                }
+              }}
+            >
+              <X size={12} />
+            </button>
+          )}
         </span>
       </li>
     );
@@ -163,9 +178,6 @@ export default function Members({ server, me, canManage, voice, onAdd, onMember,
       ) : (
         <p className="fineprint muted">Only admins of this circle can add members.</p>
       )}
-      <p className="fineprint muted">
-        New members can&rsquo;t see messages sent before they joined.
-      </p>
     </aside>
   );
 }

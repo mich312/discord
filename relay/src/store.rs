@@ -109,6 +109,10 @@ pub trait Store: Send + Sync {
     async fn create_group(&self, group: &str, creator: &str) -> Result<(), StoreError>;
     /// Add `user` as a plain member; keeps the existing role if already in.
     async fn allow_member(&self, group: &str, user: &str) -> Result<(), StoreError>;
+    /// Remove `user` from the group's ACL. No-op if they were not a member.
+    async fn disallow_member(&self, group: &str, user: &str) -> Result<(), StoreError>;
+    /// Purge a group entirely: roster, log, history, invites, welcomes.
+    async fn delete_group(&self, group: &str) -> Result<(), StoreError>;
     async fn is_member(&self, group: &str, user: &str) -> Result<bool, StoreError>;
     /// `user`'s role in `group`, or None if not a member.
     async fn member_role(&self, group: &str, user: &str) -> Result<Option<String>, StoreError>;
@@ -281,6 +285,25 @@ impl Store for MemoryStore {
         if !data.members.iter().any(|(m, _)| m == user) {
             data.members.push((user.to_string(), ROLE_MEMBER.to_string()));
         }
+        Ok(())
+    }
+
+    async fn disallow_member(&self, group: &str, user: &str) -> Result<(), StoreError> {
+        let mut inner = self.inner.lock().unwrap();
+        let data = inner.groups.get_mut(group).ok_or(StoreError::NoSuchGroup)?;
+        data.members.retain(|(m, _)| m != user);
+        Ok(())
+    }
+
+    async fn delete_group(&self, group: &str) -> Result<(), StoreError> {
+        let mut inner = self.inner.lock().unwrap();
+        inner.groups.remove(group);
+        // Welcomes are keyed by recipient, not group; drop any that pointed
+        // at this group so a queued invite can't resurrect a dead record.
+        for queue in inner.welcomes.values_mut() {
+            queue.retain(|w| w.group != group);
+        }
+        inner.invites.retain(|_, rec| rec.group != group);
         Ok(())
     }
 

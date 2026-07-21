@@ -157,6 +157,49 @@ export class Controller {
     return localStorage.getItem(IDENTITY_LS_KEY);
   }
 
+  /** Sign out of this device: wipe the local identity and every circle's
+      keys, then reload to the onboarding gate. Nothing is sent to the relay
+      — the account only ever lived here. Destructive: if the account was
+      never secured (no vault, no exported key), this is unrecoverable, which
+      is why the UI confirms first. */
+  async logout() {
+    try {
+      this.relay?.close?.();
+    } catch {
+      /* already down */
+    }
+    // Drop the identity that would otherwise auto-restore on next boot
+    // (see boot(): a surviving localStorage key resurrects the account even
+    // with IndexedDB gone).
+    localStorage.removeItem(IDENTITY_LS_KEY);
+    // Release our connection so the delete isn't blocked, then wipe the DB.
+    try {
+      this.db?.close?.();
+    } catch {
+      /* not open */
+    }
+    await new Promise((resolve) => {
+      let done = false;
+      const finish = () => {
+        if (!done) {
+          done = true;
+          resolve();
+        }
+      };
+      try {
+        const req = indexedDB.deleteDatabase('e2ee-client');
+        req.onsuccess = finish;
+        req.onerror = finish;
+        req.onblocked = finish;
+      } catch {
+        finish();
+      }
+      // Never hang the sign-out on a wedged delete.
+      setTimeout(finish, 1500);
+    });
+    location.reload();
+  }
+
   async completeOnboarding(securedLocal = true) {
     await this.db.kvPut('session', { name: this.me, createdAt: Date.now() });
     await this.db.kvPut('securedLocal', securedLocal);
@@ -253,7 +296,17 @@ export class Controller {
           }
           await this.relay
             .request({ t: 'subscribe', group: record.id, after: record.lastSeq })
-            .catch((e) => this.toast(`subscribe ${record.id}: ${e.message}`));
+            .catch((e) => {
+              // The relay says we're not a member (removed while offline) or
+              // the group is gone (deleted): forget it here instead of
+              // retrying forever against a circle we can no longer see.
+              if (/not a member|no such group/i.test(e.message)) {
+                this.toast(`you no longer have access to "${record.name}"`);
+                this.forgetServerLocal(record.id).catch(() => {});
+              } else {
+                this.toast(`subscribe ${record.id}: ${e.message}`);
+              }
+            });
           this.refreshRoles(record.id);
         }
         // A fresh sign-in has an identity but no circles: pull the
@@ -290,6 +343,24 @@ export class Controller {
           this.backfillHistory(record).catch((e) =>
             console.warn(`history backfill ${record.id}: ${e.message}`)
           );
+        }
+        // One-shot per session: rebroadcast our own view of each circle's
+        // shape. Members can't create channels/voice rooms, so a room that
+        // exists on one device but not another is pure sync divergence — a
+        // role-gated chan/vchan event some peer dropped, or one sent while a
+        // peer was offline. The `meta` union (ungated) adopts any room the
+        // receiver is missing, so a single rebroadcast per device converges
+        // everyone. Skip restored stubs (no MLS state to send with) and
+        // pendingMetaSync records (their shape is unreconciled — sending it
+        // could spread a stale view instead of healing).
+        if (!this.metaHealed) {
+          this.metaHealed = true;
+          for (const record of this.servers.values()) {
+            if (record.restored || record.pendingMetaSync) continue;
+            this.sendContent(record.id, this.metaContent(record)).catch((e) =>
+              console.warn(`meta heal ${record.id}: ${e.message}`)
+            );
+          }
         }
         this.scheduleBackup();
         this.checkVault();
@@ -414,6 +485,15 @@ export class Controller {
       if (event.kind === 'message') {
         await this.onContent(record, event.sender, event.text);
       } else if (event.kind === 'membershipChange') {
+        // Were we the one dropped? A re-key that no longer lists us means we
+        // were removed (kicked, or the circle is being deleted). Forget it
+        // here and stop — the record is gone, so don't fall through to the
+        // serverPut below, which would resurrect it.
+        if (!event.members.includes(this.me)) {
+          this.toast(`you were removed from "${record.name}"`);
+          await this.forgetServerLocal(record.id);
+          return;
+        }
         const before = new Set(record.members);
         record.members = event.members;
         record.epoch = event.epoch;
@@ -431,16 +511,7 @@ export class Controller {
           // group rebroadcasts the metadata they missed (including channel
           // history keys — sharing them with the roster is their design).
           if (record.invites?.length) {
-            await this.sendContent(record.id, {
-              k: 'meta',
-              name: record.name,
-              channels: record.channels,
-              voiceChannels: record.voiceChannels ?? ['lounge'],
-              chanMeta: record.chanMeta ?? {},
-              overview: record.overview ?? null,
-              notices: record.notices ?? [],
-              rsvps: record.rsvps ?? {},
-            });
+            await this.sendContent(record.id, this.metaContent(record));
           }
         } else {
           await this.addSystemMessage(
@@ -536,23 +607,35 @@ export class Controller {
           record.pendingMetaSync = false;
           Object.assign(record, reconcileMeta(content));
           // The snapshot is authoritative about what exists now, so a channel
-          // it lists is not a tombstone — drop any stale one so it isn't
-          // wrongly blocked from re-appearing.
+          // or voice room it lists is not a tombstone — drop any stale one so
+          // it isn't wrongly blocked from re-appearing.
           if (record.deletedChannels?.length) {
             record.deletedChannels = record.deletedChannels.filter(
               (c) => !record.channels.includes(c)
+            );
+          }
+          if (record.deletedVoice?.length) {
+            record.deletedVoice = record.deletedVoice.filter(
+              (c) => !(record.voiceChannels ?? []).includes(c)
             );
           }
           this.backfillHistory(record).catch((e) => console.warn(`history: ${e.message}`));
           this.scheduleBackup();
           break;
         }
+        // Union gap-fill: adopt rooms this device is missing, but never a room
+        // it has seen deleted — otherwise a peer that missed the deletion
+        // would resurrect it on every meta rebroadcast (now one per connect).
         for (const ch of content.channels ?? []) {
-          if (!record.channels.includes(ch)) record.channels.push(ch);
+          if (!record.channels.includes(ch) && !(record.deletedChannels ?? []).includes(ch)) {
+            record.channels.push(ch);
+          }
         }
         if (content.voiceChannels) {
           const rooms = record.voiceChannels ?? ['lounge'];
-          for (const ch of content.voiceChannels) if (!rooms.includes(ch)) rooms.push(ch);
+          for (const ch of content.voiceChannels) {
+            if (!rooms.includes(ch) && !(record.deletedVoice ?? []).includes(ch)) rooms.push(ch);
+          }
           record.voiceChannels = rooms;
         }
         // Gap-fill the home base the same way: a joiner has none, and
@@ -676,6 +759,7 @@ export class Controller {
       }
       case 'vchan': {
         if (!(await this.senderIsAdmin(record, sender))) break;
+        this.clearVoiceDeleted(record, content.ch);
         const rooms = record.voiceChannels ?? ['lounge'];
         if (!rooms.includes(content.ch)) {
           record.voiceChannels = [...rooms, content.ch];
@@ -720,6 +804,8 @@ export class Controller {
         const rooms = record.voiceChannels ?? ['lounge'];
         if (rooms.includes(content.ch) && !rooms.includes(content.to)) {
           record.voiceChannels = rooms.map((c) => (c === content.ch ? content.to : c));
+          this.markVoiceDeleted(record, content.ch);
+          this.clearVoiceDeleted(record, content.to);
           if (this.voice?.active?.server === record.id && this.voice.active.channel === content.ch) {
             await this.voice.leave();
           }
@@ -733,6 +819,7 @@ export class Controller {
         const rooms = record.voiceChannels ?? ['lounge'];
         if (rooms.includes(content.ch)) {
           record.voiceChannels = rooms.filter((c) => c !== content.ch);
+          this.markVoiceDeleted(record, content.ch);
           if (this.voice?.active?.server === record.id && this.voice.active.channel === content.ch) {
             await this.voice.leave();
           }
@@ -813,6 +900,38 @@ export class Controller {
     }
   }
 
+  /** Voice rooms get the same tombstone treatment as text channels, so the
+      meta union (now rebroadcast on every connect to heal divergence) can't
+      resurrect a room this device has seen deleted. */
+  markVoiceDeleted(record, ch) {
+    record.deletedVoice = [...new Set([...(record.deletedVoice ?? []), ch])].slice(
+      -Controller.DELETED_MAX
+    );
+  }
+
+  clearVoiceDeleted(record, ch) {
+    if (record.deletedVoice?.length) {
+      record.deletedVoice = record.deletedVoice.filter((c) => c !== ch);
+    }
+  }
+
+  /** The full metadata snapshot a joiner (or a peer that missed an event)
+      needs to reconstruct the circle's shape. Rebroadcast on member add and
+      after a structural change so the ungated `meta` union self-heals any
+      device that dropped the original, role-gated `chan`/`vchan` event. */
+  metaContent(record) {
+    return {
+      k: 'meta',
+      name: record.name,
+      channels: record.channels,
+      voiceChannels: record.voiceChannels ?? ['lounge'],
+      chanMeta: record.chanMeta ?? {},
+      overview: record.overview ?? null,
+      notices: record.notices ?? [],
+      rsvps: record.rsvps ?? {},
+    };
+  }
+
   async createChannel(serverId, channel) {
     const record = this.servers.get(serverId);
     const ch = channel.toLowerCase().replace(/[^a-z0-9-]+/g, '-');
@@ -820,6 +939,11 @@ export class Controller {
     record.channels.push(ch);
     this.clearChannelDeleted(record, ch);
     await this.sendContent(serverId, { k: 'chan', ch });
+    // The `chan` event above is dropped by any peer that doesn't yet see us
+    // as an admin (stale role cache, or a global admin who is only a circle
+    // member). Follow it with a meta snapshot so the ungated union repairs
+    // them — otherwise the room shows for us and never for them.
+    await this.sendContent(serverId, this.metaContent(record));
     await this.db.serverPut(record);
     this.dispatch({ type: 'servers', servers: this.snapshotServers() });
     this.scheduleBackup();
@@ -985,7 +1109,11 @@ export class Controller {
     const rooms = record.voiceChannels ?? ['lounge'];
     if (!ch || rooms.includes(ch)) return;
     record.voiceChannels = [...rooms, ch];
+    this.clearVoiceDeleted(record, ch);
     await this.sendContent(serverId, { k: 'vchan', ch });
+    // Same self-heal as createChannel: a meta snapshot after the gated
+    // `vchan` so peers that dropped it still pick the voice room up.
+    await this.sendContent(serverId, this.metaContent(record));
     await this.db.serverPut(record);
     this.dispatch({ type: 'servers', servers: this.snapshotServers() });
     this.scheduleBackup();
@@ -1041,6 +1169,8 @@ export class Controller {
     const ch = Controller.slugChannel(to);
     if (!ch || ch === from || !rooms.includes(from) || rooms.includes(ch)) return;
     record.voiceChannels = rooms.map((c) => (c === from ? ch : c));
+    this.markVoiceDeleted(record, from);
+    this.clearVoiceDeleted(record, ch);
     if (this.voice?.active?.server === serverId && this.voice.active.channel === from) {
       await this.voice.leave();
     }
@@ -1056,6 +1186,7 @@ export class Controller {
     const rooms = record.voiceChannels ?? ['lounge'];
     if (!rooms.includes(channel)) return;
     record.voiceChannels = rooms.filter((c) => c !== channel);
+    this.markVoiceDeleted(record, channel);
     if (this.voice?.active?.server === serverId && this.voice.active.channel === channel) {
       await this.voice.leave();
     }
@@ -1325,19 +1456,127 @@ export class Controller {
     await this.addSystemMessage(serverId, `${user} added (epoch ${epoch}) — unverified until you check their safety number`);
     // Joiners have no scrollback: rebroadcast name + channels (and channel
     // settings, incl. history keys) so their placeholder record fills in.
-    await this.sendContent(serverId, {
-      k: 'meta',
-      name: record.name,
-      channels: record.channels,
-      voiceChannels: record.voiceChannels ?? ['lounge'],
-      chanMeta: record.chanMeta ?? {},
-      overview: record.overview ?? null,
-      notices: record.notices ?? [],
-      rsvps: record.rsvps ?? {},
-    });
+    await this.sendContent(serverId, this.metaContent(record));
     await this.db.serverPut(record);
     this.dispatch({ type: 'servers', servers: this.snapshotServers() });
     this.refreshRoles(serverId);
+  }
+
+  // === circle management (rename / remove / leave / delete) ===============
+
+  /** Rename a circle. The new name rides the same meta envelope joiners
+      already adopt, so every device picks it up. UI-gated to admins. */
+  async renameServer(serverId, name) {
+    const record = this.servers.get(serverId);
+    const next = String(name ?? '').trim().slice(0, 60);
+    if (!record || !next || next === record.name) return;
+    record.name = next;
+    await this.sendContent(serverId, this.metaContent(record));
+    await this.addSystemMessage(serverId, `circle renamed to "${next}" by you`);
+    await this.db.serverPut(record);
+    this.dispatch({ type: 'servers', servers: this.snapshotServers() });
+    this.scheduleBackup();
+  }
+
+  /** Remove a member: the MLS commit re-keys the group so they can read and
+      send nothing further (the real boundary), and the relay drops them from
+      the ACL so they stop being listed and served. UI-gated to admins. */
+  async removeMember(serverId, user) {
+    const record = this.servers.get(serverId);
+    if (!record || user === this.me) return;
+    const { commit, epoch, members, state } = await this.crypto('removeMember', {
+      group: serverId,
+      name: user,
+    });
+    await this.persistState(state);
+    const sent = await this.relay.request({
+      t: 'send',
+      group: serverId,
+      epoch,
+      payload: b64.enc(commit),
+    });
+    record.lastSeq = Math.max(record.lastSeq, sent.seq);
+    record.members = members;
+    record.epoch = epoch;
+    if (record.roles?.[user]) {
+      record.roles = { ...record.roles };
+      delete record.roles[user];
+    }
+    // Revoke the server-side ACL too (best-effort; the MLS re-key already
+    // locked them out cryptographically).
+    await this.relay
+      .request({ t: 'disallow', group: serverId, user })
+      .catch((e) => console.warn(`disallow ${user}: ${e.message}`));
+    await this.addSystemMessage(serverId, `${user} was removed from the circle by you (epoch ${epoch})`);
+    // The epoch moved: any parked invite GroupInfo blob is now stale.
+    await this.refreshInvites(record);
+    await this.db.serverPut(record);
+    this.dispatch({ type: 'servers', servers: this.snapshotServers() });
+    this.scheduleBackup();
+  }
+
+  /** Leave a circle: forget it on this device and drop ourselves from the
+      relay ACL. The group's MLS roster still lists us until an admin re-keys
+      — a clean self-removal commit isn't ours to make — but nothing about
+      the circle remains here. Any member may leave. */
+  async leaveServer(serverId) {
+    if (!this.servers.get(serverId)) return;
+    await this.relay
+      .request({ t: 'disallow', group: serverId, user: this.me })
+      .catch((e) => console.warn(`leave ${serverId}: ${e.message}`));
+    await this.forgetServerLocal(serverId);
+  }
+
+  /** Delete a circle: re-key every other member out (each removal commit is
+      how their device learns to forget the circle), purge the relay's copy,
+      then forget it here. UI-gated to admins. */
+  async deleteServer(serverId) {
+    const record = this.servers.get(serverId);
+    if (!record) return;
+    for (const user of (record.members ?? []).filter((m) => m !== this.me)) {
+      try {
+        const { commit, epoch, members, state } = await this.crypto('removeMember', {
+          group: serverId,
+          name: user,
+        });
+        await this.persistState(state);
+        const sent = await this.relay.request({
+          t: 'send',
+          group: serverId,
+          epoch,
+          payload: b64.enc(commit),
+        });
+        record.lastSeq = Math.max(record.lastSeq, sent.seq);
+        record.members = members;
+        record.epoch = epoch;
+      } catch (e) {
+        console.warn(`delete: removing ${user}: ${e.message}`);
+      }
+    }
+    await this.relay
+      .request({ t: 'delete_group', group: serverId })
+      .catch((e) => console.warn(`delete_group ${serverId}: ${e.message}`));
+    await this.forgetServerLocal(serverId);
+  }
+
+  /** Tear down every local trace of a circle: MLS keys, the record, its
+      messages, any live call. Shared by leave, delete, and being kicked. */
+  async forgetServerLocal(serverId) {
+    const wasActiveCall = this.voice?.active?.server === serverId;
+    this.servers.delete(serverId);
+    try {
+      const { state } = await this.crypto('forgetGroup', { group: serverId });
+      await this.persistState(state);
+    } catch (e) {
+      // A restored (read-only) stub has no MLS group to forget — fine.
+      console.warn(`forget group ${serverId}: ${e.message}`);
+    }
+    await this.db.serverDelete(serverId);
+    await this.db.msgsDeleteServer(serverId);
+    if (wasActiveCall) await this.voice.leave().catch(() => {});
+    this.dispatch({ type: 'servers', servers: this.snapshotServers() });
+    // Re-park the backup without this circle so a restore won't resurrect it.
+    this.scheduleBackup();
   }
 
   // === roles ==============================================================
@@ -1412,7 +1651,7 @@ export class Controller {
   }
 
   async uploadBackup() {
-    if (!this.relay?.ready || !this.servers.size) return;
+    if (!this.relay?.ready) return;
     const identity = this.identityBytes();
     // Restored stubs are included: their shape (and channel history keys)
     // came from the previous backup, and omitting them here would overwrite
@@ -1427,7 +1666,12 @@ export class Controller {
         overview: r.overview ?? null,
         notices: r.notices ?? [],
       }));
-    if (!servers.length) return;
+    // An empty list must only overwrite a parked backup once this device has
+    // actually held circles — so leaving/deleting your last one clears the
+    // ghost — never during boot before circles have loaded (which would wipe
+    // a good backup) or for an account that simply has none yet.
+    if (!servers.length && !this.everHadCircles) return;
+    if (servers.length) this.everHadCircles = true;
     const payload = await sealBackup(identity, { v: 1, servers });
     await this.relay.request({ t: 'backup_set', payload });
   }

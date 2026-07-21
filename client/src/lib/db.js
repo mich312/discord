@@ -30,6 +30,8 @@ function tx(db, store, mode, fn) {
 
 function wrap(db) {
   return {
+    // Release the connection so a logout's deleteDatabase isn't blocked.
+    close: () => db.close(),
     kvGet: (key) =>
       new Promise((resolve, reject) => {
         const req = db.transaction('kv').objectStore('kv').get(key);
@@ -38,6 +40,24 @@ function wrap(db) {
       }),
     kvPut: (key, value) => tx(db, 'kv', 'readwrite', (s) => s.put(value, key)),
     serverPut: (record) => tx(db, 'servers', 'readwrite', (s) => s.put(record)),
+    serverDelete: (id) => tx(db, 'servers', 'readwrite', (s) => s.delete(id)),
+    /** Purge every message of a circle (leave/kick/delete). The store is
+        keyed by autoIncrement with only a [server, channel] index, so walk
+        that index across the circle's channels via a bound cursor. */
+    msgsDeleteServer: (server) =>
+      new Promise((resolve, reject) => {
+        const store = db.transaction('messages', 'readwrite').objectStore('messages');
+        // A key range over [server, -∞] .. [server, +∞] catches every channel.
+        const range = IDBKeyRange.bound([server, -Infinity], [server, [] ]);
+        const req = store.index('byChannel').openCursor(range);
+        req.onsuccess = () => {
+          const cur = req.result;
+          if (!cur) return resolve();
+          cur.delete();
+          cur.continue();
+        };
+        req.onerror = () => reject(req.error);
+      }),
     serversAll: () =>
       new Promise((resolve, reject) => {
         const req = db.transaction('servers').objectStore('servers').getAll();

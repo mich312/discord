@@ -234,7 +234,6 @@ export default function Messages({
   const folded = useMemo(() => fold(messages), [messages]);
   const members = server.members.length;
   const meta = server.chanMeta?.[channel] ?? {};
-  const keepsHistory = !!meta.hid;
   const shelf = server.overview?.games ?? [];
   // The header's call affordance: join the busiest voice room (or the
   // first one), or hop back to the stage if we're already in a call here.
@@ -263,16 +262,13 @@ export default function Messages({
             {meta.topic}
           </span>
         )}
-        <span className="sealed-note">
-          {keepsHistory
-            ? 'history kept for new members'
-            : 'no history — only devices here now keep these messages'}
-          {meta.retention ? (
+        {meta.retention ? (
+          <span className="sealed-note">
             <span className="retention-note" title="auto-delete is on for this room">
-              {' '}· <Clock size={11} /> auto-deletes {describeRetention(meta.retention)} after sending
+              <Clock size={11} /> auto-deletes {describeRetention(meta.retention)} after sending
             </span>
-          ) : null}
-        </span>
+          </span>
+        ) : null}
         {inCallHere && onOpenStage ? (
           <button className="button pane-call live" data-testid="pane-open-call" onClick={onOpenStage}>
             <Wave size={13} />
@@ -301,17 +297,7 @@ export default function Messages({
       >
         <div className="watermark" data-testid="watermark">
           <span className="wm-tag">start of record — #{channel}</span>
-          {keepsHistory ? (
-            <>
-              Beginning of <strong>#{channel}</strong> as this device knows it. This room keeps
-              history, so you may see messages from before you joined.
-            </>
-          ) : (
-            <>
-              Beginning of <strong>#{channel}</strong> as this device knows it. Earlier messages
-              were sent before you joined.
-            </>
-          )}
+          Beginning of <strong>#{channel}</strong> as this device knows it.
         </div>
         {folded.map((item) => {
           if (item.kind === 'day') {
