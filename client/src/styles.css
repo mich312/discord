@@ -2006,8 +2006,241 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
 .hub-about { padding: 18px 0 0; max-width: 74ch; }
 .hub-about .overview-blurb { margin-top: 0; }
 .hub-about .overview-stats { margin-top: 8px; }
-.pane-actions { display: flex; gap: 8px; margin-left: 12px; flex-shrink: 0; }
+.pane-actions { display: flex; gap: 8px; margin-left: auto; flex-shrink: 0; }
 .pane-actions .button { padding: 5px 12px; }
+
+/* Two faces of the hub. The segmented control sits by the title; the system
+   still speaks in mono, so the labels do too. */
+.hub-tabs {
+  display: inline-flex;
+  gap: 2px;
+  padding: 2px;
+  background: var(--panel);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-pill);
+}
+.hub-tab {
+  font: 600 11px var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.08em;
+  color: var(--ink-mute);
+  background: none;
+  border: none;
+  border-radius: var(--r-pill);
+  padding: 4px 13px;
+  cursor: pointer;
+  transition: color var(--fast) var(--ease), background var(--fast) var(--ease);
+}
+.hub-tab:hover { color: var(--ink-dim); }
+.hub-tab.on { color: var(--on-accent); background: var(--accent); }
+
+/* The Play view's top slot when the circle is in a game: who's in, and one
+   green door to join them. */
+.hub-band {
+  display: flex;
+  align-items: center;
+  gap: 16px;
+  margin: 18px 0 4px;
+  padding: 14px 16px;
+  border: 1px solid color-mix(in srgb, var(--ok) 38%, var(--hairline));
+  border-radius: var(--r-lg);
+  background: linear-gradient(100deg, var(--ok-soft), transparent 62%), var(--raised);
+}
+.hub-band-cover {
+  width: 56px;
+  height: 56px;
+  flex-shrink: 0;
+  border-radius: var(--r);
+  display: grid;
+  place-items: center;
+  box-shadow: inset 0 0 0 1px rgba(255, 255, 255, 0.06);
+}
+.hub-band-cover .game-cover-mark { font-size: 26px; }
+.hub-band-cover .game-cover-mark.glyph { font-size: 30px; }
+.hub-band-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
+.hub-band-tag { color: var(--ok); }
+.hub-band-title { font-size: var(--text-lg); font-weight: 650; letter-spacing: -0.01em; }
+.hub-band-who {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: var(--text-sm);
+  color: var(--ink-dim);
+}
+.hub-band-who .game-who-stack .seal-avatar { box-shadow: 0 0 0 2px var(--raised); }
+.hub-band-join { flex-shrink: 0; }
+
+/* "Nothing live" line and the pointer to the Home face. */
+.hub-nudge {
+  margin: 18px 0 4px;
+  padding: 12px 14px;
+  border: 1px dashed var(--hairline-strong);
+  border-radius: var(--r);
+  font-size: var(--text-sm);
+  color: var(--ink-dim);
+}
+.hub-jump { font-size: var(--text-sm); margin: 18px 0 2px; }
+.linklike {
+  background: none;
+  border: none;
+  padding: 0;
+  font: inherit;
+  color: var(--accent-ink);
+  cursor: pointer;
+}
+.linklike:hover { text-decoration: underline; }
+
+/* Shelf filter chips — mono, like every other label the system prints. */
+.shelf-filters { display: flex; flex-wrap: wrap; gap: 7px; margin: 4px 0 14px; }
+.fchip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  font: 500 11px var(--mono);
+  letter-spacing: 0.03em;
+  color: var(--ink-dim);
+  background: var(--panel);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-pill);
+  padding: 5px 12px;
+  cursor: pointer;
+  transition: color var(--fast) var(--ease), border-color var(--fast) var(--ease);
+}
+.fchip:hover { color: var(--ink); border-color: var(--hairline-strong); }
+.fchip.on { color: var(--ink); background: var(--hover); border-color: var(--hairline-strong); }
+.fchip-dot {
+  width: 6px;
+  height: 6px;
+  border-radius: var(--r-pill);
+  background: var(--ok);
+  box-shadow: 0 0 5px var(--ok);
+}
+.shelf-empty-filter { grid-column: 1 / -1; font-size: var(--text-sm); padding: 6px 2px; }
+.shelf-honesty {
+  font-size: var(--text-xs);
+  line-height: 1.5;
+  max-width: 62ch;
+  margin-top: 12px;
+}
+
+/* Rallies — open "I want to play X" calls from the circle. Coral, because a
+   rally is an invitation to act, not a live state (that's the green band). */
+.hub-rallies { padding: 6px 0 2px; margin-bottom: 4px; }
+.hub-rallies > .overline { display: block; margin-bottom: 8px; color: var(--accent-ink); }
+.rally-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 6px; }
+.rally-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 9px 12px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--r);
+  background: var(--accent-soft);
+}
+.rally-row .game-who-stack { flex-shrink: 0; }
+.rally-row .game-who-stack .seal-avatar { margin-right: -8px; box-shadow: 0 0 0 2px var(--panel); }
+.rally-row .game-who-stack .seal-avatar:last-child { margin-right: 0; }
+.rally-text { flex: 1; min-width: 0; font-size: var(--text-sm); color: var(--ink-dim); }
+.rally-text strong { color: var(--ink); font-weight: 650; }
+.rally-host { flex-shrink: 0; font-size: var(--text-xs); color: var(--ink-mute); }
+.rally-join { flex-shrink: 0; }
+
+/* Per-card rally: a quiet, full-width invitation under the primary actions,
+   only shown when the game isn't already live. */
+.game-rally {
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  gap: 6px;
+  margin-top: 7px;
+  padding: 6px 10px;
+  width: 100%;
+  font: 500 11px var(--mono);
+  letter-spacing: 0.02em;
+  color: var(--ink-mute);
+  background: none;
+  border: 1px dashed var(--hairline-strong);
+  border-radius: var(--r-sm);
+  cursor: pointer;
+  transition: color var(--fast) var(--ease), border-color var(--fast) var(--ease),
+    background var(--fast) var(--ease);
+}
+.game-rally:hover { color: var(--accent-ink); border-color: color-mix(in srgb, var(--accent) 40%, var(--hairline)); }
+.game-rally.on {
+  color: var(--accent-ink);
+  background: var(--accent-soft);
+  border-style: solid;
+  border-color: color-mix(in srgb, var(--accent) 34%, var(--hairline));
+}
+
+/* Game nights — upcoming events tied to a game, surfaced on the Play tab
+   right where the shelf is. Coral clock marker; RSVP turns live-green. */
+.hub-nights { padding: 6px 0 2px; margin-bottom: 4px; }
+.hub-nights > .overline { display: block; margin-bottom: 8px; }
+.nights-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 6px; }
+.night-row {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  padding: 10px 13px;
+  border: 1px solid var(--hairline);
+  border-radius: var(--r);
+  background: var(--panel);
+}
+.night-mark {
+  flex-shrink: 0;
+  display: grid;
+  place-items: center;
+  width: 30px;
+  height: 30px;
+  border-radius: var(--r-sm);
+  color: var(--accent-ink);
+  background: var(--accent-soft);
+}
+.night-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.night-title { font-weight: 650; font-size: var(--text-base); letter-spacing: -0.01em; }
+.night-game { color: var(--accent-ink); font-weight: 550; }
+.night-when {
+  font-size: var(--text-xs);
+  color: var(--ink-mute);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.night-going {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex-shrink: 0;
+  font-size: var(--text-sm);
+  color: var(--ink-dim);
+}
+.night-going .game-who-stack .seal-avatar { margin-right: -8px; box-shadow: 0 0 0 2px var(--panel); }
+.night-going .game-who-stack .seal-avatar:last-child { margin-right: 0; }
+.night-action { flex-shrink: 0; padding: 6px 14px; }
+
+/* Game night named on the up-next hero and calendar rows. */
+.hero-game { color: var(--accent-ink); font-weight: 600; }
+
+/* The rest of the schedule under the hero, on Home. */
+.cal-list .cal-row { cursor: default; }
+.cal-list .cal-row:hover { border-color: var(--hairline); background: var(--panel); color: var(--ink); }
+.cal-row .glyph { color: var(--accent-ink); }
+.cal-rsvp { flex-shrink: 0; padding: 4px 12px; margin-left: 4px; }
+
+/* Multiple events in the customize form: a title/time row over a note+game row. */
+.overview-event-row { display: grid; gap: 6px; padding: 8px 0; border-bottom: 1px dashed var(--hairline); }
+.overview-event-row:first-of-type { padding-top: 0; }
+.overview-event-edit2 { display: grid; grid-template-columns: 1fr auto auto; gap: 6px; align-items: center; }
+.overview-event-edit2 select {
+  background: var(--well);
+  color: var(--ink);
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--r);
+  padding: 8px 10px;
+  font: inherit;
+}
+.overview-event-edit2 select:focus { border-color: var(--ink-dim); outline: none; }
 
 .hub-hero {
   position: relative;
@@ -2165,7 +2398,22 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
   padding: 11px 13px 12px;
   flex: 1;
 }
-.game-name { font-weight: 700; font-size: 13.5px; letter-spacing: -0.01em; }
+.game-name-row { display: flex; align-items: center; gap: 8px; }
+.game-name { font-weight: 700; font-size: 13.5px; letter-spacing: -0.01em; flex: 1; min-width: 0; }
+.game-fav {
+  flex-shrink: 0;
+  background: none;
+  border: none;
+  padding: 0;
+  cursor: pointer;
+  font-size: 14px;
+  line-height: 1;
+  color: var(--ink-mute);
+  transition: color var(--fast) var(--ease), transform var(--fast) var(--ease);
+}
+.game-fav:hover { color: var(--ink-dim); transform: scale(1.12); }
+.game-fav.on { color: var(--accent-ink); }
+.game-card.live { border-color: color-mix(in srgb, var(--ok) 32%, var(--hairline)); }
 .game-host {
   font-size: var(--text-xs);
   color: var(--ink-mute);
@@ -2176,7 +2424,8 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
 .game-note { font-size: var(--text-sm); color: var(--ink-dim); line-height: 1.45; }
 .game-actions { display: flex; gap: 7px; margin-top: auto; padding-top: 8px; }
 .game-actions .button { padding: 6px 12px; }
-.game-actions .button.primary { flex: 1; }
+.game-actions .button.primary,
+.game-actions .button.live { flex: 1; justify-content: center; }
 .game-card.add-card {
   border-style: dashed;
   background: none;

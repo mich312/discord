@@ -310,3 +310,15 @@ test('presence rides the ephemeral fan-out, not the group log', async () => {
   const me = c.livePresence.get('srv').alice;
   assert.equal(me.playing.id, 'g1');
 });
+
+test('a rally rides the ephemeral fan-out too, never the group log', async () => {
+  const { c } = makeController();
+  c.servers.set('srv', record());
+  await c.setWant('srv', { id: 'g3', name: 'Tanks', kind: 'activity' });
+  assert.deepEqual(c.relay.requests.map((r) => r.t), ['ephemeral'], 'no log append for a rally');
+  assert.equal(c.liveWants.get('srv').alice.want.id, 'g3');
+  // Standing down clears my rally, still over the ephemeral path.
+  await c.setWant('srv', null);
+  assert.equal(c.liveWants.get('srv').alice.want, null, 'stand-down clears the rally');
+  assert.deepEqual(c.relay.requests.map((r) => r.t), ['ephemeral', 'ephemeral']);
+});

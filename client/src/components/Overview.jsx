@@ -1,26 +1,58 @@
 import React, { useEffect, useState } from 'react';
 import Seal from './Seal.jsx';
 import { describeAgo, describeUntil, canRemoveNotice } from '../lib/overview.js';
-import { freshPresence, gameHost, lastPlayed, makeGameId, normalizeGame } from '../lib/games.js';
+import {
+  freshPresence,
+  freshWant,
+  gameHost,
+  lastPlayed,
+  playCount,
+  isFavorite,
+  toggleFavorite,
+  matchesFilter,
+  sortGames,
+  makeGameId,
+  normalizeGame,
+} from '../lib/games.js';
 import { nameHue } from '../lib/avatar.js';
-import { Hash, Wave, Lock, LinkGlyph, Plus, X, ArrowRight, Gamepad, External, Copy, Check } from './icons.jsx';
+import { Hash, Wave, Bell, Clock, LinkGlyph, Plus, X, ArrowRight, Gamepad, External, Copy, Check } from './icons.jsx';
 
-// The circle's game hub: what you land on when you pick a circle. Not a
-// brochure — a briefing, with the shelf front and center:
-//   · what's coming up   — the next game night, with a live countdown
-//   · what's on the shelf — the games this circle plays, living on their
-//                          own servers; web games launch embedded here
-//   · what did I miss    — per-room unread counts + the latest line,
-//                          computed from this device's own store
-//   · what should I know — a noticeboard the whole roster pins to
-// Every word travels inside the MLS encryption; the relay reads none of it.
-// What the relay CAN'T hide: connecting to a game shows that game's host
-// your traffic — the shelf says so instead of pretending otherwise.
+// The circle's game hub. Two faces off one page, so the thing the page is
+// named for leads:
+//   · Play — what's live right now, and the shelf of games to start. The
+//            live band takes the top when anyone's in a game; the cards
+//            below adapt (join / launch / copy) and can be starred, filtered
+//            and sorted live-first.
+//   · Home — the circle briefing that used to crowd the top: the next event
+//            with its countdown + RSVP, the per-room catch-up, the
+//            noticeboard, pinned links, and the blurb.
+// Which face you're on is remembered per-device; nothing here changed about
+// what crosses the wire. Every synced word still travels inside MLS; the
+// relay reads none of it. What the relay CAN'T hide — that connecting to a
+// game shows that game's host your traffic — the shelf still says plainly.
 
 // Only ever link out to http(s) — anything else renders as inert text, so
 // a pinned "javascript:" or "data:" URL can't become a click target.
 function safeHref(url) {
   return /^https?:\/\//i.test(url) ? url : null;
+}
+
+// Which face of the hub you're on, remembered on this device — a view
+// preference, never shared, so it needs no protocol.
+const HUB_TAB_KEY = 'quorum-hub-tab';
+function readTab() {
+  try {
+    return localStorage.getItem(HUB_TAB_KEY) === 'home' ? 'home' : 'play';
+  } catch {
+    return 'play';
+  }
+}
+function writeTab(tab) {
+  try {
+    localStorage.setItem(HUB_TAB_KEY, tab);
+  } catch {
+    // private mode — the tab just resets to Play next time
+  }
 }
 
 // datetime-local <-> ms, in the device's own timezone.
@@ -31,21 +63,62 @@ function toLocalInput(ms) {
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`;
 }
 
-let linkSeq = 0;
+const FILTER_LABEL = {
+  all: 'all',
+  live: 'live',
+  favorites: 'starred',
+  recent: 'recent',
+  web: 'web',
+  servers: 'servers',
+};
 
-function EditForm({ overview, onSave, onCancel }) {
+// "you want to play" / "alice wants to play" / "alice & bob want to play" /
+// "3 want to play" — verb agrees with the count, "you" replaces my own name.
+function ralliersLabel(who, me) {
+  const name = (h) => (h === me ? 'you' : h);
+  if (who.length === 1) {
+    return who[0] === me ? 'you want to play' : `${who[0]} wants to play`;
+  }
+  if (who.length === 2) return `${name(who[0])} & ${name(who[1])} want to play`;
+  return `${who.length} want to play`;
+}
+
+let linkSeq = 0;
+let eventSeq = 0;
+
+// The events an EditForm starts from — the new array, or a lone legacy event,
+// or one blank row so the form always has a place to type (and so the first
+// row's fields keep their stable ids).
+function seedEvents(overview) {
+  const src = overview?.events?.length
+    ? overview.events
+    : overview?.event
+      ? [overview.event]
+      : [];
+  const rows = src.map((e) => ({
+    _id: ++eventSeq,
+    id: e.id,
+    title: e.title ?? '',
+    at: toLocalInput(e.at),
+    note: e.note ?? '',
+    gameId: e.gameId ?? '',
+  }));
+  return rows.length ? rows : [{ _id: ++eventSeq, title: '', at: '', note: '', gameId: '' }];
+}
+
+function EditForm({ overview, games, onSave, onCancel }) {
   const [blurb, setBlurb] = useState(overview?.blurb ?? '');
   // Each row gets a stable local id: with index keys, removing a middle
   // link makes React reuse the wrong controlled inputs for the rows below.
   const [links, setLinks] = useState(() =>
     (overview?.links ?? []).map((l) => ({ ...l, _id: ++linkSeq }))
   );
-  const [eventTitle, setEventTitle] = useState(overview?.event?.title ?? '');
-  const [eventAt, setEventAt] = useState(toLocalInput(overview?.event?.at));
-  const [eventNote, setEventNote] = useState(overview?.event?.note ?? '');
+  const [events, setEvents] = useState(() => seedEvents(overview));
 
   const setLink = (i, patch) =>
     setLinks((ls) => ls.map((l, j) => (j === i ? { ...l, ...patch } : l)));
+  const setEvent = (i, patch) =>
+    setEvents((es) => es.map((e, j) => (j === i ? { ...e, ...patch } : e)));
 
   return (
     <form
@@ -53,38 +126,82 @@ function EditForm({ overview, onSave, onCancel }) {
       data-testid="overview-edit-form"
       onSubmit={(e) => {
         e.preventDefault();
-        const at = eventAt ? new Date(eventAt).getTime() : NaN;
         onSave({
           blurb: blurb.trim(),
           links: links.map(({ _id, ...l }) => l),
-          event:
-            eventTitle.trim() && Number.isFinite(at)
-              ? { title: eventTitle.trim(), at, note: eventNote.trim() }
-              : null,
+          events: events
+            .map((ev) => ({
+              ...(ev.id ? { id: ev.id } : {}),
+              title: ev.title.trim(),
+              at: ev.at ? new Date(ev.at).getTime() : NaN,
+              note: ev.note.trim(),
+              ...(ev.gameId ? { gameId: ev.gameId } : {}),
+            }))
+            .filter((ev) => ev.title && Number.isFinite(ev.at)),
         });
       }}
     >
-      <label className="overview-field-label">up next — your circle&rsquo;s next event</label>
-      <div className="overview-event-edit">
-        <input
-          value={eventTitle}
-          onChange={(e) => setEventTitle(e.target.value)}
-          placeholder="what's happening (leave empty for none)"
-          data-testid="overview-event-title"
-        />
-        <input
-          type="datetime-local"
-          value={eventAt}
-          onChange={(e) => setEventAt(e.target.value)}
-          data-testid="overview-event-at"
-        />
-      </div>
-      <input
-        value={eventNote}
-        onChange={(e) => setEventNote(e.target.value)}
-        placeholder="one line of detail — where, what to bring… (optional)"
-        data-testid="overview-event-note"
-      />
+      <label className="overview-field-label">events — game nights &amp; gatherings</label>
+      {events.map((ev, i) => (
+        <div className="overview-event-row" key={ev._id}>
+          <div className="overview-event-edit">
+            <input
+              value={ev.title}
+              onChange={(e) => setEvent(i, { title: e.target.value })}
+              placeholder="what's happening (leave empty to drop)"
+              data-testid={i === 0 ? 'overview-event-title' : `overview-event-title-${i}`}
+            />
+            <input
+              type="datetime-local"
+              value={ev.at}
+              onChange={(e) => setEvent(i, { at: e.target.value })}
+              data-testid={i === 0 ? 'overview-event-at' : `overview-event-at-${i}`}
+            />
+          </div>
+          <div className="overview-event-edit2">
+            <input
+              value={ev.note}
+              onChange={(e) => setEvent(i, { note: e.target.value })}
+              placeholder="one line of detail — where, what to bring… (optional)"
+              data-testid={i === 0 ? 'overview-event-note' : `overview-event-note-${i}`}
+            />
+            <select
+              value={ev.gameId}
+              onChange={(e) => setEvent(i, { gameId: e.target.value })}
+              title="tie this to a game — makes it a game night on the Play tab"
+              data-testid={`overview-event-game-${i}`}
+            >
+              <option value="">no game</option>
+              {games.map((g) => (
+                <option key={g.id} value={g.id}>
+                  {g.name}
+                </option>
+              ))}
+            </select>
+            {events.length > 1 && (
+              <button
+                type="button"
+                className="ghost"
+                title="remove event"
+                onClick={() => setEvents((es) => es.filter((_, j) => j !== i))}
+              >
+                <X size={12} />
+              </button>
+            )}
+          </div>
+        </div>
+      ))}
+      <button
+        type="button"
+        className="ghost overview-add-link"
+        data-testid="overview-add-event"
+        onClick={() =>
+          setEvents((es) => [...es, { _id: ++eventSeq, title: '', at: '', note: '', gameId: '' }])
+        }
+      >
+        <Plus size={12} />
+        add an event
+      </button>
       <label className="overview-field-label">about this circle</label>
       <textarea
         aria-label="about this circle"
@@ -144,15 +261,79 @@ function EditForm({ overview, onSave, onCancel }) {
   );
 }
 
-// One game on the shelf. The cover carries the game's own hue (derived from
-// its name, like a member's orb); actions differ by kind — web games launch
-// embedded, server games hand over the address.
-function GameCard({ game, players, canManage, onLaunch, onRemove }) {
+// The live band: the Play view's top slot when anyone in the circle is in a
+// game. It leads with who's in and one green way to join them — a door, not
+// a status line. Falls back to nothing when the circle is quiet.
+function LiveBand({ game, players, me, onJoin }) {
   const [copied, setCopied] = useState(false);
+  const hue = nameHue(game.name);
+  const isServer = game.kind === 'server';
+  const copyAddress = async () => {
+    try {
+      await navigator.clipboard.writeText(game.url);
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1800);
+    } catch {
+      // clipboard denied — the address is still on the game's card below
+    }
+  };
+  return (
+    <section className="hub-band" data-testid="hub-live-band">
+      <div
+        className="hub-band-cover"
+        style={{
+          background: `linear-gradient(135deg, hsl(${hue} 45% 22%), hsl(${(hue + 40) % 360} 60% 40%))`,
+        }}
+        aria-hidden="true"
+      >
+        <span className={game.glyph ? 'game-cover-mark glyph' : 'game-cover-mark'}>
+          {game.glyph ?? game.name.slice(0, 1).toUpperCase()}
+        </span>
+      </div>
+      <div className="hub-band-body">
+        <span className="overline live hub-band-tag">
+          <Wave size={11} /> live in this circle
+        </span>
+        <strong className="hub-band-title">{game.name}</strong>
+        <span className="hub-band-who">
+          <span className="game-who-stack">
+            {players.slice(0, 4).map((p) => (
+              <Seal key={p} name={p} size={20} title={p} />
+            ))}
+          </span>
+          {players.length === 1
+            ? `${players[0] === me ? 'you are' : `${players[0]} is`} playing`
+            : `${players.length} playing right now`}
+        </span>
+      </div>
+      {isServer ? (
+        <button className="button" data-testid="hub-band-copy" onClick={copyAddress}>
+          <Copy size={13} />
+          {copied ? 'copied' : 'copy address'}
+        </button>
+      ) : (
+        <button className="button live hub-band-join" data-testid="hub-band-join" onClick={onJoin}>
+          <Gamepad size={13} />
+          join{players.length > 0 ? ` · ${players.length} in` : ''}
+        </button>
+      )}
+    </section>
+  );
+}
+
+// One game on the shelf. The cover carries the game's own hue (derived from
+// its name, like a member's orb); the primary action reads the game's state —
+// join when the circle's already in it, launch when it's quiet, copy for a
+// native server — so one glance tells you the next move.
+function GameCard({ game, players, canManage, rallied, onLaunch, onRally, onRemove, onFavorite }) {
+  const [copied, setCopied] = useState(false);
+  const [fav, setFav] = useState(() => isFavorite(game.id));
   const hue = nameHue(game.name);
   const host = gameHost(game);
   const played = lastPlayed(game.id);
+  const plays = playCount(game.id);
   const live = players.length > 0;
+  const isServer = game.kind === 'server';
   const copyAddress = async () => {
     try {
       await navigator.clipboard.writeText(game.url);
@@ -162,8 +343,20 @@ function GameCard({ game, players, canManage, onLaunch, onRemove }) {
       // clipboard denied — the address is printed on the card regardless
     }
   };
+  const flipFav = () => {
+    setFav(toggleFavorite(game.id));
+    onFavorite?.();
+  };
+  // How the card describes itself when nobody's in it: plays first, then when
+  // this device last opened it — the honest device-local memory of the shelf.
+  const idleNote = [
+    plays ? `${plays} play${plays === 1 ? '' : 's'}` : '',
+    played ? `last played ${describeAgo(played)}` : '',
+  ]
+    .filter(Boolean)
+    .join(' · ');
   return (
-    <li className="game-card" data-testid={`game-card-${game.id}`}>
+    <li className={live ? 'game-card live' : 'game-card'} data-testid={`game-card-${game.id}`}>
       <div
         className="game-cover"
         style={{
@@ -180,7 +373,7 @@ function GameCard({ game, players, canManage, onLaunch, onRemove }) {
             {players.length > 2 ? ` +${players.length - 2}` : ''}
           </span>
         ) : (
-          <span className="game-kind">{game.kind === 'server' ? 'game server' : 'web game'}</span>
+          <span className="game-kind">{isServer ? 'game server' : 'web game'}</span>
         )}
         {canManage && (
           <button
@@ -194,9 +387,20 @@ function GameCard({ game, players, canManage, onLaunch, onRemove }) {
         )}
       </div>
       <div className="game-body">
-        <span className="game-name">{game.name}</span>
+        <div className="game-name-row">
+          <span className="game-name">{game.name}</span>
+          <button
+            className={fav ? 'game-fav on' : 'game-fav'}
+            title={fav ? 'unstar — remove from your favorites' : 'star — pin to the front for you'}
+            aria-pressed={fav}
+            data-testid={`game-favorite-${game.id}`}
+            onClick={flipFav}
+          >
+            {fav ? '★' : '☆'}
+          </button>
+        </div>
         <span className="game-host mono" title="this host sees its own traffic — never your chat">
-          {game.kind === 'server' ? '⛭' : '◈'} {host}
+          {isServer ? '⛭' : '◈'} {host}
         </span>
         {game.note && <span className="game-note">{game.note}</span>}
         {live ? (
@@ -208,15 +412,35 @@ function GameCard({ game, players, canManage, onLaunch, onRemove }) {
             </span>
             {players.length === 1 ? `${players[0]} is in` : `${players.length} playing right now`}
           </span>
-        ) : played ? (
-          <span className="game-who muted">last played {describeAgo(played)}</span>
+        ) : idleNote ? (
+          <span className="game-who muted">{idleNote}</span>
         ) : null}
         <div className="game-actions">
-          {game.kind === 'server' ? (
+          {isServer ? (
             <button className="button primary" data-testid={`game-copy-${game.id}`} onClick={copyAddress}>
               <Copy size={13} />
               {copied ? 'copied' : 'copy address'}
             </button>
+          ) : live ? (
+            <>
+              <button
+                className="button live"
+                data-testid={`game-join-${game.id}`}
+                onClick={onLaunch}
+              >
+                <Gamepad size={13} />
+                join{players.length > 0 ? ` · ${players.length} in` : ''}
+              </button>
+              <a
+                className="button"
+                title="open in its own tab"
+                href={game.url}
+                target="_blank"
+                rel="noreferrer noopener"
+              >
+                <External size={13} />
+              </a>
+            </>
           ) : (
             <>
               <button className="button primary" data-testid={`game-launch-${game.id}`} onClick={onLaunch}>
@@ -235,6 +459,18 @@ function GameCard({ game, players, canManage, onLaunch, onRemove }) {
             </>
           )}
         </div>
+        {!live && onRally && (
+          <button
+            className={rallied ? 'game-rally on' : 'game-rally'}
+            data-testid={`game-rally-${game.id}`}
+            aria-pressed={rallied}
+            title={rallied ? 'stand down your rally' : 'ping the circle — “I want to play this”'}
+            onClick={() => onRally(rallied ? null : game)}
+          >
+            <Bell size={12} />
+            {rallied ? 'you rallied — waiting for others' : 'rally the circle to play'}
+          </button>
+        )}
       </div>
     </li>
   );
@@ -306,13 +542,19 @@ export default function Overview({
   onSelectChannel,
   onVoiceJoin,
   onLaunchGame,
+  onRally,
   onRsvp,
   onSave,
   onAddNotice,
   onRemoveNotice,
 }) {
+  const [tab, setTab] = useState(readTab);
   const [editing, setEditing] = useState(false);
   const [addingGame, setAddingGame] = useState(false);
+  const [filter, setFilter] = useState('all');
+  // Bumped when a card's star flips, so the shelf re-sorts live-first /
+  // starred / recent without the parent tracking each card's state.
+  const [favTick, setFavTick] = useState(0);
   const [draft, setDraft] = useState('');
   const [digest, setDigest] = useState([]);
   // Countdown and "x min ago" labels drift; tick them along while open.
@@ -321,6 +563,11 @@ export default function Overview({
     const t = setInterval(() => setNow(Date.now()), 30000);
     return () => clearInterval(t);
   }, []);
+
+  const goTab = (next) => {
+    setTab(next);
+    writeTab(next);
+  };
 
   // Re-pull the digest whenever anything landed for this circle
   // (digestKey folds in lastSeq + the local-store revision).
@@ -334,22 +581,77 @@ export default function Overview({
   }, [server.id, digestKey]);
 
   const overview = server.overview ?? null;
-  const event = overview?.event ?? null;
   const games = overview?.games ?? [];
+  const gamesById = Object.fromEntries(games.map((g) => [g.id, g]));
+  // The schedule: the events array, or a lone legacy event from an older
+  // client's payload. A just-passed event lingers as "up next" for a grace
+  // window, then drops out of the upcoming list.
+  const events = overview?.events?.length
+    ? overview.events
+    : overview?.event
+      ? [{ id: 'legacy', ...overview.event }]
+      : [];
+  const EVENT_GRACE = 6 * 3600e3;
+  const upcoming = events.filter((e) => e.at >= now - EVENT_GRACE).sort((a, b) => a.at - b.at);
+  const soonest = upcoming[0] ?? null;
+  // Game nights: upcoming events tied to a game still on the shelf — these
+  // also surface on the Play tab, next to the shelf they belong with.
+  const gameNights = upcoming.filter((e) => e.gameId && gamesById[e.gameId]);
+  // Who said "I'm in" for the event at this timestamp (RSVPs key on the time).
+  const goingFor = (at) =>
+    Object.entries(server.rsvps ?? {})
+      .filter(([, v]) => v.at === at)
+      .map(([handle]) => handle);
   // Live claims: game id -> member handles playing it right now.
   const playingBy = {};
   for (const [handle, entry] of Object.entries(server.presence ?? {})) {
     const g = freshPresence(entry, now);
     if (g) (playingBy[g.id] ??= []).push(handle);
   }
-  const liveGames = games.filter((g) => (playingBy[g.id] ?? []).length > 0).length;
-  // Who said "I'm in" for THIS event (answers are keyed to its timestamp).
-  const going = event
-    ? Object.entries(server.rsvps ?? {})
-        .filter(([, v]) => v.at === event.at)
-        .map(([handle]) => handle)
-    : [];
-  const iAmIn = going.includes(me);
+  const liveGames = games.filter((g) => (playingBy[g.id] ?? []).length > 0);
+  // Open rallies: game -> who wants to play it right now. A game that's
+  // already live is joinable, so presence supersedes its rally; a rally for
+  // a game no longer on the shelf is dropped (nothing to launch).
+  const wantBy = {};
+  for (const [handle, entry] of Object.entries(server.wants ?? {})) {
+    const w = freshWant(entry, now);
+    if (!w) continue;
+    const g = games.find((x) => x.id === w.id);
+    if (!g || (playingBy[g.id]?.length ?? 0) > 0) continue;
+    (wantBy[g.id] ??= { game: g, who: [] }).who.push(handle);
+  }
+  const rallies = Object.values(wantBy);
+  const myWant = freshWant(server.wants?.[me], now);
+  // The band features whoever has the most players in; ties go to a web game,
+  // since that one you can actually join in place.
+  const bandGame = liveGames
+    .slice()
+    .sort((a, b) => {
+      const byPlayers = (playingBy[b.id]?.length ?? 0) - (playingBy[a.id]?.length ?? 0);
+      if (byPlayers) return byPlayers;
+      return (a.kind === 'server' ? 1 : 0) - (b.kind === 'server' ? 1 : 0);
+    })[0];
+
+  // Device-local + presence truths, as pure accessors the shelf rules read.
+  // favTick is referenced so a star flip recomputes the order.
+  void favTick;
+  const facts = {
+    isLive: (id) => (playingBy[id]?.length ?? 0) > 0,
+    isFav: (id) => isFavorite(id),
+    playedAt: (id) => lastPlayed(id),
+  };
+  const shownGames = sortGames(
+    games.filter((g) => matchesFilter(g, filter, facts)),
+    facts
+  );
+  // Offer a filter chip only when it would land on something — no dead ends.
+  const filterChips = ['all'].concat(
+    ['live', 'favorites', 'recent', 'web', 'servers'].filter((f) =>
+      games.some((g) => matchesFilter(g, f, facts))
+    )
+  );
+  const showFilters = games.length >= 3 && filterChips.length > 2;
+
   const saveGames = (next) => onSave({ ...(overview ?? {}), games: next });
   const notices = server.notices ?? [];
   const voiceRooms = server.voiceChannels ?? ['lounge'];
@@ -363,6 +665,11 @@ export default function Overview({
     return (db.last?.ts ?? 0) - (da.last?.ts ?? 0);
   });
 
+  const launchFromShelf = (g) => {
+    setAddingGame(false);
+    onLaunchGame(g);
+  };
+
   return (
     <main className="messages-pane overview-pane" data-testid="overview-pane">
       <header className="pane-head">
@@ -372,12 +679,36 @@ export default function Overview({
           </span>
           game hub
         </span>
+        {!editing && (
+          <span className="hub-tabs" role="tablist" aria-label="game hub view">
+            <button
+              className={tab === 'play' ? 'hub-tab on' : 'hub-tab'}
+              role="tab"
+              aria-selected={tab === 'play'}
+              data-testid="overview-tab-play"
+              onClick={() => goTab('play')}
+            >
+              play
+            </button>
+            <button
+              className={tab === 'home' ? 'hub-tab on' : 'hub-tab'}
+              role="tab"
+              aria-selected={tab === 'home'}
+              data-testid="overview-tab-home"
+              onClick={() => goTab('home')}
+            >
+              home
+            </button>
+          </span>
+        )}
         {canManage && !editing && (
           <span className="pane-actions">
-            <button className="button" data-testid="overview-edit" onClick={() => setEditing(true)}>
-              customize
-            </button>
-            {!addingGame && (
+            {tab === 'home' && (
+              <button className="button" data-testid="overview-edit" onClick={() => setEditing(true)}>
+                customize
+              </button>
+            )}
+            {tab === 'play' && !addingGame && (
               <button className="button" data-testid="game-add" onClick={() => setAddingGame(true)}>
                 <Plus size={13} />
                 register a game
@@ -387,23 +718,6 @@ export default function Overview({
         )}
       </header>
       <div className="scroll overview-scroll">
-        {!editing && (
-          <section className="hub-about">
-            {overview?.blurb && (
-              <p className="overview-blurb" data-testid="overview-blurb">
-                {overview.blurb}
-              </p>
-            )}
-            <div className="overview-stats mono">
-              <span>{server.members.length} member{server.members.length === 1 ? '' : 's'}</span>
-              <span>·</span>
-              <span data-testid="overview-unread-total">
-                {unreadTotal > 0 ? `${unreadTotal} unread` : 'all caught up'}
-              </span>
-            </div>
-          </section>
-        )}
-
         {editing ? (
           <section className="overview-section">
             <span className="overline">customize</span>
@@ -411,8 +725,9 @@ export default function Overview({
               // Remount when a remote edit lands while the form is open:
               // saving a form seeded from the old overview would silently
               // overwrite the other admin's newer changes.
-              key={JSON.stringify([overview?.blurb, overview?.links, overview?.event])}
+              key={JSON.stringify([overview?.blurb, overview?.links, overview?.events, overview?.event])}
               overview={overview}
+              games={games}
               onSave={(ov) => {
                 setEditing(false);
                 // The form edits the written half; the shelf rides along.
@@ -421,67 +736,119 @@ export default function Overview({
               onCancel={() => setEditing(false)}
             />
           </section>
-        ) : (
+        ) : tab === 'play' ? (
           <>
-            {event && (
-              <section className="overview-upnext hub-hero" data-testid="overview-event">
-                <div className="hub-hero-body">
-                  <span className="wm-tag">
-                    up next · <span data-testid="overview-countdown">{describeUntil(event.at, now)}</span>
-                  </span>
-                  <strong className="upnext-title hub-hero-title">{event.title}</strong>
-                  <p className="upnext-note">
-                    <span className="upnext-when mono">
-                      {new Date(event.at).toLocaleString([], {
-                        weekday: 'short',
-                        month: 'short',
-                        day: 'numeric',
-                        hour: '2-digit',
-                        minute: '2-digit',
-                      })}
-                    </span>
-                    {event.note && <> — {event.note}</>}
-                  </p>
-                  {canSend && (
-                    <div className="hub-rsvp">
-                      <button
-                        className={iAmIn ? 'button live' : 'button primary'}
-                        data-testid="rsvp-toggle"
-                        onClick={() => onRsvp(event.at, !iAmIn)}
-                      >
-                        {iAmIn ? <Check size={13} /> : null}
-                        {iAmIn ? ' you\u2019re in' : 'I\u2019m in'}
-                      </button>
-                      {going.length > 0 && (
-                        <span className="hub-going" data-testid="rsvp-going">
-                          <span className="hub-going-stack">
-                            {going.slice(0, 5).map((p) => (
-                              <Seal key={p} name={p} size={20} title={p} />
-                            ))}
-                          </span>
-                          {going.length} going
-                        </span>
+            {bandGame ? (
+              <LiveBand
+                game={bandGame}
+                players={playingBy[bandGame.id] ?? []}
+                me={me}
+                onJoin={() => launchFromShelf(bandGame)}
+              />
+            ) : games.length > 0 && rallies.length === 0 ? (
+              <p className="hub-nudge" data-testid="hub-quiet">
+                No one&rsquo;s playing right now — launch one below, or rally the circle to
+                gather a game.
+              </p>
+            ) : null}
+
+            {rallies.length > 0 && (
+              <section className="hub-rallies" data-testid="hub-rallies">
+                <span className="overline">rallying</span>
+                <ul className="rally-list">
+                  {rallies.map(({ game: g, who }) => (
+                    <li className="rally-row" key={g.id} data-testid={`rally-${g.id}`}>
+                      <span className="game-who-stack">
+                        {who.slice(0, 3).map((p) => (
+                          <Seal key={p} name={p} size={22} title={p} />
+                        ))}
+                      </span>
+                      <span className="rally-text">
+                        {ralliersLabel(who, me)} <strong>{g.name}</strong>
+                      </span>
+                      {g.kind === 'server' ? (
+                        <span className="rally-host mono">{gameHost(g)}</span>
+                      ) : (
+                        <button
+                          className="button live rally-join"
+                          data-testid={`rally-join-${g.id}`}
+                          onClick={() => launchFromShelf(g)}
+                        >
+                          <Gamepad size={13} />
+                          join in
+                        </button>
                       )}
-                    </div>
-                  )}
-                </div>
-                {(() => {
-                  const d = event.at - now;
-                  const [n, u] =
-                    d <= 0
-                      ? ['now', 'happening']
-                      : d < 2 * 3600e3
-                        ? [Math.max(1, Math.round(d / 60e3)), 'min to go']
-                        : d < 48 * 3600e3
-                          ? [Math.round(d / 3600e3), 'hours to go']
-                          : [Math.round(d / 86400e3), 'days to go'];
-                  return (
-                    <div className="hub-count" aria-hidden="true">
-                      <span className="n">{n}</span>
-                      <span className="u">{u}</span>
-                    </div>
-                  );
-                })()}
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )}
+
+            {gameNights.length > 0 && (
+              <section className="hub-nights" data-testid="hub-nights">
+                <span className="overline">game nights</span>
+                <ul className="nights-list">
+                  {gameNights.map((ev) => {
+                    const g = gamesById[ev.gameId];
+                    const going = goingFor(ev.at);
+                    const iAmIn = going.includes(me);
+                    const live = (playingBy[g.id]?.length ?? 0) > 0;
+                    return (
+                      <li className="night-row" key={ev.id} data-testid={`night-${ev.id}`}>
+                        <span className="night-mark" aria-hidden="true">
+                          <Clock size={14} />
+                        </span>
+                        <div className="night-body">
+                          <span className="night-title">
+                            {ev.title} <span className="night-game">· {g.name}</span>
+                          </span>
+                          <span className="night-when mono">
+                            {new Date(ev.at).toLocaleString([], {
+                              weekday: 'short',
+                              month: 'short',
+                              day: 'numeric',
+                              hour: '2-digit',
+                              minute: '2-digit',
+                            })}
+                            {' · '}
+                            {describeUntil(ev.at, now)}
+                            {ev.note ? ` — ${ev.note}` : ''}
+                          </span>
+                        </div>
+                        {going.length > 0 && (
+                          <span className="night-going" data-testid={`night-going-${ev.id}`}>
+                            <span className="game-who-stack">
+                              {going.slice(0, 3).map((p) => (
+                                <Seal key={p} name={p} size={20} title={p} />
+                              ))}
+                            </span>
+                            {going.length}
+                          </span>
+                        )}
+                        {live && g.kind !== 'server' ? (
+                          <button
+                            className="button live night-action"
+                            onClick={() => launchFromShelf(g)}
+                          >
+                            <Gamepad size={13} />
+                            join now
+                          </button>
+                        ) : (
+                          canSend && (
+                            <button
+                              className={iAmIn ? 'button live night-action' : 'button night-action'}
+                              data-testid={`night-rsvp-${ev.id}`}
+                              onClick={() => onRsvp(ev.at, !iAmIn)}
+                            >
+                              {iAmIn ? <Check size={13} /> : null}
+                              {iAmIn ? ' in' : 'I’m in'}
+                            </button>
+                          )
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
               </section>
             )}
 
@@ -491,23 +858,50 @@ export default function Overview({
                 {games.length > 0 && (
                   <span className="shelf-meta">
                     {games.length} game{games.length === 1 ? '' : 's'}
-                    {liveGames > 0 && <span className="shelf-live"> · {liveGames} live</span>}
+                    {liveGames.length > 0 && <span className="shelf-live"> · {liveGames.length} live</span>}
                   </span>
                 )}
               </span>
+
+              {showFilters && (
+                <div className="shelf-filters" role="group" aria-label="filter the shelf">
+                  {filterChips.map((f) => (
+                    <button
+                      key={f}
+                      className={filter === f ? 'fchip on' : 'fchip'}
+                      data-testid={`game-filter-${f}`}
+                      aria-pressed={filter === f}
+                      onClick={() => setFilter(f)}
+                    >
+                      {f === 'live' && <span className="fchip-dot" aria-hidden="true" />}
+                      {f === 'favorites' && <span aria-hidden="true">★ </span>}
+                      {FILTER_LABEL[f]}
+                    </button>
+                  ))}
+                </div>
+              )}
+
               {games.length > 0 || canManage ? (
                 <ul className="game-shelf" data-testid="game-shelf">
-                  {games.map((g) => (
+                  {shownGames.map((g) => (
                     <GameCard
                       key={g.id}
                       game={g}
                       players={playingBy[g.id] ?? []}
                       canManage={canManage}
-                      onLaunch={() => onLaunchGame(g)}
+                      rallied={canSend && myWant?.id === g.id}
+                      onLaunch={() => launchFromShelf(g)}
+                      onRally={canSend ? onRally : undefined}
                       onRemove={() => saveGames(games.filter((x) => x.id !== g.id))}
+                      onFavorite={() => setFavTick((n) => n + 1)}
                     />
                   ))}
-                  {canManage && (
+                  {games.length > 0 && shownGames.length === 0 && (
+                    <li className="shelf-empty-filter muted" data-testid="game-filter-empty">
+                      Nothing here under “{FILTER_LABEL[filter]}”.
+                    </li>
+                  )}
+                  {canManage && filter === 'all' && (
                     <li className="game-card add-card">
                       {addingGame ? (
                         <AddGameForm
@@ -540,7 +934,150 @@ export default function Overview({
                   No games yet. Add one and it shows up here for the whole circle.
                 </p>
               )}
+              <p className="shelf-honesty muted" data-testid="shelf-honesty">
+                Games live on their own servers — each card names where. That host sees your
+                connection, never your chat.
+              </p>
             </section>
+
+            <p className="hub-jump muted">
+              Your circle&rsquo;s briefing — next event, room catch-up, noticeboard —{' '}
+              <button className="linklike" data-testid="hub-jump-home" onClick={() => goTab('home')}>
+                lives under Home →
+              </button>
+            </p>
+          </>
+        ) : (
+          <>
+            <section className="hub-about">
+              {overview?.blurb && (
+                <p className="overview-blurb" data-testid="overview-blurb">
+                  {overview.blurb}
+                </p>
+              )}
+              <div className="overview-stats mono">
+                <span>{server.members.length} member{server.members.length === 1 ? '' : 's'}</span>
+                <span>·</span>
+                <span data-testid="overview-unread-total">
+                  {unreadTotal > 0 ? `${unreadTotal} unread` : 'all caught up'}
+                </span>
+              </div>
+            </section>
+
+            {soonest &&
+              (() => {
+                const going = goingFor(soonest.at);
+                const iAmIn = going.includes(me);
+                const heroGame = soonest.gameId ? gamesById[soonest.gameId] : null;
+                return (
+                  <section className="overview-upnext hub-hero" data-testid="overview-event">
+                    <div className="hub-hero-body">
+                      <span className="wm-tag">
+                        up next ·{' '}
+                        <span data-testid="overview-countdown">{describeUntil(soonest.at, now)}</span>
+                      </span>
+                      <strong className="upnext-title hub-hero-title">
+                        {soonest.title}
+                        {heroGame && <span className="hero-game"> · {heroGame.name}</span>}
+                      </strong>
+                      <p className="upnext-note">
+                        <span className="upnext-when mono">
+                          {new Date(soonest.at).toLocaleString([], {
+                            weekday: 'short',
+                            month: 'short',
+                            day: 'numeric',
+                            hour: '2-digit',
+                            minute: '2-digit',
+                          })}
+                        </span>
+                        {soonest.note && <> — {soonest.note}</>}
+                      </p>
+                      {canSend && (
+                        <div className="hub-rsvp">
+                          <button
+                            className={iAmIn ? 'button live' : 'button primary'}
+                            data-testid="rsvp-toggle"
+                            onClick={() => onRsvp(soonest.at, !iAmIn)}
+                          >
+                            {iAmIn ? <Check size={13} /> : null}
+                            {iAmIn ? ' you’re in' : 'I’m in'}
+                          </button>
+                          {going.length > 0 && (
+                            <span className="hub-going" data-testid="rsvp-going">
+                              <span className="hub-going-stack">
+                                {going.slice(0, 5).map((p) => (
+                                  <Seal key={p} name={p} size={20} title={p} />
+                                ))}
+                              </span>
+                              {going.length} going
+                            </span>
+                          )}
+                        </div>
+                      )}
+                    </div>
+                    {(() => {
+                      const d = soonest.at - now;
+                      const [n, u] =
+                        d <= 0
+                          ? ['now', 'happening']
+                          : d < 2 * 3600e3
+                            ? [Math.max(1, Math.round(d / 60e3)), 'min to go']
+                            : d < 48 * 3600e3
+                              ? [Math.round(d / 3600e3), 'hours to go']
+                              : [Math.round(d / 86400e3), 'days to go'];
+                      return (
+                        <div className="hub-count" aria-hidden="true">
+                          <span className="n">{n}</span>
+                          <span className="u">{u}</span>
+                        </div>
+                      );
+                    })()}
+                  </section>
+                );
+              })()}
+
+            {upcoming.length > 1 && (
+              <section className="overview-section">
+                <span className="overline">on the calendar</span>
+                <ul className="overview-rooms cal-list">
+                  {upcoming.slice(1).map((ev) => {
+                    const going = goingFor(ev.at);
+                    const iAmIn = going.includes(me);
+                    const g = ev.gameId ? gamesById[ev.gameId] : null;
+                    return (
+                      <li key={ev.id}>
+                        <div className="overview-room cal-row" data-testid={`cal-${ev.id}`}>
+                          <span className="glyph">
+                            <Clock size={13} />
+                          </span>
+                          <span className="room">{ev.title}</span>
+                          <span className="last">
+                            {new Date(ev.at).toLocaleString([], {
+                              weekday: 'short',
+                              month: 'short',
+                              day: 'numeric',
+                              hour: '2-digit',
+                              minute: '2-digit',
+                            })}
+                            {g ? ` · ${g.name}` : ''}
+                          </span>
+                          <span className="when mono">{describeUntil(ev.at, now)}</span>
+                          {canSend && (
+                            <button
+                              className={iAmIn ? 'button live cal-rsvp' : 'button cal-rsvp'}
+                              data-testid={`cal-rsvp-${ev.id}`}
+                              onClick={() => onRsvp(ev.at, !iAmIn)}
+                            >
+                              {iAmIn ? 'in' : 'I’m in'}
+                            </button>
+                          )}
+                        </div>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </section>
+            )}
 
             <section className="overview-section">
               <span className="overline">while you were out</span>
@@ -709,7 +1246,6 @@ export default function Overview({
             )}
           </>
         )}
-
       </div>
     </main>
   );

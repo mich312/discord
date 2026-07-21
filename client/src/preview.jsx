@@ -47,7 +47,17 @@ const servers = [
       bob: { playing: { id: 'g1', name: 'Hex Gambit', kind: 'activity' }, ts: now - 41 * 60e3 },
       dana: { playing: { id: 'g1', name: 'Hex Gambit', kind: 'activity' }, ts: now - 41 * 60e3 },
     },
-    rsvps: { bob: { at: now + 52 * H, ts: now - 3 * H }, dana: { at: now + 52 * H, ts: now - 2 * H }, marek: { at: now + 52 * H, ts: now - H } },
+    // An open rally: charlie's up for Tanks and hoping someone joins in.
+    wants: {
+      charlie: { want: { id: 'g3', name: 'Tanks! Night Ops', kind: 'activity' }, ts: now - 4 * 60e3 },
+    },
+    rsvps: {
+      bob: { at: now + 52 * H, ts: now - 3 * H },
+      dana: { at: now + 52 * H, ts: now - 2 * H },
+      marek: { at: now + 52 * H, ts: now - H },
+      alice: { at: now + 26 * H, ts: now - 2 * H },
+      charlie: { at: now + 26 * H, ts: now - H },
+    },
     overview: {
       games: [
         { id: 'g1', name: 'Hex Gambit', url: '/games/hexgambit.html', kind: 'activity', note: 'bundled demo — local two-player chess', glyph: '♞' },
@@ -61,11 +71,21 @@ const servers = [
         { label: 'stint sheet', url: 'https://example.com/stints' },
         { label: 'tyre pressure log', url: 'https://example.com/tyres' },
       ],
-      event: {
-        title: 'Qualifying — Round 4, Spa',
-        at: now + 52 * H,
-        note: 'Trailer leaves 6am. Pack the spare diffuser tonight.',
-      },
+      events: [
+        {
+          id: 'ev1',
+          title: 'Qualifying — Round 4, Spa',
+          at: now + 52 * H,
+          note: 'Trailer leaves 6am. Pack the spare diffuser tonight.',
+        },
+        {
+          id: 'ev2',
+          title: 'Hex Gambit ladder night',
+          at: now + 26 * H,
+          note: 'best of five, bring your openings',
+          gameId: 'g1',
+        },
+      ],
     },
     notices: [
       { id: 'n1', text: 'Scrutineering forms due Thursday — hand them to dana.', ts: now - 5 * H, author: 'dana' },
@@ -366,6 +386,7 @@ function PreviewShell({ empty = false, banner = false, modal = null, palette = f
                   setActive({ ...active, channel: activeServer.channels[0] });
                   setLiveGame(g);
                 }}
+                onRally={noop}
                 onRsvp={noop}
                 onSave={(ov) => setOverviews((o) => ({ ...o, [activeServer.id]: ov }))}
                 onAddNotice={(text) =>

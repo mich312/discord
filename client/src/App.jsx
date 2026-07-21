@@ -19,7 +19,7 @@ import { callChatChannel } from './lib/controller.js';
 import Settings from './components/Settings.jsx';
 import Seal from './components/Seal.jsx';
 import { Key, Bell, ShieldCheck, LinkGlyph, Sun, QuorumGlyph, Gear, LogOut } from './components/icons.jsx';
-import { markPlayed } from './lib/games.js';
+import { markPlayed, bumpPlayCount } from './lib/games.js';
 
 /** Content identity of a message for merging a load snapshot with live
     arrivals — same idea as history.js's fingerprint, plus the system flag. */
@@ -319,6 +319,7 @@ export default function App() {
     setGame(g);
     setDrawer(null);
     markPlayed(g.id);
+    bumpPlayCount(g.id);
     if (announce && !activeServer?.restored) {
       controllerRef.current?.sendGameCard(server, ch, g).catch(() => {});
     }
@@ -335,6 +336,8 @@ export default function App() {
     if (game && server && !activeServer?.restored) {
       playingRef.current = { server, game };
       c.setPlaying(server, game).catch(() => {});
+      // Being in a game supersedes any rally I sent for it — stand it down.
+      c.setWant(server, null).catch(() => {});
     } else if (!game && prev) {
       playingRef.current = null;
       c.setPlaying(prev.server, null).catch(() => {});
@@ -692,6 +695,11 @@ export default function App() {
                     .catch((e) => dispatch({ type: 'toast', text: `voice: ${e.message}` }))
                 }
                 onLaunchGame={launchGame}
+                onRally={(g) =>
+                  controllerRef.current
+                    .setWant(server, g)
+                    .catch((e) => dispatch({ type: 'toast', text: e.message }))
+                }
                 onRsvp={(at, going) =>
                   controllerRef.current
                     .rsvp(server, at, going)

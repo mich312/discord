@@ -6,10 +6,12 @@ import assert from 'node:assert/strict';
 import {
   BLURB_MAX,
   NOTICES_MAX,
+  EVENTS_MAX,
   canRemoveNotice,
   describeAgo,
   describeUntil,
   mergeNotices,
+  normalizeEvents,
   normalizeNotice,
   normalizeOverview,
   reconcileMeta,
@@ -22,18 +24,25 @@ const HOUR = 3600e3;
 const DAY = 86400e3;
 
 test('normalizeOverview keeps only whitelisted, bounded fields', () => {
-  const ov = normalizeOverview({
-    blurb: ' hello ',
-    links: [
-      { label: 'a', url: 'https://a.example' },
-      { label: 'no url dropped' },
-    ],
-    event: { title: 'race day', at: NOW + DAY, note: 'gates at 8', extra: 'dropped' },
-    smuggled: { huge: 'x' },
-  });
+  const ov = normalizeOverview(
+    {
+      blurb: ' hello ',
+      links: [
+        { label: 'a', url: 'https://a.example' },
+        { label: 'no url dropped' },
+      ],
+      events: [
+        { id: 'ev1', title: 'race day', at: NOW + DAY, note: 'gates at 8', gameId: 'g1', extra: 'dropped' },
+      ],
+      smuggled: { huge: 'x' },
+    },
+    NOW
+  );
   assert.deepEqual(ov, {
     blurb: 'hello',
     links: [{ label: 'a', url: 'https://a.example' }],
+    events: [{ id: 'ev1', title: 'race day', at: NOW + DAY, note: 'gates at 8', gameId: 'g1' }],
+    // A legacy single-event mirror rides along for older clients.
     event: { title: 'race day', at: NOW + DAY, note: 'gates at 8' },
   });
 });
@@ -46,11 +55,58 @@ test('normalizeOverview bounds the blurb and rejects empty docs', () => {
   assert.equal(normalizeOverview('nope'), null);
 });
 
-test('event needs a title and a finite time', () => {
-  assert.equal(normalizeOverview({ event: { title: '', at: NOW } }), null);
-  assert.equal(normalizeOverview({ event: { title: 'x', at: 'soon' } }), null);
-  const ok = normalizeOverview({ event: { title: 'x', at: NOW, note: '' } });
+test('an event needs a title and a finite time', () => {
+  assert.equal(normalizeOverview({ events: [{ title: '', at: NOW }] }, NOW), null);
+  assert.equal(normalizeOverview({ events: [{ title: 'x', at: 'soon' }] }, NOW), null);
+  const ok = normalizeOverview({ events: [{ id: 'e1', title: 'x', at: NOW, note: '' }] }, NOW);
+  assert.deepEqual(ok.events, [{ id: 'e1', title: 'x', at: NOW }]);
   assert.deepEqual(ok.event, { title: 'x', at: NOW });
+});
+
+test('normalizeOverview reads a legacy single event into the events array', () => {
+  const ov = normalizeOverview({ event: { title: 'race day', at: NOW + DAY } }, NOW);
+  assert.equal(ov.events.length, 1);
+  assert.equal(ov.events[0].title, 'race day');
+  assert.ok(ov.events[0].id, 'a stable id is derived when none was given');
+  assert.deepEqual(ov.event, { title: 'race day', at: NOW + DAY }, 'mirror still written');
+});
+
+test('the legacy mirror is the soonest upcoming event, else the most recent past', () => {
+  const events = [
+    { id: 'past', title: 'gone', at: NOW - 2 * DAY },
+    { id: 'later', title: 'after', at: NOW + DAY },
+    { id: 'soon', title: 'next', at: NOW + HOUR },
+  ];
+  const ov = normalizeOverview({ events }, NOW);
+  assert.deepEqual(ov.events.map((e) => e.id), ['past', 'soon', 'later'], 'sorted soonest-first');
+  assert.equal(ov.event.title, 'next', 'soonest upcoming is mirrored');
+  const allPast = normalizeOverview(
+    { events: [{ id: 'a', title: 'A', at: NOW - 3 * DAY }, { id: 'b', title: 'B', at: NOW - DAY }] },
+    NOW
+  );
+  assert.equal(allPast.event.title, 'B', 'no upcoming → most recent past');
+});
+
+test('normalizeEvents bounds, de-dupes by id, and tolerates junk', () => {
+  const many = Array.from({ length: EVENTS_MAX + 6 }, (_, i) => ({
+    id: `e${i}`,
+    title: `t${i}`,
+    at: NOW + i * HOUR,
+  }));
+  assert.equal(normalizeEvents(many).length, EVENTS_MAX);
+  const dup = normalizeEvents([
+    { id: 'x', title: 'first', at: NOW + DAY },
+    { id: 'x', title: 'dup', at: NOW + HOUR },
+  ]);
+  assert.deepEqual(dup.map((e) => e.title), ['first'], 'first id wins, dup dropped');
+  assert.deepEqual(normalizeEvents('nope'), []);
+});
+
+test('gameId is kept, bounded, and optional', () => {
+  const ev = normalizeOverview({ events: [{ id: 'e', title: 't', at: NOW, gameId: 'g1' }] }, NOW).events[0];
+  assert.equal(ev.gameId, 'g1');
+  const none = normalizeOverview({ events: [{ id: 'e', title: 't', at: NOW }] }, NOW).events[0];
+  assert.equal('gameId' in none, false);
 });
 
 test('normalizeNotice takes the author from the sender, never the payload', () => {

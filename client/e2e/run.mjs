@@ -101,6 +101,9 @@ try {
   await alice.waitForSelector('[data-testid=overview-pane]');
 
   console.log('2b. alice sets up the home base (event + blurb + link + notice)');
+  // The hub leads with the Play (games) face; the briefing lives under Home.
+  // Switching sticks per-device, so this one click holds for later visits too.
+  await alice.click('[data-testid=overview-tab-home]');
   await alice.click('[data-testid=overview-edit]');
   const eventAt = new Date(Date.now() + 52 * 3600 * 1000);
   const pad2 = (n) => String(n).padStart(2, '0');
@@ -162,6 +165,8 @@ try {
   // bob landed on the home base; alice's setup reached him via the
   // encrypted meta rebroadcast that follows every add.
   await bob.waitForSelector('[data-testid=overview-pane]');
+  // bob lands on the Play face too; the briefing he's checking is under Home.
+  await bob.click('[data-testid=overview-tab-home]');
   await bob.waitForSelector('text=Pit crew HQ', { timeout: 10000 });
   await bob.waitForSelector('text=Qualifying at Spa', { timeout: 10000 });
   await bob.waitForSelector('text=Trailer leaves 6am Saturday', { timeout: 10000 });
