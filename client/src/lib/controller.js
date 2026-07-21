@@ -410,7 +410,7 @@ export class Controller {
       or '*' for the whole roster minus me. This is how a ring reaches a
       closed app; the relay learns only "these members should look now",
       never what the blob says. */
-  async sendEphemeral(serverId, content, notify) {
+  async sendEphemeral(serverId, content, notify, notifyKind) {
     const { blob, state } = await this.crypto('send', {
       group: serverId,
       text: JSON.stringify(content),
@@ -424,6 +424,9 @@ export class Controller {
       group: serverId,
       payload: b64.enc(blob),
       ...(names?.length ? { notify: names } : {}),
+      // Tells the relay which kind of nudge to push (defaults to a call);
+      // rallies label themselves so a closed app shows the right text.
+      ...(names?.length && notifyKind ? { notify_kind: notifyKind } : {}),
     });
   }
 
@@ -1293,7 +1296,9 @@ export class Controller {
     const want = gameRef ? normalizeGameRef(gameRef) : null;
     const ts = Date.now();
     this.setLiveWant(serverId, this.me, { want, ts });
-    await this.sendEphemeral(serverId, { k: 'want', want, ts });
+    // Starting a rally push-wakes offline members ("a rally was started");
+    // standing down (null ref) stays silent — nothing to gather around.
+    await this.sendEphemeral(serverId, { k: 'want', want, ts }, want ? '*' : undefined, 'rally');
   }
 
   setLiveWant(serverId, handle, entry) {

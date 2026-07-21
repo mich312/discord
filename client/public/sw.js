@@ -46,7 +46,7 @@ self.addEventListener('push', (event) => {
       // message notification and one circle never swallows another's.
       let tag = 'quorum';
       let requireInteraction = false;
-      const group = data.call ?? data.group ?? data.welcome ?? null;
+      const group = data.call ?? data.rally ?? data.group ?? data.welcome ?? null;
       const name = group ? await circleName(group) : null;
       if (data.welcome) {
         body = name ? `you were added to “${name}”` : 'you were added to a circle';
@@ -55,6 +55,9 @@ self.addEventListener('push', (event) => {
         body = name ? `incoming call in “${name}”` : 'incoming call';
         tag = `quorum-call-${data.call}`;
         requireInteraction = true; // a ring should stay up until acted on
+      } else if (data.rally) {
+        body = name ? `a rally was started in “${name}”` : 'a rally was started';
+        tag = `quorum-rally-${data.rally}`;
       } else if (data.group) {
         body = name ? `new message in “${name}”` : 'new encrypted message';
         tag = `quorum-msg-${data.group}`;
