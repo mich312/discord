@@ -1,14 +1,14 @@
 import React from 'react';
 import Seal from './Seal.jsx';
 import VoiceMeter from './VoiceMeter.jsx';
-import { Phone, Screen, X } from './icons.jsx';
+import { Phone, Screen, X, Mic, MicOff, Headphone, HeadphoneOff } from './icons.jsx';
 
 // The direct-call surface: an incoming ring to answer, an outgoing ring we're
 // placing, or the live 1:1 call itself. A direct call is an ad-hoc voice room
 // inside the circle's MLS group, so the media is E2EE exactly like a room
 // call — this panel is just the ringing/answer chrome around it. While the
 // call stage is open it owns the connected chrome, so only rings show here.
-export default function CallPanel({ voice, me, stageOpen, onAccept, onDecline, onCancel, onHangup, onOpen }) {
+export default function CallPanel({ voice, me, stageOpen, onAccept, onDecline, onCancel, onHangup, onToggleMute, onToggleDeafen, onOpen }) {
   // Incoming ring takes priority — someone is waiting on an answer.
   if (voice.ring) {
     return (
@@ -73,6 +73,26 @@ export default function CallPanel({ voice, me, stageOpen, onAccept, onDecline, o
             </li>
           ))}
         </ul>
+        {onToggleMute && !voice.listenOnly && (
+          <button
+            className={voice.muted ? 'call-btn muted-on' : 'call-btn'}
+            data-testid="call-mute"
+            title={voice.muted ? 'unmute your mic (M)' : 'mute your mic (M)'}
+            onClick={onToggleMute}
+          >
+            {voice.muted ? <MicOff size={14} /> : <Mic size={14} />}
+          </button>
+        )}
+        {onToggleDeafen && (
+          <button
+            className={voice.deafened ? 'call-btn muted-on' : 'call-btn'}
+            data-testid="call-deafen"
+            title={voice.deafened ? 'undeafen (D)' : 'deafen — mute everyone and your mic (D)'}
+            onClick={onToggleDeafen}
+          >
+            {voice.deafened ? <HeadphoneOff size={14} /> : <Headphone size={14} />}
+          </button>
+        )}
         <button className="call-btn" data-testid="call-open-stage" title="open the call view" onClick={onOpen}>
           <Screen size={14} /> open
         </button>

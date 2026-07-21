@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import Seal from './Seal.jsx';
 import VoiceMeter from './VoiceMeter.jsx';
-import { Wave, X, Lock, Screen, Mic, MicOff } from './icons.jsx';
+import { Wave, X, Lock, Screen, Mic, MicOff, Headphone, HeadphoneOff } from './icons.jsx';
 
 function timeOf(ts) {
   return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -46,6 +46,7 @@ export default function CallStage({
   onShare,
   onStopShare,
   onToggleMute,
+  onToggleDeafen,
   onLeave,
   onClose,
 }) {
@@ -91,12 +92,23 @@ export default function CallStage({
           {onToggleMute && !voice.listenOnly && (
             <button
               className={voice.muted ? 'call-btn muted-on' : 'call-btn'}
-              title={voice.muted ? 'unmute your mic' : 'mute your mic'}
+              title={voice.muted ? 'unmute your mic (M)' : 'mute your mic (M)'}
               data-testid="stage-mute"
               onClick={onToggleMute}
             >
               {voice.muted ? <MicOff size={14} /> : <Mic size={14} />}
               {voice.muted ? ' unmute' : ' mute'}
+            </button>
+          )}
+          {onToggleDeafen && (
+            <button
+              className={voice.deafened ? 'call-btn muted-on' : 'call-btn'}
+              title={voice.deafened ? 'undeafen — hear the call again (D)' : 'deafen — mute everyone and your mic (D)'}
+              data-testid="stage-deafen"
+              onClick={onToggleDeafen}
+            >
+              {voice.deafened ? <HeadphoneOff size={14} /> : <Headphone size={14} />}
+              {voice.deafened ? ' undeafen' : ' deafen'}
             </button>
           )}
           {iShare ? (
@@ -165,6 +177,16 @@ export default function CallStage({
                   )}
                   {p !== me && voice.mutedPeers?.includes(p) && (
                     <span className="bubble-badge muted-badge" data-testid={`bubble-muted-${p}`}>
+                      <MicOff size={11} /> muted
+                    </span>
+                  )}
+                  {p === me && voice.deafened && (
+                    <span className="bubble-badge muted-badge" data-testid="bubble-deafened-you">
+                      <HeadphoneOff size={11} /> deafened
+                    </span>
+                  )}
+                  {p === me && !voice.deafened && voice.muted && (
+                    <span className="bubble-badge muted-badge" data-testid="bubble-muted-you">
                       <MicOff size={11} /> muted
                     </span>
                   )}

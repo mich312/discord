@@ -1666,6 +1666,20 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
   border: 1px solid var(--hairline-strong);
   border-radius: 8px;
 }
+.settings-dsp { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--hairline); }
+.settings-dsp-head {
+  font: 600 var(--text-xs) var(--mono);
+  text-transform: uppercase;
+  letter-spacing: 0.1em;
+  color: var(--ink-mute);
+  margin-bottom: 8px;
+}
+.settings-toggle { display: flex; align-items: flex-start; gap: 10px; margin-top: 9px; cursor: pointer; }
+.settings-toggle input { width: auto; margin-top: 2px; accent-color: var(--accent); flex-shrink: 0; }
+.settings-toggle-body { display: flex; flex-direction: column; gap: 2px; }
+.settings-toggle-label { font: 500 var(--text-sm) var(--sans, inherit); color: var(--ink); }
+.settings-dsp > .fineprint { margin-top: 10px; }
+
 .settings-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .fineprint.warn { color: var(--danger); }
 .fineprint.ok { color: var(--ok); }

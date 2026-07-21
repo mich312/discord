@@ -78,6 +78,24 @@ export const MicOff = (p) => (
   </Svg>
 );
 
+// Headphones — the deafen glyph: a headband arc over two earcups.
+export const Headphone = (p) => (
+  <Svg {...p}>
+    <path d="M3 9.5V8a5 5 0 0 1 10 0v1.5" />
+    <rect x="2.2" y="9" width="2.8" height="4.2" rx="1.1" />
+    <rect x="11" y="9" width="2.8" height="4.2" rx="1.1" />
+  </Svg>
+);
+
+export const HeadphoneOff = (p) => (
+  <Svg {...p}>
+    <path d="M3 9.5V8a5 5 0 0 1 10 0v1.5" />
+    <rect x="2.2" y="9" width="2.8" height="4.2" rx="1.1" />
+    <rect x="11" y="9" width="2.8" height="4.2" rx="1.1" />
+    <path d="M2.3 2.3l11.4 11.4" />
+  </Svg>
+);
+
 export const Plus = (p) => (
   <Svg {...p}>
     <path d="M8 3.2v9.6M3.2 8h9.6" />

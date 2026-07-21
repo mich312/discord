@@ -36,6 +36,11 @@ export default function Settings({
   const [inputId, setInputId] = useState(voice?.inputDeviceId || '');
   const [outputId, setOutputId] = useState(voice?.outputDeviceId || '');
   const [needsMic, setNeedsMic] = useState(false);
+  const [processing, setProcessing] = useState({
+    echoCancellation: voice?.processing?.echoCancellation ?? true,
+    noiseSuppression: voice?.processing?.noiseSuppression ?? true,
+    autoGainControl: voice?.processing?.autoGainControl ?? true,
+  });
   const sinkSupported =
     typeof HTMLMediaElement !== 'undefined' && 'setSinkId' in HTMLMediaElement.prototype;
 
@@ -89,6 +94,17 @@ export default function Settings({
     setOutputId(id);
     voice?.setOutputDevice?.(id || null);
   }
+  function toggleProcessing(key) {
+    const next = { ...processing, [key]: !processing[key] };
+    setProcessing(next);
+    voice?.setAudioProcessing?.({ [key]: next[key] });
+  }
+
+  const dspOptions = [
+    ['noiseSuppression', 'Noise suppression', 'Gate out steady background noise — keyboards, fans, hum.'],
+    ['echoCancellation', 'Echo cancellation', 'Stop your speakers bleeding back into your mic on open speakers.'],
+    ['autoGainControl', 'Auto gain', 'Even out your level so you are not too quiet or clipping.'],
+  ];
 
   return (
     <div className="modal-backdrop" onClick={onClose}>
@@ -212,6 +228,28 @@ export default function Settings({
           <p className="fineprint muted">
             Output changes apply immediately; a new microphone switches live if you’re in a call.
           </p>
+
+          <div className="settings-dsp">
+            <div className="settings-dsp-head">mic processing</div>
+            {dspOptions.map(([key, label, hint]) => (
+              <label className="settings-toggle" key={key}>
+                <input
+                  type="checkbox"
+                  checked={processing[key]}
+                  onChange={() => toggleProcessing(key)}
+                  data-testid={`settings-dsp-${key}`}
+                />
+                <span className="settings-toggle-body">
+                  <span className="settings-toggle-label">{label}</span>
+                  <span className="fineprint muted">{hint}</span>
+                </span>
+              </label>
+            ))}
+            <p className="fineprint muted">
+              On by default. Turn them off for raw capture — good hardware, or sharing music where
+              the gate would clamp the quiet parts. Changes apply to a live call at once.
+            </p>
+          </div>
         </section>
 
         {/* Account */}
