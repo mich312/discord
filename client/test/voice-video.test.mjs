@@ -357,16 +357,6 @@ test('a remote join chimes, a here (catch-up) does not, and a leave chimes', asy
   assert.equal(FakeAudioContext.notes, 2, 'leave chimed');
 });
 
-test('deafened silences chimes', async () => {
-  setupGlobals();
-  const vm = makeManager('alice', []);
-  await vm.join('srv', 'lounge');
-  vm.setDeafened(true);
-  FakeAudioContext.notes = 0;
-  await vm.handleEnvelope('srv', 'bob', { k: 'voice', ch: 'lounge', action: 'join' });
-  assert.equal(FakeAudioContext.notes, 0, 'no chime while deafened');
-});
-
 test('turning call sounds off persists and suppresses chimes', async () => {
   setupGlobals();
   const vm = makeManager('alice', []);

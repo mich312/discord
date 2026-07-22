@@ -99,10 +99,11 @@ pub fn router(app: Arc<App>) -> Router {
             header::X_FRAME_OPTIONS,
             HeaderValue::from_static("DENY"),
         ))
-        // Voice channels need the microphone; nothing needs the rest.
+        // Voice calls need the microphone and camera (call-stage video);
+        // nothing needs the rest.
         .layer(SetResponseHeaderLayer::if_not_present(
             HeaderName::from_static("permissions-policy"),
-            HeaderValue::from_static("camera=(), geolocation=(), microphone=(self), payment=(), usb=()"),
+            HeaderValue::from_static("camera=(self), geolocation=(), microphone=(self), payment=(), usb=()"),
         ))
         .with_state(app)
 }

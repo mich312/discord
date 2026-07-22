@@ -269,8 +269,7 @@ export default function Settings({
               <span className="settings-toggle-body">
                 <span className="settings-toggle-label">Join &amp; leave chimes</span>
                 <span className="fineprint muted">
-                  A soft tone when someone enters or leaves the call you’re in. Silenced while
-                  you’re deafened.
+                  A soft tone when someone enters or leaves the call you’re in.
                 </span>
               </span>
             </label>

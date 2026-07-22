@@ -51,8 +51,8 @@ threat-model sections still apply verbatim.
   peer-to-peer; the server carries none of it. The mic runs through the
   browser's echo cancellation / noise suppression / auto-gain (all
   toggleable), and every leg is Opus with DTX + a voice bitrate cap so
-  silence costs nothing and a mesh stays affordable. Mute, deafen
-  (silence everyone + yourself), and — no mic → listen-only.
+  silence costs nothing and a mesh stays affordable. Mute, and — no mic
+  → listen-only.
 - **Call stage** — every call opens a dashboard: a bubble per
   participant with live speaking meters, camera video and screen sharing
   (each an extra renegotiated video track, still fully P2P — one person

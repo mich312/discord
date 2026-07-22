@@ -231,9 +231,9 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKey);
   }, []);
 
-  // In-call hotkeys, Discord-style: M toggles mute, D toggles deafen. Ignored
-  // while typing (composer, search) or with a modifier held, so they never
-  // eat a keystroke meant for text or a browser shortcut.
+  // In-call hotkey: M toggles mute. Ignored while typing (composer, search)
+  // or with a modifier held, so it never eats a keystroke meant for text or
+  // a browser shortcut.
   useEffect(() => {
     function onKey(e) {
       if (!state.voice.active) return;
@@ -245,14 +245,11 @@ export default function App() {
       if (k === 'm') {
         e.preventDefault();
         controllerRef.current.voice.setMuted(!state.voice.muted);
-      } else if (k === 'd') {
-        e.preventDefault();
-        controllerRef.current.voice.setDeafened(!state.voice.deafened);
       }
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
-  }, [state.voice.active, state.voice.muted, state.voice.deafened]);
+  }, [state.voice.active, state.voice.muted]);
 
   // Anything that opens above the workspace (modal, palette) takes over
   // from a drawer — never stack the two.
@@ -661,7 +658,6 @@ export default function App() {
             }
             onStopCamera={() => controllerRef.current.voice.stopCamera()}
             onToggleMute={() => controllerRef.current.voice.setMuted(!state.voice.muted)}
-            onToggleDeafen={() => controllerRef.current.voice.setDeafened(!state.voice.deafened)}
             onLeave={() => controllerRef.current.voice.leave()}
             onClose={closeStage}
           />
@@ -833,7 +829,6 @@ export default function App() {
           onCancel={() => controllerRef.current.voice.cancelCall()}
           onHangup={() => controllerRef.current.voice.leave()}
           onToggleMute={() => controllerRef.current.voice.setMuted(!state.voice.muted)}
-          onToggleDeafen={() => controllerRef.current.voice.setDeafened(!state.voice.deafened)}
           onOpen={openStage}
         />
         {state.toast && <div className="toast">{state.toast}</div>}
