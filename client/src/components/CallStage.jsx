@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import Seal from './Seal.jsx';
 import VoiceMeter from './VoiceMeter.jsx';
-import { Wave, X, Lock, Screen, Mic, MicOff, Headphone, HeadphoneOff, Camera, CameraOff } from './icons.jsx';
+import { Wave, X, Lock, Screen, Mic, MicOff, Camera, CameraOff } from './icons.jsx';
 
 function timeOf(ts) {
   return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -71,7 +71,6 @@ export default function CallStage({
   onCamera,
   onStopCamera,
   onToggleMute,
-  onToggleDeafen,
   onLeave,
   onClose,
 }) {
@@ -125,17 +124,6 @@ export default function CallStage({
             >
               {voice.muted ? <MicOff size={14} /> : <Mic size={14} />}
               {voice.muted ? ' unmute' : ' mute'}
-            </button>
-          )}
-          {onToggleDeafen && (
-            <button
-              className={voice.deafened ? 'call-btn muted-on' : 'call-btn'}
-              title={voice.deafened ? 'undeafen — hear the call again (D)' : 'deafen — mute everyone and your mic (D)'}
-              data-testid="stage-deafen"
-              onClick={onToggleDeafen}
-            >
-              {voice.deafened ? <HeadphoneOff size={14} /> : <Headphone size={14} />}
-              {voice.deafened ? ' undeafen' : ' deafen'}
             </button>
           )}
           {onCamera &&
@@ -227,12 +215,7 @@ export default function CallStage({
                       <MicOff size={11} /> muted
                     </span>
                   )}
-                  {p === me && voice.deafened && (
-                    <span className="bubble-badge muted-badge" data-testid="bubble-deafened-you">
-                      <HeadphoneOff size={11} /> deafened
-                    </span>
-                  )}
-                  {p === me && !voice.deafened && voice.muted && (
+                  {p === me && voice.muted && (
                     <span className="bubble-badge muted-badge" data-testid="bubble-muted-you">
                       <MicOff size={11} /> muted
                     </span>

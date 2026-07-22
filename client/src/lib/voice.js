@@ -110,8 +110,6 @@ export class VoiceManager {
     // drops a system line into the room's first text channel.
     this.onCallStarted = opts.onCallStarted ?? (() => {});
     this.muted = false; // my mic, track.enabled-level — peers hear silence
-    this.deafened = false; // silence every incoming leg locally (implies muted)
-    this.muteBeforeDeafen = false; // mute state to restore when un-deafening
     this.iceServers = opts.iceServers ?? DEFAULT_ICE;
     this.active = null; // {server, channel, stream}
     this.ring = null; // incoming direct call awaiting our answer: {server, room, from}
@@ -149,8 +147,7 @@ export class VoiceManager {
     this.inputDeviceId = ls?.getItem('quorum-audio-in') || null;
     this.outputDeviceId = ls?.getItem('quorum-audio-out') || null;
     // A short chime when someone joins or leaves the call you're in — on by
-    // default, suppressed while deafened (you asked for silence). Synthesised
-    // with WebAudio so there is no asset to ship or fetch.
+    // default. Synthesised with WebAudio so there is no asset to ship or fetch.
     this.callSounds = ls?.getItem('quorum-call-sounds') !== '0';
     this.chimeCtx = null;
     // Voice DSP the browser applies to the mic before it hits the wire. All
@@ -180,7 +177,6 @@ export class VoiceManager {
       active: this.active ? { server: this.active.server, channel: this.active.channel } : null,
       listenOnly: this.active ? !!this.listenOnly : false,
       muted: this.active ? !!this.muted : false,
-      deafened: this.active ? !!this.deafened : false,
       // Who has a live screen share in my current room (me included), and
       // whose display stream has actually arrived (a share announcement
       // lands before the renegotiated video track does).
@@ -232,9 +228,9 @@ export class VoiceManager {
   /** A short synthesised blip when someone comes or goes: a rising two-tone
       for a join, a falling one for a leave. No asset, no wire traffic — just
       a couple of oscillator notes on a lazily-created context. Suppressed
-      when the user turned sounds off or is deafened. */
+      when the user turned sounds off. */
   chime(kind) {
-    if (!this.callSounds || this.deafened) return;
+    if (!this.callSounds) return;
     if (typeof window === 'undefined') return;
     try {
       const Ctx = window.AudioContext || window.webkitAudioContext;
@@ -372,46 +368,12 @@ export class VoiceManager {
 
   /** Mute/unmute my mic without renegotiating: the track keeps flowing,
       disabled tracks carry silence. Announced so peers can show a mic-off
-      badge instead of wondering why someone is silent. Deliberately
-      unmuting also lifts deafen — you cannot talk into a call you cannot
-      hear, so the two-way silence a deafened mic implies would be a trap. */
+      badge instead of wondering why someone is silent. */
   setMuted(muted) {
-    muted = !!muted;
-    if (!muted && this.deafened) {
-      this.deafened = false;
-      this.applyDeafenToLegs();
-    }
-    this.applyMute(muted);
+    this.applyMute(!!muted);
   }
 
-  /** Deafen: stop hearing everyone (every incoming leg muted locally) — and,
-      like Discord, force your own mic off while deafened so you are not the
-      one person still broadcasting into a room you have tuned out. The mute
-      you had before is restored when you un-deafen. Purely local on the
-      receive side: no envelope, the relay never sees it; the forced mic mute
-      still travels so peers get the usual mic-off badge. */
-  setDeafened(deafened) {
-    deafened = !!deafened;
-    if (deafened === this.deafened) return;
-    this.deafened = deafened;
-    this.applyDeafenToLegs();
-    if (deafened) {
-      this.muteBeforeDeafen = this.muted;
-      this.applyMute(true);
-    } else {
-      this.applyMute(this.muteBeforeDeafen);
-    }
-  }
-
-  /** Silence (or restore) every remote leg's audio element to match the
-      deafen state. New legs pick this up in ontrack. */
-  applyDeafenToLegs() {
-    for (const peer of this.peers.values()) {
-      if (peer.audio) peer.audio.muted = this.deafened;
-    }
-  }
-
-  /** The wire-and-track half of muting, shared by setMuted and setDeafened. */
+  /** The wire-and-track half of muting. */
   applyMute(muted) {
     this.muted = !!muted;
     const stream = this.active?.stream;
@@ -535,7 +497,6 @@ export class VoiceManager {
     if (this.active) await this.leave();
     const stream = await this.captureAudio();
     this.muted = false; // every call starts open-mic; muting is a per-call act
-    this.deafened = false; // and hearing everyone — deafen is a per-call act too
     // Joining an *empty* group room starts a call: push-wake the roster so
     // members with the app closed learn about it (a 1:1 room rings its one
     // peer explicitly instead — see callUser).
@@ -577,8 +538,7 @@ export class VoiceManager {
     this.chimeCtx = null;
     this.track(server, channel, this.me, false);
     this.active = null;
-    this.muted = false; // a fresh call always starts open-mic…
-    this.deafened = false; // …and hearing everyone
+    this.muted = false; // a fresh call always starts open-mic
     this.dial = null; // hanging up also ends any outstanding outgoing ring
     this.publish();
   }
@@ -1126,8 +1086,6 @@ export class VoiceManager {
       audio.srcObject = streams[0];
       audio.autoplay = true;
       audio.playsInline = true;
-      // A leg that connects while we're deafened must arrive silent.
-      audio.muted = this.deafened;
       // Attach the element to the DOM. A detached <audio> plays unreliably:
       // iOS Safari won't play it at all, and on desktop the audio can fail to
       // follow the system output device (e.g. Bluetooth headphones) — it

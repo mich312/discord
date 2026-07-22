@@ -1,5 +1,5 @@
 // Audio-quality controls: mic DSP constraints (noise suppression / echo
-// cancellation / auto gain), the deafen control, and the mute-preservation
+// cancellation / auto gain), the mute control, and the mute-preservation
 // guarantee when the mic is hot-swapped mid-call.
 import test from 'node:test';
 import assert from 'node:assert/strict';
@@ -143,63 +143,35 @@ test('toggling a DSP flag persists it and re-opens the mic with the new constrai
   await vm.leave();
 });
 
-test('deafen forces your mic off, announces it, and undeafen restores prior mute', async () => {
+test('mute announces itself so peers show the badge, and unmute clears it', async () => {
   setupGlobals();
   const sent = [];
   const vm = makeManager('alice', sent);
   await vm.join('srv', 'lounge');
 
-  vm.setDeafened(true);
-  assert.equal(vm.deafened, true);
-  assert.equal(vm.muted, true, 'deafening forces the mic off');
+  vm.setMuted(true);
+  assert.equal(vm.muted, true);
   assert.ok(
     sent.some((s) => s.content.k === 'voice' && s.content.action === 'mute'),
-    'the forced mute is announced so peers show the badge'
+    'the mute is announced so peers show the badge'
   );
 
   sent.length = 0;
-  vm.setDeafened(false);
-  assert.equal(vm.deafened, false);
-  assert.equal(vm.muted, false, 'undeafen restores the open mic we had before');
+  vm.setMuted(false);
+  assert.equal(vm.muted, false);
   assert.ok(
     sent.some((s) => s.content.action === 'unmute'),
-    'the restored mic is announced'
+    'the re-opened mic is announced'
   );
   await vm.leave();
 });
 
-test('deafen remembers a pre-existing mute: undeafen leaves you muted', async () => {
+test('leaving resets mute so the next call starts fresh', async () => {
   setupGlobals();
   const vm = makeManager('alice', []);
   await vm.join('srv', 'lounge');
-  vm.setMuted(true); // already muted before deafening
-  vm.setDeafened(true);
-  assert.equal(vm.muted, true);
-  vm.setDeafened(false);
-  assert.equal(vm.muted, true, 'you were muted before, so you stay muted after');
-  assert.equal(vm.deafened, false);
+  vm.setMuted(true);
   await vm.leave();
-});
-
-test('manually unmuting while deafened lifts the deafen', async () => {
-  setupGlobals();
-  const vm = makeManager('alice', []);
-  await vm.join('srv', 'lounge');
-  vm.setDeafened(true);
-  assert.equal(vm.deafened, true);
-  vm.setMuted(false); // you can't talk into a call you can't hear
-  assert.equal(vm.deafened, false, 'unmuting undeafened you');
-  assert.equal(vm.muted, false);
-  await vm.leave();
-});
-
-test('leaving resets mute and deafen so the next call starts fresh', async () => {
-  setupGlobals();
-  const vm = makeManager('alice', []);
-  await vm.join('srv', 'lounge');
-  vm.setDeafened(true);
-  await vm.leave();
-  assert.equal(vm.deafened, false);
   assert.equal(vm.muted, false);
 });
 
