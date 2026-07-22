@@ -1815,7 +1815,6 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
   grid-template-columns: minmax(0, 5fr) minmax(0, 6fr);
   background: var(--well);
 }
-@media (max-width: 860px) { .gate { grid-template-columns: 1fr; } .gate-brand { display: none; } }
 
 .gate-brand {
   display: flex;
@@ -1870,6 +1869,21 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
 }
 .gate-form .card { background: transparent; border: none; width: 400px; padding: 12px; }
 .gate-form .card h1 { font-size: var(--text-xl); }
+
+/* Mobile: drop the brand panel and let the form own the screen. This block
+   sits AFTER the base .gate-* rules on purpose — media queries add no
+   specificity, so hiding .gate-brand only wins by source order (the earlier
+   placement was overridden by the base `display: flex` below it). Top-align
+   and scroll so a tall card — e.g. the recovery-key step — is never clipped. */
+@media (max-width: 860px) {
+  .gate { grid-template-columns: 1fr; }
+  .gate-brand { display: none; }
+  .gate-form {
+    align-items: flex-start;
+    padding: 24px 18px calc(24px + env(safe-area-inset-bottom, 0px));
+  }
+  .gate-form .card { width: 100%; max-width: 420px; margin: 0 auto; }
+}
 
 /* -------------------------------------------------------- command palette -- */
 .palette-backdrop {
