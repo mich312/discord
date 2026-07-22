@@ -1,4 +1,4 @@
-import React, { useEffect, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { generateCode, wrapIdentity, unwrapIdentity } from '../lib/recovery.js';
 import { QuorumGlyph, Key, Download } from './icons.jsx';
 
@@ -78,6 +78,8 @@ export default function Onboarding({ controller }) {
   // Sign-in is handle-first: undefined = not looked up yet; then the probed
   // vault kind ('passkey' | 'password') or 'none' when no vault exists.
   const [signinKind, setSigninKind] = useState(undefined);
+  // Pending passkey-autofill (conditional UI) request, so we can cancel it.
+  const conditionalAbort = useRef(null);
 
   const validHandle = (h) => /^[a-z0-9_.-]{2,32}$/.test(h);
 
@@ -87,6 +89,34 @@ export default function Onboarding({ controller }) {
       controller.registerPolicy().then((p) => setInviteRequired(!!p.invite_required));
     }
   }, []);
+
+  // Passkey autofill: while the handle field is showing, arm a conditional
+  // discoverable request so resident passkeys surface in the browser's
+  // autocomplete dropdown. It resolves only if the user picks one (→ signed
+  // in); otherwise it stays pending until we abort it. No-op where unsupported.
+  const armAutofill = !invited && mode === 'signin' && signinKind === undefined;
+  useEffect(() => {
+    if (!armAutofill) return;
+    let done = false;
+    const ac = new AbortController();
+    conditionalAbort.current = ac;
+    (async () => {
+      try {
+        if (!(await window.PublicKeyCredential?.isConditionalMediationAvailable?.())) return;
+        if (ac.signal.aborted) return;
+        await controller.signInWithDiscoverablePasskey({ mediation: 'conditional', signal: ac.signal });
+        done = true;
+      } catch (e) {
+        // Abort (navigated away / chose another method) is the common case.
+        if (e.name !== 'AbortError' && !ac.signal.aborted) setError(e.message);
+      }
+    })();
+    return () => {
+      // Leave a successful ceremony alone; only cancel one still waiting.
+      if (!done) ac.abort();
+      if (conditionalAbort.current === ac) conditionalAbort.current = null;
+    };
+  }, [armAutofill]);
 
   async function run(label, fn) {
     setBusy(true);
@@ -165,6 +195,9 @@ export default function Onboarding({ controller }) {
 
   // No handle at all: let the authenticator offer its resident passkeys.
   async function signInDiscoverablePasskey() {
+    // A modal get() can't run while a conditional one is pending — cancel it.
+    conditionalAbort.current?.abort();
+    conditionalAbort.current = null;
     await run('waiting for your passkey…', () => controller.signInWithDiscoverablePasskey());
   }
 
@@ -334,6 +367,7 @@ export default function Onboarding({ controller }) {
                     value={name}
                     onChange={(e) => setName(e.target.value)}
                     placeholder="your handle"
+                    autoComplete="username webauthn"
                     data-testid="signin-handle"
                   />
                 </label>

@@ -1888,12 +1888,18 @@ export class Controller {
   /** Usernameless sign-in: no handle. The authenticator offers its resident
       passkeys, the relay resolves which account signed, and the vault comes
       back keyed by nothing but the credential. Works only for passkeys sealed
-      under the constant PRF salt (i.e. registered by this version onward). */
-  async signInWithDiscoverablePasskey() {
+      under the constant PRF salt (i.e. registered by this version onward).
+
+      `mediation: 'conditional'` drives passkey autofill: the get() stays
+      pending (non-modal) until the user picks a passkey from the browser's
+      autocomplete, or `signal` aborts it. Omit both for the modal button. */
+  async signInWithDiscoverablePasskey({ mediation, signal } = {}) {
     if (!navigator.credentials?.get) throw new Error('this browser has no passkey support');
     const { session, options } = await this.accountFetch('/passkey/discover/challenge', {});
     const assertion = await navigator.credentials.get({
       publicKey: parseRequestOptions(options, VAULT_PRF_SALT),
+      mediation,
+      signal,
     });
     const secret = prfSecret(assertion);
     if (!secret) throw new Error('this passkey has no PRF secret — sign in with your handle instead');
