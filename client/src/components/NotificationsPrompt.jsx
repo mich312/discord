@@ -36,7 +36,7 @@ export default function NotificationsPrompt({ onEnable, onClose }) {
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div
-        className="card modal"
+        className="card modal notif-prompt"
         onClick={(e) => e.stopPropagation()}
         data-testid="notif-prompt"
       >

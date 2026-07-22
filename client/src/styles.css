@@ -1702,6 +1702,10 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
 .fineprint.warn { color: var(--danger); }
 .fineprint.ok { color: var(--ok); }
 
+/* First-run notifications prompt: stacked full-width actions want a little
+   air between them (cards don't space sibling buttons by default). */
+.notif-prompt .button.wide + .button.wide { margin-top: 8px; }
+
 .tabs { display: flex; gap: 2px; margin-bottom: 18px; border-bottom: 1px solid var(--hairline); }
 .tab {
   background: none;
