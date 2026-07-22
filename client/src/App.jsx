@@ -18,6 +18,12 @@ import CallStage from './components/CallStage.jsx';
 import GameStage from './components/GameStage.jsx';
 import { callChatChannel } from './lib/controller.js';
 import Settings from './components/Settings.jsx';
+import NotificationsPrompt from './components/NotificationsPrompt.jsx';
+import {
+  shouldPromptNotifications,
+  notifAlreadyPrompted,
+  markNotifPrompted,
+} from './lib/notify-prompt.js';
 import Seal from './components/Seal.jsx';
 import { Key, ShieldCheck, LinkGlyph, Sun, QuorumGlyph, Gear, LogOut } from './components/icons.jsx';
 import { markPlayed, bumpPlayCount } from './lib/games.js';
@@ -170,6 +176,10 @@ export default function App() {
   // Where to land when the stage closes — the text channel we came from.
   const stageReturn = useRef(null);
   const controllerRef = useRef(null);
+  // First-run notifications ask: false until surfaced once, a beat after
+  // landing in the app (see effect below). The popup routes through the same
+  // enableNotifications() as Settings.
+  const [notifPrompt, setNotifPrompt] = useState(false);
 
   useEffect(() => {
     document.documentElement.dataset.theme = theme;
@@ -216,6 +226,27 @@ export default function App() {
       dispatch({ type: 'modal', modal: { type: 'link-send', blobId: link.blobId, pub: link.pub, code } });
     });
   }, [state.phase]);
+
+  // First-run notifications ask: once we're inside (fresh registration, a
+  // sign-in, or a returning boot), offer to turn on push — but only if the
+  // browser supports it, the user hasn't already decided, and we haven't asked
+  // before. A short beat lets the app settle so it reads as a welcome, not an
+  // interruption.
+  useEffect(() => {
+    if (state.phase !== 'ready') return;
+    const supported = typeof Notification !== 'undefined';
+    const permission = supported ? Notification.permission : 'unsupported';
+    if (!shouldPromptNotifications({ supported, permission, asked: notifAlreadyPrompted() })) return;
+    const id = setTimeout(() => setNotifPrompt(true), 1500);
+    return () => clearTimeout(id);
+  }, [state.phase]);
+
+  // Persist that we've asked and close, whichever way the user answered — the
+  // prompt is a one-time nicety, not a recurring nag.
+  const dismissNotifPrompt = () => {
+    markNotifPrompted();
+    setNotifPrompt(false);
+  };
 
   // ⌘K / Ctrl+K opens the palette anywhere inside the app; Escape closes
   // an open drawer.
@@ -843,6 +874,15 @@ export default function App() {
             onShowIdentity={openIdentity}
             onSecure={openSecure}
             onClose={() => dispatch({ type: 'modal', modal: null })}
+          />
+        )}
+        {notifPrompt && !state.modal && (
+          <NotificationsPrompt
+            onEnable={async () => {
+              await controllerRef.current.enableNotifications();
+              dispatch({ type: 'toast', text: 'notifications enabled for this device' });
+            }}
+            onClose={dismissNotifPrompt}
           />
         )}
         {state.modal && state.modal.type !== 'settings' && (
