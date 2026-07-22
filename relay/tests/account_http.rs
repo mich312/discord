@@ -203,6 +203,27 @@ async fn discover_login_rejects_an_unknown_credential() {
 }
 
 #[tokio::test]
+async fn passkey_wrap_round_trips_by_credential_id() {
+    let app = make_app();
+    app.store
+        .add_passkey_wrap(
+            "cred-abc",
+            relay::store::PasskeyWrap {
+                user: "alice".into(),
+                credential: "{\"stub\":true}".into(),
+                salt: b"salt".to_vec(),
+                wrapped: b"sealed-identity".to_vec(),
+            },
+        )
+        .await
+        .unwrap();
+    let got = app.store.get_passkey_wrap("cred-abc").await.unwrap().unwrap();
+    assert_eq!(got.user, "alice");
+    assert_eq!(got.wrapped, b"sealed-identity");
+    assert!(app.store.get_passkey_wrap("missing").await.unwrap().is_none());
+}
+
+#[tokio::test]
 async fn list_passkey_vaults_filters_out_password_vaults() {
     let app = make_app();
     seed_password_vault(&app, "pw", b"k").await;

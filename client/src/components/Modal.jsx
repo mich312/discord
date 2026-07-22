@@ -24,6 +24,7 @@ export default function Modal({
   onDeleteServer,
   onLogout,
   onLinkSend,
+  onEnrollDevice,
   unsecured,
   identityKey,
 }) {
@@ -157,6 +158,23 @@ export default function Modal({
             <p className="fineprint muted">
               Passkeys are strongest. If you use a password, make it a long one.
             </p>
+            {onEnrollDevice && (
+              <>
+                <div className="divider">just this device</div>
+                <button
+                  className="button wide"
+                  disabled={busy}
+                  data-testid="enroll-device"
+                  onClick={() => attempt(onEnrollDevice)}
+                >
+                  <Key size={14} /> add one-tap for this device
+                </button>
+                <p className="fineprint muted">
+                  Registers a passkey for this device only — your other devices&rsquo; passkeys keep
+                  working. Best right after signing in on a new machine.
+                </p>
+              </>
+            )}
             <div className="divider">or keep it manual</div>
             <a
               className="button"

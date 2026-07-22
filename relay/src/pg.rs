@@ -3,8 +3,8 @@
 //! plan. Uses runtime queries (no compile-time DB dependency).
 
 use crate::store::{
-    HistoryEntry, InviteRecord, RegisterOutcome, Store, StoreError, StoredMessage, StoredWelcome,
-    VaultRecord,
+    HistoryEntry, InviteRecord, PasskeyWrap, RegisterOutcome, Store, StoreError, StoredMessage,
+    StoredWelcome, VaultRecord,
 };
 use async_trait::async_trait;
 use sqlx::{postgres::PgPoolOptions, PgPool, Row};
@@ -96,6 +96,17 @@ impl PgStore {
                 wrapped bytea NOT NULL,
                 credential text,
                 updated_at timestamptz NOT NULL DEFAULT now()
+            );
+            -- Additional per-device passkeys that unlock the same identity,
+            -- keyed by credential id. Separate from vaults so enrolling one
+            -- device never disturbs another's wrap.
+            CREATE TABLE IF NOT EXISTS passkey_wraps (
+                cred_id text PRIMARY KEY,
+                user_id text NOT NULL,
+                credential text NOT NULL,
+                salt bytea NOT NULL,
+                wrapped bytea NOT NULL,
+                created_at timestamptz NOT NULL DEFAULT now()
             );
             CREATE TABLE IF NOT EXISTS push_subscriptions (
                 user_id text NOT NULL,
@@ -524,6 +535,40 @@ impl Store for PgStore {
             verifier: r.get("verifier"),
             wrapped: r.get("wrapped"),
             credential: r.get("credential"),
+        }))
+    }
+
+    async fn add_passkey_wrap(&self, cred_id: &str, wrap: PasskeyWrap) -> Result<(), StoreError> {
+        sqlx::query(
+            "INSERT INTO passkey_wraps (cred_id, user_id, credential, salt, wrapped)
+             VALUES ($1, $2, $3, $4, $5)
+             ON CONFLICT (cred_id) DO UPDATE SET
+               user_id = $2, credential = $3, salt = $4, wrapped = $5",
+        )
+        .bind(cred_id)
+        .bind(&wrap.user)
+        .bind(&wrap.credential)
+        .bind(&wrap.salt)
+        .bind(&wrap.wrapped)
+        .execute(&self.pool)
+        .await
+        .map_err(backend)?;
+        Ok(())
+    }
+
+    async fn get_passkey_wrap(&self, cred_id: &str) -> Result<Option<PasskeyWrap>, StoreError> {
+        let row = sqlx::query(
+            "SELECT user_id, credential, salt, wrapped FROM passkey_wraps WHERE cred_id = $1",
+        )
+        .bind(cred_id)
+        .fetch_optional(&self.pool)
+        .await
+        .map_err(backend)?;
+        Ok(row.map(|r| PasskeyWrap {
+            user: r.get("user_id"),
+            credential: r.get("credential"),
+            salt: r.get("salt"),
+            wrapped: r.get("wrapped"),
         }))
     }
 

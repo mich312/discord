@@ -971,6 +971,22 @@ async fn handle_request(
             }
         }
 
+        ClientMsg::PasskeyWrapAdd { rid, cred_id, credential, salt, wrapped } => {
+            let (Ok(salt), Ok(wrapped)) = (decode_b64(&salt), decode_b64(&wrapped)) else {
+                return err(rid, "invalid base64");
+            };
+            let wrap = crate::store::PasskeyWrap {
+                user: user.to_string(),
+                credential,
+                salt,
+                wrapped,
+            };
+            match app.store.add_passkey_wrap(&cred_id, wrap).await {
+                Ok(()) => Some(ServerMsg::Ok { rid, seq: None }),
+                Err(e) => err(rid, e),
+            }
+        }
+
         ClientMsg::VaultStatus { rid } => {
             match app.store.get_vault(user).await {
                 Ok(vault) => Some(ServerMsg::VaultStatus {

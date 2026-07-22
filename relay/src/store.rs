@@ -49,6 +49,21 @@ pub struct VaultRecord {
     pub credential: Option<String>,
 }
 
+/// An additional per-device passkey that can unlock the identity, stored
+/// alongside (not replacing) the primary vault. Each device seals the identity
+/// under its own passkey's PRF secret, so enrolling one never disturbs another.
+#[derive(Debug, Clone)]
+pub struct PasskeyWrap {
+    /// The account this passkey belongs to.
+    pub user: String,
+    /// Serialized webauthn credential (for verifying the assertion).
+    pub credential: String,
+    /// The PRF salt used (currently the fixed vault salt).
+    pub salt: Vec<u8>,
+    /// The identity bundle sealed under this passkey's PRF secret. Opaque.
+    pub wrapped: Vec<u8>,
+}
+
 /// The two membership roles. Admins manage the (weak, server-side) ACL:
 /// allowing members, invites, and role changes. The group's creator starts
 /// as its admin.
@@ -168,6 +183,11 @@ pub trait Store: Send + Sync {
     /// these to match an assertion's credential id to an account. Groups here
     /// are tiny (invite-only), so a scan is cheaper than a second index.
     async fn list_passkey_vaults(&self) -> Result<Vec<(String, VaultRecord)>, StoreError>;
+    /// Enroll (or replace) an additional per-device passkey, keyed by its
+    /// base64url credential id.
+    async fn add_passkey_wrap(&self, cred_id: &str, wrap: PasskeyWrap) -> Result<(), StoreError>;
+    /// The per-device passkey enrolled under `cred_id`, if any.
+    async fn get_passkey_wrap(&self, cred_id: &str) -> Result<Option<PasskeyWrap>, StoreError>;
 
     // --- push subscriptions ---
     async fn put_push_subscription(
@@ -203,6 +223,8 @@ struct MemoryInner {
     /// user -> endpoint -> subscription json
     push_subs: HashMap<String, HashMap<String, String>>,
     vaults: HashMap<String, VaultRecord>,
+    /// cred_id (base64url) -> additional per-device passkey
+    passkey_wraps: HashMap<String, PasskeyWrap>,
     backups: HashMap<String, Vec<u8>>,
 }
 
@@ -431,6 +453,17 @@ impl Store for MemoryStore {
             .filter(|(_, v)| v.kind == "passkey")
             .map(|(u, v)| (u.clone(), v.clone()))
             .collect())
+    }
+
+    async fn add_passkey_wrap(&self, cred_id: &str, wrap: PasskeyWrap) -> Result<(), StoreError> {
+        let mut inner = self.inner.lock().unwrap();
+        inner.passkey_wraps.insert(cred_id.to_string(), wrap);
+        Ok(())
+    }
+
+    async fn get_passkey_wrap(&self, cred_id: &str) -> Result<Option<PasskeyWrap>, StoreError> {
+        let inner = self.inner.lock().unwrap();
+        Ok(inner.passkey_wraps.get(cred_id).cloned())
     }
 
     async fn put_push_subscription(
