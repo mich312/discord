@@ -1808,6 +1808,25 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
 }
 .signin-as .linkish { margin-left: auto; }
 
+/* device linking */
+.device-link-entry { display: inline-flex; align-items: center; gap: 6px; margin-top: 14px; }
+.qr-card {
+  background: #fff;
+  border-radius: 14px;
+  padding: 16px;
+  display: flex;
+  justify-content: center;
+  margin: 8px auto 4px;
+  width: fit-content;
+  box-shadow: 0 1px 0 rgba(0,0,0,.04);
+}
+.qr { width: 232px; height: 232px; line-height: 0; }
+.qr svg { display: block; width: 100%; height: 100%; }
+.link-code { text-align: center; font-size: 13.5px; color: var(--ink-dim); margin: 12px 0; }
+.link-code strong, .mono { font-family: var(--mono); letter-spacing: .1em; color: var(--ink); }
+.link-handle { color: var(--accent-ink); }
+.waiting { text-align: center; }
+
 /* ----------------------------------------------------------- onboarding -- */
 .gate {
   height: 100%;

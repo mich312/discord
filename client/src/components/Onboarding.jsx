@@ -1,6 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { generateCode, wrapIdentity, unwrapIdentity } from '../lib/recovery.js';
-import { QuorumGlyph, Key, Download } from './icons.jsx';
+import { createLinkOffer, openSealed } from '../lib/link.js';
+import { QuorumGlyph, Key, Download, LinkGlyph, Copy, Check } from './icons.jsx';
+import Qr from './Qr.jsx';
 
 // The gate: brand panel on the left states the contract, the form on the
 // right performs it. Three ways in:
@@ -80,6 +82,11 @@ export default function Onboarding({ controller }) {
   const [signinKind, setSigninKind] = useState(undefined);
   // Pending passkey-autofill (conditional UI) request, so we can cancel it.
   const conditionalAbort = useRef(null);
+  // Device-linking (step === 'link'): the offer we're showing as a QR, and the
+  // handle we received once the other device sends its identity.
+  const [linkOffer, setLinkOffer] = useState(null);
+  const [linkHandle, setLinkHandle] = useState(null);
+  const [copied, setCopied] = useState(false);
 
   const validHandle = (h) => /^[a-z0-9_.-]{2,32}$/.test(h);
 
@@ -107,8 +114,9 @@ export default function Onboarding({ controller }) {
         await controller.signInWithDiscoverablePasskey({ mediation: 'conditional', signal: ac.signal });
         done = true;
       } catch (e) {
-        // Abort (navigated away / chose another method) is the common case.
-        if (e.name !== 'AbortError' && !ac.signal.aborted) setError(e.message);
+        if (ac.signal.aborted) return; // navigated away / chose another method
+        if (e.linkFallback) return startLink();
+        if (e.name !== 'AbortError') setError(e.message);
       }
     })();
     return () => {
@@ -117,6 +125,43 @@ export default function Onboarding({ controller }) {
       if (conditionalAbort.current === ac) conditionalAbort.current = null;
     };
   }, [armAutofill]);
+
+  // Device-linking receiver: while the QR is up, mint an offer and poll the
+  // rendezvous. When the other device sends the sealed identity, adopt it and
+  // ask the user to confirm the handle before entering.
+  useEffect(() => {
+    if (step !== 'link') return;
+    let cancelled = false;
+    const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+    (async () => {
+      try {
+        const offer = await createLinkOffer(window.location.origin);
+        if (cancelled) return;
+        setLinkOffer(offer);
+        while (!cancelled) {
+          const payload = await controller.linkPoll(offer.blobId).catch(() => null);
+          if (cancelled) return;
+          if (payload) {
+            try {
+              const identity = await openSealed(offer.privateKey, payload);
+              await controller.restoreIdentity(identity);
+              if (cancelled) return;
+              setLinkHandle(controller.me);
+              return; // stop polling; wait for the user's confirm
+            } catch {
+              // A stale or foreign blob at this id — keep waiting for ours.
+            }
+          }
+          await sleep(2000);
+        }
+      } catch (e) {
+        if (!cancelled) setError(e.message);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, [step]);
 
   async function run(label, fn) {
     setBusy(true);
@@ -198,7 +243,48 @@ export default function Onboarding({ controller }) {
     // A modal get() can't run while a conditional one is pending — cancel it.
     conditionalAbort.current?.abort();
     conditionalAbort.current = null;
-    await run('waiting for your passkey…', () => controller.signInWithDiscoverablePasskey());
+    setBusy(true);
+    setBusyText('waiting for your passkey…');
+    setError(null);
+    try {
+      await controller.signInWithDiscoverablePasskey();
+    } catch (e) {
+      setBusy(false);
+      setBusyText(null);
+      // The passkey identified you but this device can't unlock the vault —
+      // slide into linking from a device you're already on instead of erroring.
+      if (e.linkFallback) return startLink();
+      setError(e.message);
+    }
+  }
+
+  function startLink() {
+    conditionalAbort.current?.abort();
+    conditionalAbort.current = null;
+    setBusy(false);
+    setBusyText(null);
+    setError(null);
+    setLinkOffer(null);
+    setLinkHandle(null);
+    setStep('link');
+  }
+
+  async function confirmLink() {
+    await run('entering…', () => controller.completeOnboarding(true));
+  }
+
+  async function rejectLink() {
+    await controller.logout();
+    setLinkHandle(null);
+    setSigninKind(undefined);
+    setStep('name');
+  }
+
+  function copy(text) {
+    navigator.clipboard?.writeText(text).then(() => {
+      setCopied(true);
+      setTimeout(() => setCopied(false), 1500);
+    });
   }
 
   // Fallback path: restore a device-portable identity (recovery file + code,
@@ -224,6 +310,71 @@ export default function Onboarding({ controller }) {
       });
     }
     setError('add a recovery file + code, or paste an identity key');
+  }
+
+  if (step === 'link') {
+    return (
+      <Gate>
+        <div className="card" data-testid="link-step">
+          {!linkHandle ? (
+            <>
+              <h1>Sign in from another device</h1>
+              <p className="muted lede">
+                On a device where you&rsquo;re already signed in, point its camera at this code —
+                or paste the link there. Your identity transfers straight across, encrypted end
+                to end; the server only ferries sealed bytes.
+              </p>
+              {linkOffer ? (
+                <>
+                  <div className="qr-card">
+                    <Qr url={linkOffer.url} />
+                  </div>
+                  <p className="link-code">
+                    the other device should show <strong data-testid="link-code">{linkOffer.code}</strong>
+                  </p>
+                  <button className="button wide" onClick={() => copy(linkOffer.url)} data-testid="copy-link">
+                    {copied ? <Check size={14} /> : <Copy size={14} />}
+                    {copied ? 'link copied' : 'copy link instead'}
+                  </button>
+                  <p className="fineprint muted waiting" data-testid="link-waiting">
+                    waiting for the other device&hellip;
+                  </p>
+                </>
+              ) : (
+                <p className="fineprint muted">preparing&hellip;</p>
+              )}
+              <p className="fineprint muted">
+                <button type="button" className="linkish" onClick={() => setStep('name')}>
+                  back to sign in
+                </button>
+              </p>
+            </>
+          ) : (
+            <>
+              <h1>
+                Sign in as <span className="link-handle">{linkHandle}</span>?
+              </h1>
+              <p className="muted lede">
+                A device just handed over this identity. If that handle is yours, you&rsquo;re in.
+                If it isn&rsquo;t, don&rsquo;t continue.
+              </p>
+              <button
+                className="button primary wide"
+                onClick={confirmLink}
+                disabled={busy}
+                data-testid="link-confirm"
+              >
+                {busyText ?? 'yes, that’s me'}
+              </button>
+              <button className="button wide" onClick={rejectLink} disabled={busy} data-testid="link-reject">
+                no, that isn&rsquo;t me
+              </button>
+            </>
+          )}
+          {error && <p className="error">{error}</p>}
+        </div>
+      </Gate>
+    );
   }
 
   if (step === 'recovery') {
@@ -388,6 +539,14 @@ export default function Onboarding({ controller }) {
                 <p className="fineprint muted">
                   No handle needed — your device offers the passkeys it holds for quorum.
                 </p>
+                <button
+                  type="button"
+                  className="linkish device-link-entry"
+                  onClick={startLink}
+                  data-testid="signin-link"
+                >
+                  <LinkGlyph size={13} /> sign in from another device
+                </button>
               </form>
             ) : (
               <>
