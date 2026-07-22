@@ -166,7 +166,7 @@ async fn discover_challenge_is_usernameless_and_empty_allow_credentials() {
 }
 
 #[tokio::test]
-async fn discover_login_rejects_a_garbage_assertion() {
+async fn discover_login_rejects_an_assertion_without_a_raw_id() {
     let app = make_app();
     let (status, _) = http(
         &app,
@@ -178,8 +178,28 @@ async fn discover_login_rejects_a_garbage_assertion() {
             .unwrap(),
     )
     .await;
-    // Can't be resolved to any account -> refused, nothing leaked.
+    // Malformed: no credential id to match on.
+    assert_eq!(status, StatusCode::BAD_REQUEST);
+}
+
+#[tokio::test]
+async fn discover_login_rejects_an_unknown_credential() {
+    let app = make_app();
+    seed_passkey_vault(&app, "alice").await; // a passkey vault exists, but not this id
+    let (status, body) = http(
+        &app,
+        Request::post("/passkey/discover/login")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                json!({ "session": "nope", "assertion": { "rawId": "b3RoZXItY3JlZGVudGlhbA" } })
+                    .to_string(),
+            ))
+            .unwrap(),
+    )
+    .await;
+    // Well-formed but matches no stored passkey -> refused, nothing leaked.
     assert_eq!(status, StatusCode::FORBIDDEN);
+    assert!(body.as_str().unwrap_or("").contains("unrecognized passkey"));
 }
 
 #[tokio::test]
