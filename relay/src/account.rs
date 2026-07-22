@@ -297,18 +297,30 @@ pub async fn passkey_discover_login(
     Json(body): Json<DiscoverLogin>,
 ) -> Response {
     let assertion = body.assertion.to_string();
-    // Which credential signed this? The assertion's rawId IS the credential id
-    // — use it to pick the candidate vault. This only selects; the signature
-    // is verified against that vault's passkey by finish_discoverable below,
-    // so a forged rawId gets no further.
-    let cred_id = match body
-        .assertion
-        .get("rawId")
-        .and_then(|v| v.as_str())
-        .and_then(|s| B64URL.decode(s).ok())
-    {
-        Some(id) => id,
-        None => return err(StatusCode::BAD_REQUEST, "assertion missing rawId"),
+    // The assertion's rawId IS the credential id. It only selects which stored
+    // wrap to try; finish_discoverable verifies the signature against that
+    // wrap's passkey, so a forged rawId gets no further.
+    let Some(raw_id) = body.assertion.get("rawId").and_then(|v| v.as_str()) else {
+        return err(StatusCode::BAD_REQUEST, "assertion missing rawId");
+    };
+
+    // 1) An additional per-device passkey, looked up directly by credential id.
+    match app.store.get_passkey_wrap(raw_id).await {
+        Ok(Some(wrap)) => {
+            return match app.accounts.finish_discoverable(&body.session, &assertion, &wrap.credential) {
+                Ok(()) => {
+                    Json(json!({ "user": wrap.user, "wrapped": B64.encode(&wrap.wrapped) })).into_response()
+                }
+                Err(e) => err(StatusCode::FORBIDDEN, e),
+            };
+        }
+        Ok(None) => {}
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    }
+
+    // 2) The primary passkey vault: scan the passkey vaults for a match.
+    let Ok(cred_id) = B64URL.decode(raw_id) else {
+        return err(StatusCode::BAD_REQUEST, "rawId is not valid base64url");
     };
     let vaults = match app.store.list_passkey_vaults().await {
         Ok(v) => v,

@@ -131,6 +131,17 @@ pub enum ClientMsg {
         wrapped: String,
         credential: Option<String>,
     },
+    /// Enroll an ADDITIONAL passkey (this device) that can unlock the same
+    /// identity, without disturbing the primary vault or other devices.
+    /// `wrapped` is the identity sealed under this passkey's PRF secret; the
+    /// relay stores it keyed by credential id. Authenticated users only.
+    PasskeyWrapAdd {
+        rid: u64,
+        cred_id: String,
+        credential: String,
+        salt: String,
+        wrapped: String,
+    },
     /// Is this account secured, and how?
     VaultStatus { rid: u64 },
     /// WebAuthn registration ceremony (authenticated side).

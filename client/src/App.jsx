@@ -859,6 +859,11 @@ export default function App() {
             onLinkSend={async (blobId, pub) => {
               await controllerRef.current.sendIdentityToDevice(blobId, pub);
             }}
+            onEnrollDevice={async () => {
+              await controllerRef.current.enrollDevicePasskey();
+              dispatch({ type: 'modal', modal: null });
+              dispatch({ type: 'toast', text: 'this device can now sign in with one tap' });
+            }}
             onVerify={async (srv, peer) => {
               await controllerRef.current.markVerified(srv, peer);
               dispatch({ type: 'modal', modal: null });

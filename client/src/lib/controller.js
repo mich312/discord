@@ -1831,6 +1831,36 @@ export class Controller {
     await this.markSecuredLocal();
   }
 
+  /** Enroll an ADDITIONAL passkey for this device (e.g. Windows Hello) that
+      unlocks the same identity, without touching the primary vault or any
+      other device's passkey. Each device seals the identity under its own PRF
+      secret; the relay keys the wrap by credential id. Reachable once you're
+      already signed in here (typically right after linking a new device). */
+  async enrollDevicePasskey() {
+    if (!navigator.credentials?.create) throw new Error('WebAuthn unavailable in this browser');
+    const start = await this.relay.request({ t: 'passkey_register_start' });
+    const created = await navigator.credentials.create({
+      publicKey: parseCreationOptions(JSON.parse(start.payload)),
+    });
+    const finish = await this.relay.request({
+      t: 'passkey_register_finish',
+      credential: JSON.stringify(serializeRegistration(created)),
+    });
+    const secret = await derivePrfSecret(created.rawId, VAULT_PRF_SALT);
+    if (!secret) {
+      throw new Error('this authenticator does not support the PRF extension — use a password instead');
+    }
+    const wrapped = await encryptBlob(secret, this.identityBytes());
+    await this.relay.request({
+      t: 'passkey_wrap_add',
+      cred_id: b64url.enc(created.rawId),
+      credential: finish.payload,
+      salt: b64.enc(VAULT_PRF_SALT),
+      wrapped: b64.enc(wrapped),
+    });
+    await this.markSecuredLocal();
+  }
+
   /** Pre-boot probe: how (if at all) a handle signs in on this relay, so
       the gate can offer only the method that will actually work.
       Returns 'passkey' | 'password', or null when there's no server vault
