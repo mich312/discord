@@ -66,6 +66,9 @@ pub fn router(app: Arc<App>) -> Router {
                 .route("/account/{user}/login", axum::routing::post(account::password_login))
                 .route("/account/{user}/passkey/challenge", axum::routing::post(account::passkey_challenge))
                 .route("/account/{user}/passkey/login", axum::routing::post(account::passkey_login))
+                // Usernameless passkey sign-in — no handle in the path.
+                .route("/passkey/discover/challenge", axum::routing::post(account::passkey_discover_challenge))
+                .route("/passkey/discover/login", axum::routing::post(account::passkey_discover_login))
                 .route_layer(middleware::from_fn_with_state(app.clone(), limit_account)),
         );
     // Single-container mode: the relay serves the built client too, so one

@@ -527,6 +527,31 @@ impl Store for PgStore {
         }))
     }
 
+    async fn list_passkey_vaults(&self) -> Result<Vec<(String, VaultRecord)>, StoreError> {
+        let rows = sqlx::query(
+            "SELECT user_id, kind, salt, verifier, wrapped, credential
+             FROM vaults WHERE kind = 'passkey'",
+        )
+        .fetch_all(&self.pool)
+        .await
+        .map_err(backend)?;
+        Ok(rows
+            .iter()
+            .map(|r| {
+                (
+                    r.get("user_id"),
+                    VaultRecord {
+                        kind: r.get("kind"),
+                        salt: r.get("salt"),
+                        verifier: r.get("verifier"),
+                        wrapped: r.get("wrapped"),
+                        credential: r.get("credential"),
+                    },
+                )
+            })
+            .collect())
+    }
+
     async fn put_push_subscription(
         &self,
         user: &str,

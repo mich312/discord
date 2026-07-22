@@ -163,6 +163,11 @@ export default function Onboarding({ controller }) {
     await run('waiting for your passkey…', () => controller.signInWithPasskey(handle));
   }
 
+  // No handle at all: let the authenticator offer its resident passkeys.
+  async function signInDiscoverablePasskey() {
+    await run('waiting for your passkey…', () => controller.signInWithDiscoverablePasskey());
+  }
+
   // Fallback path: restore a device-portable identity (recovery file + code,
   // or a pasted identity key). Needs no server vault, so it works regardless
   // of how — or whether — the account was secured for cross-device sign-in.
@@ -335,6 +340,20 @@ export default function Onboarding({ controller }) {
                 <button className="button primary wide" disabled={busy} data-testid="signin-continue">
                   {busyText ?? 'continue'}
                 </button>
+                <div className="divider">or</div>
+                <button
+                  type="button"
+                  className="button wide"
+                  disabled={busy}
+                  data-testid="signin-passkey-discoverable"
+                  onClick={signInDiscoverablePasskey}
+                >
+                  <Key size={14} />
+                  sign in with a passkey
+                </button>
+                <p className="fineprint muted">
+                  No handle needed — your device offers the passkeys it holds for quorum.
+                </p>
               </form>
             ) : (
               <>

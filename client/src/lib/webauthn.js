@@ -2,6 +2,13 @@
 // and the browser API (ArrayBuffers), and run the PRF extension that
 // turns a passkey into a deterministic wrap key for the identity vault.
 
+// The identity vault's PRF salt. WebAuthn PRF output is already unique per
+// credential, so this salt need not be secret or per-account — pinning it to a
+// constant is what lets usernameless sign-in derive the wrap key without first
+// looking the account up. NEVER change these bytes: doing so would orphan every
+// vault ever sealed under a passkey. (Exactly 32 ASCII bytes.)
+export const VAULT_PRF_SALT = new TextEncoder().encode('quorum/passkey-vault/prf/salt/v1');
+
 const b64u = {
   enc: (buf) =>
     btoa(String.fromCharCode(...new Uint8Array(buf)))
@@ -20,6 +27,16 @@ export function parseCreationOptions(json, prf = true) {
     challenge: b64u.dec(pk.challenge),
     user: { ...pk.user, id: b64u.dec(pk.user.id) },
     excludeCredentials: (pk.excludeCredentials ?? []).map((c) => ({ ...c, id: b64u.dec(c.id) })),
+  };
+  // Force a discoverable (resident) credential. webauthn-rs's
+  // start_passkey_registration doesn't request one, but usernameless sign-in
+  // depends on the authenticator storing the passkey so it can offer it with
+  // no handle. Platform authenticators (Touch ID, Windows Hello, phones) all
+  // support this; it's the standard passkey shape.
+  options.authenticatorSelection = {
+    ...(pk.authenticatorSelection ?? {}),
+    residentKey: 'required',
+    requireResidentKey: true,
   };
   if (prf) options.extensions = { ...(options.extensions ?? {}), prf: {} };
   return options;

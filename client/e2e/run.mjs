@@ -782,6 +782,23 @@ try {
     if (!(await erin.textContent('.empty-state')).includes('erin')) {
       throw new Error('passkey sign-in did not restore erin');
     }
+
+    // Usernameless: wipe again and sign in with NO handle at all — the
+    // resident passkey identifies the account by itself.
+    await erin.evaluate(() => {
+      localStorage.clear();
+      return new Promise((resolve) => {
+        const req = indexedDB.deleteDatabase('e2ee-client');
+        req.onsuccess = req.onerror = req.onblocked = () => resolve();
+      });
+    });
+    await erin.goto(localhostBase);
+    await erin.click('[data-testid=tab-signin]');
+    await erin.click('[data-testid=signin-passkey-discoverable]');
+    await erin.waitForSelector('.empty-state', { timeout: 30000 });
+    if (!(await erin.textContent('.empty-state')).includes('erin')) {
+      throw new Error('usernameless passkey sign-in did not restore erin');
+    }
   }
 
   console.log('22. mobile layout: drawers navigate, roster opens, messages flow');

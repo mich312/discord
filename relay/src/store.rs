@@ -164,6 +164,10 @@ pub trait Store: Send + Sync {
     // --- account vaults ---
     async fn set_vault(&self, user: &str, vault: VaultRecord) -> Result<(), StoreError>;
     async fn get_vault(&self, user: &str) -> Result<Option<VaultRecord>, StoreError>;
+    /// Every passkey-kind vault as (user, record). Usernameless sign-in scans
+    /// these to match an assertion's credential id to an account. Groups here
+    /// are tiny (invite-only), so a scan is cheaper than a second index.
+    async fn list_passkey_vaults(&self) -> Result<Vec<(String, VaultRecord)>, StoreError>;
 
     // --- push subscriptions ---
     async fn put_push_subscription(
@@ -417,6 +421,16 @@ impl Store for MemoryStore {
     async fn get_vault(&self, user: &str) -> Result<Option<VaultRecord>, StoreError> {
         let inner = self.inner.lock().unwrap();
         Ok(inner.vaults.get(user).cloned())
+    }
+
+    async fn list_passkey_vaults(&self) -> Result<Vec<(String, VaultRecord)>, StoreError> {
+        let inner = self.inner.lock().unwrap();
+        Ok(inner
+            .vaults
+            .iter()
+            .filter(|(_, v)| v.kind == "passkey")
+            .map(|(u, v)| (u.clone(), v.clone()))
+            .collect())
     }
 
     async fn put_push_subscription(
