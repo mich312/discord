@@ -14,6 +14,7 @@ use axum::http::StatusCode;
 use axum::response::{IntoResponse, Response};
 use axum::Json;
 use base64::engine::general_purpose::STANDARD as B64;
+use base64::engine::general_purpose::URL_SAFE_NO_PAD as B64URL;
 use base64::Engine;
 use serde_json::json;
 use sha2::{Digest, Sha256};
@@ -135,18 +136,6 @@ impl AccountService {
         states.retain(|_, (_, t)| t.elapsed() < STATE_TTL);
         states.insert(session.clone(), (state, Instant::now()));
         Ok((json, session))
-    }
-
-    /// The credential id an assertion was signed with — used to resolve which
-    /// account (and vault) a usernameless assertion belongs to.
-    pub fn identify(&self, assertion_json: &str) -> Result<Vec<u8>, String> {
-        let assertion: PublicKeyCredential =
-            serde_json::from_str(assertion_json).map_err(|e| e.to_string())?;
-        let (_user, cred_id) = self
-            .webauthn
-            .identify_discoverable_authentication(&assertion)
-            .map_err(|e| e.to_string())?;
-        Ok(cred_id.to_vec())
     }
 
     /// The credential id stored inside a serialized `Passkey`, for matching a
@@ -308,10 +297,18 @@ pub async fn passkey_discover_login(
     Json(body): Json<DiscoverLogin>,
 ) -> Response {
     let assertion = body.assertion.to_string();
-    // Which credential signed this? Resolve it to an account's vault.
-    let cred_id = match app.accounts.identify(&assertion) {
-        Ok(id) => id,
-        Err(e) => return err(StatusCode::FORBIDDEN, e),
+    // Which credential signed this? The assertion's rawId IS the credential id
+    // — use it to pick the candidate vault. This only selects; the signature
+    // is verified against that vault's passkey by finish_discoverable below,
+    // so a forged rawId gets no further.
+    let cred_id = match body
+        .assertion
+        .get("rawId")
+        .and_then(|v| v.as_str())
+        .and_then(|s| B64URL.decode(s).ok())
+    {
+        Some(id) => id,
+        None => return err(StatusCode::BAD_REQUEST, "assertion missing rawId"),
     };
     let vaults = match app.store.list_passkey_vaults().await {
         Ok(v) => v,
