@@ -24,7 +24,10 @@ p256 = { version = "0.13", features = ["ecdh"] }
 sqlx = { version = "0.8", default-features = false, features = ["runtime-tokio", "tls-rustls", "postgres"] }
 thiserror = "2"
 web-push = { version = "0.11", default-features = false, features = ["hyper-client"] }
-webauthn-rs = "0.5"
+# `conditional-ui` exposes the discoverable-credential auth API
+# (start/identify/finish_discoverable_authentication) that usernameless
+# passkey sign-in needs. It's a pure code-gating feature — no extra deps.
+webauthn-rs = { version = "0.5", features = ["conditional-ui"] }
 tokio = { version = "1", features = ["full"] }
 tower-http = { version = "0.6", features = ["cors", "fs", "set-header"] }
 tracing = "0.1"

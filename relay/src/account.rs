@@ -27,6 +27,9 @@ pub struct AccountService {
     pub webauthn: Webauthn,
     reg_states: Mutex<HashMap<String, (PasskeyRegistration, Instant)>>,
     auth_states: Mutex<HashMap<String, (PasskeyAuthentication, Instant)>>,
+    // Usernameless (discoverable) sign-in has no handle to key on, so pending
+    // states are keyed by the challenge the client echoes back as `session`.
+    disco_states: Mutex<HashMap<String, (DiscoverableAuthentication, Instant)>>,
 }
 
 const STATE_TTL: Duration = Duration::from_secs(300);
@@ -48,6 +51,7 @@ impl AccountService {
             webauthn,
             reg_states: Mutex::new(HashMap::new()),
             auth_states: Mutex::new(HashMap::new()),
+            disco_states: Mutex::new(HashMap::new()),
         }
     }
 
@@ -106,6 +110,73 @@ impl AccountService {
             serde_json::from_str(assertion_json).map_err(|e| e.to_string())?;
         self.webauthn
             .finish_passkey_authentication(&assertion, &state)
+            .map(|_| ())
+            .map_err(|e| e.to_string())
+    }
+
+    // --- usernameless (discoverable credential) sign-in ------------------
+
+    /// Start a handle-free challenge (empty allowCredentials — the
+    /// authenticator offers its own resident passkeys). Returns
+    /// (challenge JSON, session token to echo back on finish).
+    pub fn start_discoverable(&self) -> Result<(String, String), String> {
+        let (rcr, state) = self
+            .webauthn
+            .start_discoverable_authentication()
+            .map_err(|e| e.to_string())?;
+        let json = serde_json::to_string(&rcr).map_err(|e| e.to_string())?;
+        // The challenge is unique per request and single-use — reuse it as the
+        // session key so the client has nothing extra to hold onto.
+        let session = serde_json::from_str::<serde_json::Value>(&json)
+            .ok()
+            .and_then(|v| v["publicKey"]["challenge"].as_str().map(str::to_string))
+            .ok_or("challenge missing from options")?;
+        let mut states = self.disco_states.lock().unwrap();
+        states.retain(|_, (_, t)| t.elapsed() < STATE_TTL);
+        states.insert(session.clone(), (state, Instant::now()));
+        Ok((json, session))
+    }
+
+    /// The credential id an assertion was signed with — used to resolve which
+    /// account (and vault) a usernameless assertion belongs to.
+    pub fn identify(&self, assertion_json: &str) -> Result<Vec<u8>, String> {
+        let assertion: PublicKeyCredential =
+            serde_json::from_str(assertion_json).map_err(|e| e.to_string())?;
+        let (_user, cred_id) = self
+            .webauthn
+            .identify_discoverable_authentication(&assertion)
+            .map_err(|e| e.to_string())?;
+        Ok(cred_id.to_vec())
+    }
+
+    /// The credential id stored inside a serialized `Passkey`, for matching a
+    /// vault against an identified assertion.
+    pub fn passkey_cred_id(credential_json: &str) -> Result<Vec<u8>, String> {
+        let passkey: Passkey =
+            serde_json::from_str(credential_json).map_err(|e| e.to_string())?;
+        Ok(passkey.cred_id().as_ref().to_vec())
+    }
+
+    /// Verify a usernameless assertion against the resolved account's passkey.
+    pub fn finish_discoverable(
+        &self,
+        session: &str,
+        assertion_json: &str,
+        credential_json: &str,
+    ) -> Result<(), String> {
+        let (state, _) = self
+            .disco_states
+            .lock()
+            .unwrap()
+            .remove(session)
+            .ok_or("no authentication in progress (expired?)")?;
+        let assertion: PublicKeyCredential =
+            serde_json::from_str(assertion_json).map_err(|e| e.to_string())?;
+        let passkey: Passkey =
+            serde_json::from_str(credential_json).map_err(|e| e.to_string())?;
+        let keys = [DiscoverableKey::from(&passkey)];
+        self.webauthn
+            .finish_discoverable_authentication(&assertion, state, &keys)
             .map(|_| ())
             .map_err(|e| e.to_string())
     }
@@ -206,6 +277,62 @@ pub async fn passkey_login(
             Ok(None) => err(StatusCode::NOT_FOUND, "no vault for that user"),
             Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
         },
+        Err(e) => err(StatusCode::FORBIDDEN, e),
+    }
+}
+
+// === usernameless passkey sign-in (no handle) ============================
+
+/// Hand out a discoverable-credential challenge. The authenticator picks
+/// which resident passkey to use; we learn the account only afterwards.
+pub async fn passkey_discover_challenge(State(app): State<Arc<App>>) -> Response {
+    match app.accounts.start_discoverable() {
+        Ok((options, session)) => match serde_json::from_str::<serde_json::Value>(&options) {
+            Ok(opts) => Json(json!({ "session": session, "options": opts })).into_response(),
+            Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+        },
+        Err(e) => err(StatusCode::INTERNAL_SERVER_ERROR, e),
+    }
+}
+
+#[derive(serde::Deserialize)]
+pub struct DiscoverLogin {
+    /// The `session` handed back by the challenge endpoint.
+    pub session: String,
+    /// The PublicKeyCredential assertion, JSON-serialized by the client.
+    pub assertion: serde_json::Value,
+}
+
+pub async fn passkey_discover_login(
+    State(app): State<Arc<App>>,
+    Json(body): Json<DiscoverLogin>,
+) -> Response {
+    let assertion = body.assertion.to_string();
+    // Which credential signed this? Resolve it to an account's vault.
+    let cred_id = match app.accounts.identify(&assertion) {
+        Ok(id) => id,
+        Err(e) => return err(StatusCode::FORBIDDEN, e),
+    };
+    let vaults = match app.store.list_passkey_vaults().await {
+        Ok(v) => v,
+        Err(e) => return err(StatusCode::INTERNAL_SERVER_ERROR, e.to_string()),
+    };
+    let found = vaults.into_iter().find(|(_, v)| {
+        v.credential
+            .as_deref()
+            .and_then(|c| AccountService::passkey_cred_id(c).ok())
+            .is_some_and(|id| id == cred_id)
+    });
+    let Some((user, vault)) = found else {
+        return err(StatusCode::FORBIDDEN, "unrecognized passkey");
+    };
+    let Some(credential) = vault.credential.clone() else {
+        return err(StatusCode::INTERNAL_SERVER_ERROR, "vault missing credential");
+    };
+    match app.accounts.finish_discoverable(&body.session, &assertion, &credential) {
+        Ok(()) => {
+            Json(json!({ "user": user, "wrapped": B64.encode(&vault.wrapped) })).into_response()
+        }
         Err(e) => err(StatusCode::FORBIDDEN, e),
     }
 }

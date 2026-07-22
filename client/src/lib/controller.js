@@ -57,6 +57,7 @@ import {
 } from './history.js';
 import { VoiceManager } from './voice.js';
 import {
+  VAULT_PRF_SALT,
   derivePrfSecret,
   parseCreationOptions,
   parseRequestOptions,
@@ -1808,7 +1809,11 @@ export class Controller {
       t: 'passkey_register_finish',
       credential: JSON.stringify(serializeRegistration(created)),
     });
-    const prfSalt = crypto.getRandomValues(new Uint8Array(32));
+    // A constant salt (not a random one): PRF output is already unique per
+    // credential, and pinning the salt lets usernameless sign-in derive this
+    // same wrap key with no prior account lookup. Still stored on the vault so
+    // the handle-first path keeps reading it from /params unchanged.
+    const prfSalt = VAULT_PRF_SALT;
     const secret = await derivePrfSecret(created.rawId, prfSalt);
     if (!secret) {
       throw new Error('this authenticator does not support the PRF extension — use a password instead');
@@ -1823,6 +1828,20 @@ export class Controller {
       credential: finish.payload,
     });
     await this.markSecuredLocal();
+  }
+
+  /** Pre-boot probe: how (if at all) a handle signs in on this relay, so
+      the gate can offer only the method that will actually work.
+      Returns 'passkey' | 'password', or null when there's no server vault
+      for that handle (identity was never secured for cross-device use). */
+  async accountKind(user) {
+    try {
+      const params = await this.accountFetch(`/account/${encodeURIComponent(user)}/params`);
+      return params.kind ?? null;
+    } catch (e) {
+      if (/no such account|no vault|404/i.test(e.message)) return null;
+      throw e;
+    }
   }
 
   /** Pre-boot sign-in on a fresh device: fetch the vault, unwrap locally,
@@ -1843,8 +1862,9 @@ export class Controller {
   }
 
   async signInWithPasskey(user) {
+    if (!navigator.credentials?.get) throw new Error('this browser has no passkey support');
     const params = await this.accountFetch(`/account/${encodeURIComponent(user)}/params`);
-    if (params.kind !== 'passkey') throw new Error(`this account uses ${params.kind} sign-in`);
+    if (params.kind !== 'passkey') throw new Error(`this account uses ${params.kind} sign-in, not a passkey`);
     const prfSalt = b64.dec(params.salt);
     const challenge = await this.accountFetch(
       `/account/${encodeURIComponent(user)}/passkey/challenge`,
@@ -1856,6 +1876,35 @@ export class Controller {
     const secret = prfSecret(assertion);
     if (!secret) throw new Error('authenticator returned no PRF secret');
     const reply = await this.accountFetch(`/account/${encodeURIComponent(user)}/passkey/login`, {
+      assertion: serializeAssertion(assertion),
+    });
+    const identity = await decryptBlob(secret, b64.dec(reply.wrapped)).catch(() => {
+      throw new Error('could not decrypt vault — corrupt data');
+    });
+    await this.restoreIdentity(identity);
+    await this.completeOnboarding(true);
+  }
+
+  /** Usernameless sign-in: no handle. The authenticator offers its resident
+      passkeys, the relay resolves which account signed, and the vault comes
+      back keyed by nothing but the credential. Works only for passkeys sealed
+      under the constant PRF salt (i.e. registered by this version onward).
+
+      `mediation: 'conditional'` drives passkey autofill: the get() stays
+      pending (non-modal) until the user picks a passkey from the browser's
+      autocomplete, or `signal` aborts it. Omit both for the modal button. */
+  async signInWithDiscoverablePasskey({ mediation, signal } = {}) {
+    if (!navigator.credentials?.get) throw new Error('this browser has no passkey support');
+    const { session, options } = await this.accountFetch('/passkey/discover/challenge', {});
+    const assertion = await navigator.credentials.get({
+      publicKey: parseRequestOptions(options, VAULT_PRF_SALT),
+      mediation,
+      signal,
+    });
+    const secret = prfSecret(assertion);
+    if (!secret) throw new Error('this passkey has no PRF secret — sign in with your handle instead');
+    const reply = await this.accountFetch('/passkey/discover/login', {
+      session,
       assertion: serializeAssertion(assertion),
     });
     const identity = await decryptBlob(secret, b64.dec(reply.wrapped)).catch(() => {

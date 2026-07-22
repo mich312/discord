@@ -148,3 +148,47 @@ async fn passkey_challenge_404s_for_unknown_user() {
     .await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 }
+
+#[tokio::test]
+async fn discover_challenge_is_usernameless_and_empty_allow_credentials() {
+    let app = make_app();
+    let (status, body) = http(
+        &app,
+        Request::post("/passkey/discover/challenge").body(Body::empty()).unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::OK);
+    // A session token to echo back, and a challenge the authenticator answers.
+    assert!(body["session"].as_str().is_some());
+    // Usernameless: the authenticator — not the server — chooses the credential.
+    let allow = &body["options"]["publicKey"]["allowCredentials"];
+    assert!(allow.is_null() || allow.as_array().unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn discover_login_rejects_a_garbage_assertion() {
+    let app = make_app();
+    let (status, _) = http(
+        &app,
+        Request::post("/passkey/discover/login")
+            .header("content-type", "application/json")
+            .body(Body::from(
+                json!({ "session": "nope", "assertion": { "not": "a credential" } }).to_string(),
+            ))
+            .unwrap(),
+    )
+    .await;
+    // Can't be resolved to any account -> refused, nothing leaked.
+    assert_eq!(status, StatusCode::FORBIDDEN);
+}
+
+#[tokio::test]
+async fn list_passkey_vaults_filters_out_password_vaults() {
+    let app = make_app();
+    seed_password_vault(&app, "pw", b"k").await;
+    seed_passkey_vault(&app, "pk").await;
+    let vaults = app.store.list_passkey_vaults().await.unwrap();
+    assert_eq!(vaults.len(), 1);
+    assert_eq!(vaults[0].0, "pk");
+    assert_eq!(vaults[0].1.kind, "passkey");
+}
