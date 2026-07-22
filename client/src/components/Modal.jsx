@@ -23,9 +23,11 @@ export default function Modal({
   onLeaveServer,
   onDeleteServer,
   onLogout,
+  onLinkSend,
   unsecured,
   identityKey,
 }) {
+  const [linkSent, setLinkSent] = useState(false);
   const [password, setPassword] = useState('');
   const [busy, setBusy] = useState(false);
   const [error, setError] = useState(null);
@@ -79,6 +81,7 @@ export default function Modal({
     identity: { glyph: <Key />, title: 'Identity key' },
     circle: { glyph: <Gear />, title: modal.name ? `${modal.name} — circle settings` : 'Circle settings' },
     logout: { glyph: <LogOut />, title: 'Log out of this device' },
+    'link-send': { glyph: <LinkGlyph />, title: 'Set up another device' },
     admin: { glyph: <ShieldCheck />, title: 'Relay admin overview' },
     channel: {
       glyph: <Gear />,
@@ -166,6 +169,45 @@ export default function Modal({
               download key file
             </a>
             {error && <p className="error">{error}</p>}
+          </>
+        )}
+        {modal.type === 'link-send' && (
+          <>
+            {!linkSent ? (
+              <>
+                <p className="muted">
+                  A device wants to sign in as <strong>you</strong>. This hands it your
+                  identity, sealed end to end — the server only ferries the bytes. Do it{' '}
+                  <em>only</em> if you&rsquo;re the one setting up that device.
+                </p>
+                <p className="fineprint muted">
+                  It should be showing the code{' '}
+                  <strong className="mono">{modal.code}</strong> — check it matches before you send.
+                </p>
+                <button
+                  className="button primary wide"
+                  disabled={busy}
+                  data-testid="link-send"
+                  onClick={() =>
+                    attempt(async () => {
+                      await onLinkSend(modal.blobId, modal.pub);
+                      setLinkSent(true);
+                    })
+                  }
+                >
+                  {busy ? 'sending…' : 'send my identity to it'}
+                </button>
+                <button className="button wide" onClick={onClose}>
+                  cancel
+                </button>
+                {error && <p className="error">{error}</p>}
+              </>
+            ) : (
+              <p className="muted" data-testid="link-sent">
+                Sent. Finish signing in on the other device — it&rsquo;ll ask you to confirm
+                your handle.
+              </p>
+            )}
           </>
         )}
         {modal.type === 'safety' && (

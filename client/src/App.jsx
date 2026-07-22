@@ -3,6 +3,7 @@ import { openDb } from './lib/db.js';
 import { createCrypto } from './lib/rpc.js';
 import { Controller } from './lib/controller.js';
 import { parseInviteUrl } from './lib/invite.js';
+import { parseLinkUrl, verifyCode } from './lib/link.js';
 import Modal from './components/Modal.jsx';
 import Onboarding from './components/Onboarding.jsx';
 import Masthead from './components/Masthead.jsx';
@@ -204,6 +205,17 @@ export default function App() {
       controller.boot().catch((e) => dispatch({ type: 'toast', text: e.message }));
     });
   }, []);
+
+  // Sending side of device-linking: a signed-in device opened with a link URL
+  // (?link=…#k=…) offers to hand its identity to the new device that showed it.
+  useEffect(() => {
+    if (state.phase !== 'ready') return;
+    const link = parseLinkUrl(location);
+    if (!link) return;
+    verifyCode(link.pub).then((code) => {
+      dispatch({ type: 'modal', modal: { type: 'link-send', blobId: link.blobId, pub: link.pub, code } });
+    });
+  }, [state.phase]);
 
   // ⌘K / Ctrl+K opens the palette anywhere inside the app; Escape closes
   // an open drawer.
@@ -844,6 +856,9 @@ export default function App() {
             onClose={() => dispatch({ type: 'modal', modal: null })}
             unsecured={unsecured}
             onLogout={() => controllerRef.current.logout()}
+            onLinkSend={async (blobId, pub) => {
+              await controllerRef.current.sendIdentityToDevice(blobId, pub);
+            }}
             onVerify={async (srv, peer) => {
               await controllerRef.current.markVerified(srv, peer);
               dispatch({ type: 'modal', modal: null });

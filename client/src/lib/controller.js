@@ -73,6 +73,7 @@ import {
   generateFragmentKey,
   generateInviteId,
 } from './invite.js';
+import { sealIdentity } from './link.js';
 import {
   canRemoveNotice,
   mergeNotices,
@@ -1913,9 +1914,13 @@ export class Controller {
     // path reads that salt from the server and still works; re-securing then
     // migrates the passkey to the constant salt.
     const identity = await decryptBlob(secret, b64.dec(reply.wrapped)).catch(() => {
-      throw new Error(
-        'this passkey predates one-tap sign-in — sign in with your handle instead, then re-secure with a passkey from Settings'
-      );
+      // The passkey proved who you are, but this device can't reproduce the
+      // key that sealed the vault (an older per-account salt, or a PRF that
+      // differs across devices — e.g. this passkey on Windows). The graceful
+      // path is to link from a device you're already signed in on.
+      const e = new Error("this device can't unlock your vault with that passkey");
+      e.linkFallback = true;
+      throw e;
     });
     await this.restoreIdentity(identity);
     await this.completeOnboarding(true);
@@ -1938,6 +1943,31 @@ export class Controller {
 
   httpBase() {
     return this.relayUrl.replace(/^ws/, 'http').replace(/\/ws$/, '');
+  }
+
+  // === device linking =====================================================
+  // The relay's blob store doubles as a blind rendezvous: the new device
+  // polls a random id, the signed-in device seals its identity to the new
+  // device's public key and PUTs it there. The relay only holds ciphertext.
+
+  /** New device: fetch the sealed hand-off, or null until it's been sent. */
+  async linkPoll(blobId) {
+    const res = await fetch(`${this.httpBase()}/blobs/${encodeURIComponent(blobId)}`);
+    if (res.status === 404) return null;
+    if (!res.ok) throw new Error(`link fetch failed: HTTP ${res.status}`);
+    return new Uint8Array(await res.arrayBuffer());
+  }
+
+  /** Signed-in device: seal this identity to the offer and park it at the
+      rendezvous. Returns the check code to show alongside the other device. */
+  async sendIdentityToDevice(blobId, pubRaw) {
+    const { payload, code } = await sealIdentity(pubRaw, this.identityBytes());
+    const res = await fetch(`${this.httpBase()}/blobs/${encodeURIComponent(blobId)}`, {
+      method: 'PUT',
+      body: payload,
+    });
+    if (!res.ok) throw new Error(`link send failed: HTTP ${res.status}`);
+    return code;
   }
 
   async sendFile(serverId, channel, fileHandle) {
