@@ -38,7 +38,16 @@ export function parseCreationOptions(json, prf = true) {
     residentKey: 'required',
     requireResidentKey: true,
   };
-  if (prf) options.extensions = { ...(options.extensions ?? {}), prf: {} };
+  // Evaluate PRF *at creation*, not only via a follow-up get(). Some browsers
+  // (notably Chromium on macOS) return the PRF result here but not on the
+  // immediate assertion — asking at both points is the robust path. The salt
+  // is the fixed vault salt, so the value matches what sign-in later derives.
+  if (prf) {
+    options.extensions = {
+      ...(options.extensions ?? {}),
+      prf: { eval: { first: VAULT_PRF_SALT } },
+    };
+  }
   return options;
 }
 

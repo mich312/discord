@@ -92,6 +92,17 @@ const INVITE_TTL_SECONDS = 7 * 24 * 3600;
 // read either store, so this adds redundancy, not exposure.
 const IDENTITY_LS_KEY = 'e2ee-identity';
 
+/** Guidance when a browser won't produce the passkey PRF secret the vault is
+    encrypted under — common on Chromium (Edge/Chrome) on macOS, where Safari
+    does support it. */
+function noPrfMessage() {
+  return (
+    "this browser didn’t provide the passkey PRF extension we need to encrypt your vault. " +
+    'On a Mac, Safari supports it; otherwise secure this account with a password, or link ' +
+    'this device from one you’re already signed in on.'
+  );
+}
+
 export class Controller {
   constructor({ db, crypto, dispatch, relayUrl }) {
     this.db = db;
@@ -1815,10 +1826,10 @@ export class Controller {
     // same wrap key with no prior account lookup. Still stored on the vault so
     // the handle-first path keeps reading it from /params unchanged.
     const prfSalt = VAULT_PRF_SALT;
-    const secret = await derivePrfSecret(created.rawId, prfSalt);
-    if (!secret) {
-      throw new Error('this authenticator does not support the PRF extension — use a password instead');
-    }
+    // Prefer the PRF value returned at creation; fall back to a fresh assertion
+    // for browsers that only evaluate PRF on a get().
+    const secret = prfSecret(created) ?? (await derivePrfSecret(created.rawId, prfSalt));
+    if (!secret) throw new Error(noPrfMessage());
     const wrapped = await encryptBlob(secret, this.identityBytes());
     await this.relay.request({
       t: 'vault_set',
@@ -1846,10 +1857,8 @@ export class Controller {
       t: 'passkey_register_finish',
       credential: JSON.stringify(serializeRegistration(created)),
     });
-    const secret = await derivePrfSecret(created.rawId, VAULT_PRF_SALT);
-    if (!secret) {
-      throw new Error('this authenticator does not support the PRF extension — use a password instead');
-    }
+    const secret = prfSecret(created) ?? (await derivePrfSecret(created.rawId, VAULT_PRF_SALT));
+    if (!secret) throw new Error(noPrfMessage());
     const wrapped = await encryptBlob(secret, this.identityBytes());
     await this.relay.request({
       t: 'passkey_wrap_add',
