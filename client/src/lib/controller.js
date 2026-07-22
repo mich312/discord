@@ -1907,8 +1907,15 @@ export class Controller {
       session,
       assertion: serializeAssertion(assertion),
     });
+    // Here the credential already matched and its signature verified, so a
+    // decrypt failure isn't corruption — it's a passkey sealed under the old
+    // per-account salt (registered before one-tap sign-in). The handle-first
+    // path reads that salt from the server and still works; re-securing then
+    // migrates the passkey to the constant salt.
     const identity = await decryptBlob(secret, b64.dec(reply.wrapped)).catch(() => {
-      throw new Error('could not decrypt vault — corrupt data');
+      throw new Error(
+        'this passkey predates one-tap sign-in — sign in with your handle instead, then re-secure with a passkey from Settings'
+      );
     });
     await this.restoreIdentity(identity);
     await this.completeOnboarding(true);
