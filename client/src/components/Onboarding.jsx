@@ -7,8 +7,10 @@ import { QuorumGlyph, Key, Download } from './icons.jsx';
 //  - invite fast path: link-holders pick a handle and are in the group in
 //    seconds; securing the account is deferred (nagging banner inside)
 //  - new identity: keypair + forced recovery-key export
-//  - sign in: username + password or passkey against the relay vault;
-//    advanced: paste an identity key / recovery file + code
+//  - sign in: handle-first. We probe the relay for how THIS account was
+//    secured, then offer only the one method that can work (passkey or
+//    password) — never the whole menu. A recovery file / pasted identity
+//    key stays available as a device-portable fallback that needs no vault.
 function Gate({ children }) {
   return (
     <div className="gate">
@@ -73,6 +75,9 @@ export default function Onboarding({ controller }) {
   const [restoreFile, setRestoreFile] = useState(null);
   const [restoreCode, setRestoreCode] = useState('');
   const [pastedKey, setPastedKey] = useState('');
+  // Sign-in is handle-first: undefined = not looked up yet; then the probed
+  // vault kind ('passkey' | 'password') or 'none' when no vault exists.
+  const [signinKind, setSigninKind] = useState(undefined);
 
   const validHandle = (h) => /^[a-z0-9_.-]{2,32}$/.test(h);
 
@@ -123,10 +128,46 @@ export default function Onboarding({ controller }) {
     });
   }
 
-  async function signIn(e) {
+  // Step one of sign-in: look the handle up so we can show the one method
+  // this account actually uses, instead of a menu of mostly-wrong options.
+  async function lookUpAccount(e) {
     e.preventDefault();
     const handle = name.trim().toLowerCase();
     if (!validHandle(handle)) return setError('enter your handle first');
+    await run('looking up your account…', async () => {
+      const kind = await controller.accountKind(handle);
+      setSigninKind(kind ?? 'none');
+      setBusy(false);
+      setBusyText(null);
+    });
+  }
+
+  function changeHandle() {
+    setSigninKind(undefined);
+    setPassword('');
+    setError(null);
+  }
+
+  async function signInPassword(e) {
+    e.preventDefault();
+    const handle = name.trim().toLowerCase();
+    if (!password) return setError('enter your password');
+    await run('deriving keys… (a second or two)', () =>
+      controller.signInWithPassword(handle, password)
+    );
+  }
+
+  async function signInPasskey() {
+    const handle = name.trim().toLowerCase();
+    if (!validHandle(handle)) return setError('enter your handle first');
+    await run('waiting for your passkey…', () => controller.signInWithPasskey(handle));
+  }
+
+  // Fallback path: restore a device-portable identity (recovery file + code,
+  // or a pasted identity key). Needs no server vault, so it works regardless
+  // of how — or whether — the account was secured for cross-device sign-in.
+  async function restoreIdentity(e) {
+    e.preventDefault();
     if (pastedKey.trim()) {
       return run('restoring…', async () => {
         const identity = Uint8Array.from(atob(pastedKey.trim()), (c) => c.charCodeAt(0));
@@ -144,16 +185,7 @@ export default function Onboarding({ controller }) {
         await controller.completeOnboarding(true);
       });
     }
-    if (!password) return setError('enter your password (or use the passkey button)');
-    await run('deriving keys… (a second or two)', () =>
-      controller.signInWithPassword(handle, password)
-    );
-  }
-
-  async function signInPasskey() {
-    const handle = name.trim().toLowerCase();
-    if (!validHandle(handle)) return setError('enter your handle first');
-    await run('waiting for your passkey…', () => controller.signInWithPasskey(handle));
+    setError('add a recovery file + code, or paste an identity key');
   }
 
   if (step === 'recovery') {
@@ -241,10 +273,17 @@ export default function Onboarding({ controller }) {
         <h1>Enter quorum</h1>
         <p className="muted lede">Your identity is a keypair. Everything else follows from that.</p>
         <div className="tabs">
-          <button className={mode === 'create' ? 'tab active' : 'tab'} onClick={() => setMode('create')}>
+          <button
+            className={mode === 'create' ? 'tab active' : 'tab'}
+            onClick={() => { setMode('create'); setError(null); }}
+          >
             new identity
           </button>
-          <button className={mode === 'signin' ? 'tab active' : 'tab'} data-testid="tab-signin" onClick={() => setMode('signin')}>
+          <button
+            className={mode === 'signin' ? 'tab active' : 'tab'}
+            data-testid="tab-signin"
+            onClick={() => { setMode('signin'); setSigninKind(undefined); setError(null); }}
+          >
             sign in
           </button>
         </div>
@@ -281,70 +320,108 @@ export default function Onboarding({ controller }) {
           </form>
           )
         ) : (
-          <form onSubmit={signIn}>
-            <label className="field">
-              <span>handle</span>
-              <input
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder="your handle"
-                data-testid="signin-handle"
-              />
-            </label>
-            <label className="field">
-              <span>password</span>
-              <input
-                type="password"
-                value={password}
-                onChange={(e) => setPassword(e.target.value)}
-                data-testid="signin-password"
-              />
-            </label>
-            <div className="row">
-              <button className="button primary" disabled={busy} data-testid="signin-submit">
-                {busyText ?? 'sign in'}
-              </button>
-              <button
-                type="button"
-                className="button"
-                disabled={busy}
-                data-testid="signin-passkey"
-                onClick={signInPasskey}
-              >
-                <Key size={14} />
-                use passkey
-              </button>
-            </div>
-            <details className="advanced">
-              <summary className="muted">advanced: identity key or recovery file</summary>
-              <label className="field">
-                <span>identity key (paste)</span>
-                <textarea
-                  className="keybox small"
-                  value={pastedKey}
-                  onChange={(e) => setPastedKey(e.target.value)}
-                  data-testid="paste-key"
-                />
-              </label>
-              <label className="field">
-                <span>recovery file</span>
-                <input type="file" onChange={(e) => setRestoreFile(e.target.files[0] ?? null)} data-testid="restore-file" />
-              </label>
-              <label className="field">
-                <span>recovery code</span>
-                <input
-                  value={restoreCode}
-                  onChange={(e) => setRestoreCode(e.target.value)}
-                  placeholder="XXXX-XXXX-XXXX-XXXX"
-                  data-testid="restore-code"
-                />
-              </label>
+          <div className="signin">
+            {signinKind === undefined ? (
+              <form onSubmit={lookUpAccount}>
+                <label className="field">
+                  <span>handle</span>
+                  <input
+                    value={name}
+                    onChange={(e) => setName(e.target.value)}
+                    placeholder="your handle"
+                    data-testid="signin-handle"
+                  />
+                </label>
+                <button className="button primary wide" disabled={busy} data-testid="signin-continue">
+                  {busyText ?? 'continue'}
+                </button>
+              </form>
+            ) : (
+              <>
+                <p className="signin-as muted">
+                  signing in as <strong>{name.trim().toLowerCase()}</strong>
+                  <button type="button" className="linkish" onClick={changeHandle} data-testid="signin-change">
+                    change
+                  </button>
+                </p>
+                {signinKind === 'passkey' && (
+                  <>
+                    <p className="muted lede">This account signs in with a passkey.</p>
+                    <button
+                      type="button"
+                      className="button primary wide"
+                      disabled={busy}
+                      data-testid="signin-passkey"
+                      onClick={signInPasskey}
+                    >
+                      <Key size={14} />
+                      {busyText ?? 'sign in with passkey'}
+                    </button>
+                  </>
+                )}
+                {signinKind === 'password' && (
+                  <form onSubmit={signInPassword}>
+                    <p className="muted lede">This account signs in with a password.</p>
+                    <label className="field">
+                      <span>password</span>
+                      <input
+                        autoFocus
+                        type="password"
+                        value={password}
+                        onChange={(e) => setPassword(e.target.value)}
+                        data-testid="signin-password"
+                      />
+                    </label>
+                    <button className="button primary wide" disabled={busy} data-testid="signin-submit">
+                      {busyText ?? 'sign in'}
+                    </button>
+                  </form>
+                )}
+                {signinKind === 'none' && (
+                  <p className="muted lede" data-testid="signin-none">
+                    No cross-device sign-in is set up for{' '}
+                    <strong>{name.trim().toLowerCase()}</strong>. If you saved a recovery
+                    file or identity key when you created this account, restore it below.
+                  </p>
+                )}
+              </>
+            )}
+
+            <details className="advanced" open={signinKind === 'none' || undefined}>
+              <summary className="muted">recovery file or identity key</summary>
+              <form onSubmit={restoreIdentity}>
+                <label className="field">
+                  <span>recovery file</span>
+                  <input type="file" onChange={(e) => setRestoreFile(e.target.files[0] ?? null)} data-testid="restore-file" />
+                </label>
+                <label className="field">
+                  <span>recovery code</span>
+                  <input
+                    value={restoreCode}
+                    onChange={(e) => setRestoreCode(e.target.value)}
+                    placeholder="XXXX-XXXX-XXXX-XXXX"
+                    data-testid="restore-code"
+                  />
+                </label>
+                <label className="field">
+                  <span>…or paste an identity key</span>
+                  <textarea
+                    className="keybox small"
+                    value={pastedKey}
+                    onChange={(e) => setPastedKey(e.target.value)}
+                    data-testid="paste-key"
+                  />
+                </label>
+                <button className="button wide" disabled={busy} data-testid="restore-submit">
+                  {busyText ?? 'restore identity'}
+                </button>
+              </form>
             </details>
             <p className="fineprint muted">
               Signing in restores your identity, not old messages — their keys lived only
               on the previous device. Ask to be re-added to circles.
             </p>
-          </form>
+          </div>
         )}
         {error && <p className="error">{error}</p>}
       </div>

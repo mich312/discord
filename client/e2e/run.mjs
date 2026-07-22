@@ -284,11 +284,12 @@ try {
   fresh.on('pageerror', (e) => console.error('[fresh pageerror]', e.message));
   await fresh.goto(base);
   await fresh.click('[data-testid=tab-signin]');
-  await fresh.fill('[data-testid=signin-handle]', 'bob');
+  // Recovery-file restore is the device-portable fallback — it needs no
+  // server vault, so it lives under the advanced disclosure, not the probe.
   await fresh.click('summary');
   await fresh.setInputFiles('[data-testid=restore-file]', bobRecovery.file);
   await fresh.fill('[data-testid=restore-code]', bobRecovery.code);
-  await fresh.click('[data-testid=signin-submit]');
+  await fresh.click('[data-testid=restore-submit]');
   // Identity is back (same pinned key -> relay accepts as bob)…
   // (match the visible self-name, not the SVG seal's <title>bob</title>.)
   await fresh.waitForFunction(
@@ -367,10 +368,9 @@ try {
   imported.on('pageerror', (e) => console.error('[import pageerror]', e.message));
   await imported.goto(base);
   await imported.click('[data-testid=tab-signin]');
-  await imported.fill('[data-testid=signin-handle]', 'alice');
   await imported.click('summary');
   await imported.fill('[data-testid=paste-key]', aliceKey);
-  await imported.click('[data-testid=signin-submit]');
+  await imported.click('[data-testid=restore-submit]');
   await imported.waitForSelector('.empty-state', { timeout: 15000 });
   const importedText = await imported.textContent('.empty-state');
   if (!importedText.includes('alice')) throw new Error('pasted identity key did not restore alice');
@@ -698,6 +698,10 @@ try {
   await pwPage.goto(base);
   await pwPage.click('[data-testid=tab-signin]');
   await pwPage.fill('[data-testid=signin-handle]', 'charlie');
+  // Handle-first: probe the account, then the password field appears because
+  // that's the method charlie's vault actually uses.
+  await pwPage.click('[data-testid=signin-continue]');
+  await pwPage.waitForSelector('[data-testid=signin-password]', { timeout: 10000 });
   await pwPage.fill('[data-testid=signin-password]', 'tyre pressures at dawn');
   await pwPage.click('[data-testid=signin-submit]');
   // The identity comes back from the password vault…
@@ -724,6 +728,8 @@ try {
   await pw2.goto(base);
   await pw2.click('[data-testid=tab-signin]');
   await pw2.fill('[data-testid=signin-handle]', 'charlie');
+  await pw2.click('[data-testid=signin-continue]');
+  await pw2.waitForSelector('[data-testid=signin-password]', { timeout: 10000 });
   await pw2.fill('[data-testid=signin-password]', 'not the password');
   await pw2.click('[data-testid=signin-submit]');
   await pw2.waitForSelector('.error', { timeout: 30000 });
@@ -767,6 +773,10 @@ try {
     await erin.goto(localhostBase);
     await erin.click('[data-testid=tab-signin]');
     await erin.fill('[data-testid=signin-handle]', 'erin');
+    // Handle-first: the probe finds a passkey vault, so the passkey button
+    // is the one method offered.
+    await erin.click('[data-testid=signin-continue]');
+    await erin.waitForSelector('[data-testid=signin-passkey]', { timeout: 10000 });
     await erin.click('[data-testid=signin-passkey]');
     await erin.waitForSelector('.empty-state', { timeout: 30000 });
     if (!(await erin.textContent('.empty-state')).includes('erin')) {

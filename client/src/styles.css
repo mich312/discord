@@ -1799,6 +1799,14 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
   margin-bottom: 10px;
 }
 .advanced summary:hover { color: var(--ink-dim); }
+.signin-as {
+  display: flex;
+  align-items: baseline;
+  gap: 8px;
+  font-size: var(--text-sm);
+  margin-bottom: 14px;
+}
+.signin-as .linkish { margin-left: auto; }
 
 /* ----------------------------------------------------------- onboarding -- */
 .gate {

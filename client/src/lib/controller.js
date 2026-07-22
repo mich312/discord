@@ -1825,6 +1825,20 @@ export class Controller {
     await this.markSecuredLocal();
   }
 
+  /** Pre-boot probe: how (if at all) a handle signs in on this relay, so
+      the gate can offer only the method that will actually work.
+      Returns 'passkey' | 'password', or null when there's no server vault
+      for that handle (identity was never secured for cross-device use). */
+  async accountKind(user) {
+    try {
+      const params = await this.accountFetch(`/account/${encodeURIComponent(user)}/params`);
+      return params.kind ?? null;
+    } catch (e) {
+      if (/no such account|no vault|404/i.test(e.message)) return null;
+      throw e;
+    }
+  }
+
   /** Pre-boot sign-in on a fresh device: fetch the vault, unwrap locally,
       adopt the identity. Groups don't transfer — only who you are. */
   async signInWithPassword(user, password) {
@@ -1843,8 +1857,9 @@ export class Controller {
   }
 
   async signInWithPasskey(user) {
+    if (!navigator.credentials?.get) throw new Error('this browser has no passkey support');
     const params = await this.accountFetch(`/account/${encodeURIComponent(user)}/params`);
-    if (params.kind !== 'passkey') throw new Error(`this account uses ${params.kind} sign-in`);
+    if (params.kind !== 'passkey') throw new Error(`this account uses ${params.kind} sign-in, not a passkey`);
     const prfSalt = b64.dec(params.salt);
     const challenge = await this.accountFetch(
       `/account/${encodeURIComponent(user)}/passkey/challenge`,
