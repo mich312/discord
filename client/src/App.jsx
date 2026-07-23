@@ -1,4 +1,4 @@
-import React, { useEffect, useMemo, useReducer, useRef, useState } from 'react';
+import React, { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { openDb } from './lib/db.js';
 import { createCrypto } from './lib/rpc.js';
 import { Controller } from './lib/controller.js';
@@ -28,6 +28,7 @@ import Seal from './components/Seal.jsx';
 import BootLoader from './components/BootLoader.jsx';
 import { Key, ShieldCheck, LinkGlyph, Sun, QuorumGlyph, Gear, LogOut } from './components/icons.jsx';
 import { markPlayed, bumpPlayCount } from './lib/games.js';
+import { withViewTransition } from './lib/viewTransition.js';
 
 /** Content identity of a message for merging a load snapshot with live
     arrivals — same idea as history.js's fingerprint, plus the system flag. */
@@ -164,7 +165,22 @@ function loadTheme() {
 }
 
 export default function App() {
-  const [state, dispatch] = useReducer(reducer, initial);
+  const [state, rawDispatch] = useReducer(reducer, initial);
+  // The roster regroups (a member sliding into "in call" / "playing") on a
+  // voice update, which is network-driven, not a click — so we can't wrap it
+  // at a call site. Instead the dispatch itself runs a View Transition, but
+  // ONLY when the call/game *membership* actually changed: speaking meters
+  // fire many times a second and must never trigger a transition.
+  const stateRef = useRef(state);
+  stateRef.current = state;
+  const rosterSig = (v) => JSON.stringify(v?.presence ?? {});
+  const dispatch = useCallback((action) => {
+    if (action.type === 'voice' && rosterSig(action.state) !== rosterSig(stateRef.current.voice)) {
+      withViewTransition(() => rawDispatch(action));
+      return;
+    }
+    rawDispatch(action);
+  }, []);
   const [theme, setTheme] = useState(loadTheme);
   const [paletteOpen, setPaletteOpen] = useState(false);
   // Narrow-screen drawers: the sidebar and roster slide over the messages
@@ -370,9 +386,12 @@ export default function App() {
     // A running game keeps the pane — the call rides in its dock instead.
     if (game) return;
     if (!stage) stageReturn.current = state.active;
-    dispatch({ type: 'select', server: v.server, channel: callChatChannel(v.channel) });
-    setStage(true);
-    setDrawer(null);
+    // Morph the main pane text ⇄ call stage as one View Transition.
+    withViewTransition(() => {
+      dispatch({ type: 'select', server: v.server, channel: callChatChannel(v.channel) });
+      setStage(true);
+      setDrawer(null);
+    });
   };
 
   // Launch a game from the shelf: the game takes the main pane, and the
@@ -419,14 +438,16 @@ export default function App() {
   };
 
   const closeStage = () => {
-    setStage(false);
     const back = stageReturn.current;
     stageReturn.current = null;
-    if (back?.server && state.servers.some((s) => s.id === back.server)) {
-      dispatch({ type: 'select', server: back.server, channel: back.channel });
-    } else if (activeServer) {
-      dispatch({ type: 'select', server: activeServer.id, channel: activeServer.channels[0] });
-    }
+    withViewTransition(() => {
+      setStage(false);
+      if (back?.server && state.servers.some((s) => s.id === back.server)) {
+        dispatch({ type: 'select', server: back.server, channel: back.channel });
+      } else if (activeServer) {
+        dispatch({ type: 'select', server: activeServer.id, channel: activeServer.channels[0] });
+      }
+    });
   };
 
   // The call ended (hang-up, peer left, connection lost) — the stage has
@@ -556,13 +577,15 @@ export default function App() {
           <Rail
             servers={state.servers}
             active={server}
-            onSelect={(id) => {
-              // Picking a circle lands on its game hub, not a room.
-              dispatch({ type: 'select', server: id, channel: null });
-              setStage(false); // navigating away swaps the stage for the rooms
-              setGame(null);
-              setDrawer(null);
-            }}
+            onSelect={(id) =>
+              withViewTransition(() => {
+                // Picking a circle lands on its game hub, not a room.
+                dispatch({ type: 'select', server: id, channel: null });
+                setStage(false); // navigating away swaps the stage for the rooms
+                setGame(null);
+                setDrawer(null);
+              })
+            }
             onCreate={async (name) => {
               const id = await controllerRef.current.createServer(name);
               dispatch({ type: 'select', server: id, channel: null });
@@ -577,12 +600,14 @@ export default function App() {
               me={state.me}
               unreads={unreads}
               canManage={canManage && !activeServer.restored}
-              onSelect={(ch) => {
-                dispatch({ type: 'select', server, channel: ch });
-                setStage(false); // picking a text room dismisses the stage
-                setGame(null); // …and the game
-                setDrawer(null);
-              }}
+              onSelect={(ch) =>
+                withViewTransition(() => {
+                  dispatch({ type: 'select', server, channel: ch });
+                  setStage(false); // picking a text room dismisses the stage
+                  setGame(null); // …and the game
+                  setDrawer(null);
+                })
+              }
               onSettings={(ch) =>
                 dispatch({
                   type: 'modal',
@@ -757,7 +782,9 @@ export default function App() {
                 voice={state.voice}
                 digestKey={`${activeServer.lastSeq}:${state.messagesRev}`}
                 loadDigest={(id) => controllerRef.current.channelDigest(id)}
-                onSelectChannel={(ch) => dispatch({ type: 'select', server, channel: ch })}
+                onSelectChannel={(ch) =>
+                  withViewTransition(() => dispatch({ type: 'select', server, channel: ch }))
+                }
                 onVoiceJoin={(ch) =>
                   controllerRef.current.voice
                     .join(server, ch)

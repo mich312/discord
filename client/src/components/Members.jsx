@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import Seal from './Seal.jsx';
 import { freshPresence } from '../lib/games.js';
 import { describeAgo } from '../lib/overview.js';
+import { memberVtName } from '../lib/viewTransition.js';
 import { Check, Phone, X } from './icons.jsx';
 
 // The roster is the security boundary: it is, exactly, who can read this
@@ -42,7 +43,14 @@ export default function Members({ server, me, canManage, voice, onAdd, onMember,
     const speaking = voice?.speaking?.includes(m);
     const p = playing[m];
     return (
-      <li key={m} className={speaking ? 'member speaking' : 'member'}>
+      <li
+        key={m}
+        className={speaking ? 'member speaking' : 'member'}
+        // Stable per-member name so the browser slides the row (FLIP) as it
+        // moves between the rest / in-call / playing groups, rather than
+        // cross-dissolving it. Named only while it's a real roster row.
+        style={{ viewTransitionName: memberVtName(m) }}
+      >
         <Seal name={m} size={26} />
         <span className="member-col">
           <button
