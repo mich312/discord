@@ -4,11 +4,16 @@
 //
 // Message content is a JSON envelope INSIDE the MLS plaintext, so channel
 // structure and server names are invisible to the relay:
-//   {k:'chat', ch, text}          — a chat message in channel `ch`. A `ch`
-//                                   of the form `voice:<room>` is a call's
-//                                   conversation thread: same crypto, same
-//                                   storage, but it belongs to the voice
-//                                   room's stage, never the rooms sidebar
+//   {k:'chat', ch, text, reply?}  — a chat message in channel `ch`. `reply`
+//                                   (optional) is a quoted snapshot
+//                                   {sender, ts, text} of the message being
+//                                   answered — denormalized on purpose: a
+//                                   joiner has no scrollback, so a bare
+//                                   pointer would dangle. A `ch` of the form
+//                                   `voice:<room>` is a call's conversation
+//                                   thread: same crypto, same storage, but it
+//                                   belongs to the voice room's stage, never
+//                                   the rooms sidebar
 //   {k:'meta', name, channels,
 //    chanMeta}                    — server metadata; rebroadcast after every
 //                                   member add because joiners have no
@@ -37,6 +42,12 @@
 //   {k:'react', ch, to:{sender,ts},
 //    emo, op}                      — a reaction on one message (op add|del).
 //                                   emo is a short string rendered as text
+//   {k:'type', ch}                — ephemeral typing signal: the sender is
+//                                   composing in channel `ch` right now.
+//                                   Same discipline as presence — fanned out
+//                                   over MLS, kept only in memory, expired by
+//                                   readers (~6s); never persisted, never
+//                                   rebroadcast, never push-woken
 //   {k:'rsvp', at, going}          — answer to the hub's next-event card,
 //                                   keyed to the event's timestamp so stale
 //                                   answers die with the old event
@@ -86,6 +97,29 @@ import { freshPresence, normalizeGameRef, normalizePresence, normalizeWant } fro
 
 const KP_TOPUP = 2; // fresh KeyPackages published per connect
 const INVITE_TTL_SECONDS = 7 * 24 * 3600;
+// Typing signals: readers treat one as stale ~6s after it was sent, and a
+// composing client re-sends every ~3s while the draft grows, so the "is
+// typing" line stays lit without a heartbeat on every keystroke. Both live
+// only in memory — a typing signal is never logged or persisted.
+const TYPING_TTL_MS = 6000;
+const TYPING_HEARTBEAT_MS = 3000;
+// A reply carries a *snapshot* of the answered line, not a pointer: E2EE
+// gives a joiner no scrollback to resolve one against, so the quote must be
+// self-contained. Bounded hard — it renders as text, never as markup.
+const REPLY_TEXT_MAX = 140;
+function normalizeReply(r) {
+  if (!r || typeof r !== 'object') return null;
+  const sender = String(r.sender ?? '').slice(0, 64).trim();
+  const ts = Number(r.ts);
+  if (!sender || !Number.isFinite(ts) || ts <= 0) return null;
+  const text = String(r.text ?? '').slice(0, REPLY_TEXT_MAX);
+  return { sender, ts, text };
+}
+/** True while `entry` (a {ts} typing signal) is still within its live
+    window. Reader-side expiry, exactly like presence/rally freshness. */
+export function freshTyping(entry, now = Date.now()) {
+  return !!entry && now - entry.ts < TYPING_TTL_MS;
+}
 // The identity bundle also lives in localStorage: IndexedDB and
 // localStorage have different eviction behaviors, so the identity key
 // (the unrecoverable part) survives an IndexedDB wipe. Same-origin JS can
@@ -412,6 +446,8 @@ export class Controller {
         this.setLivePresence(msg.group, event.sender, normalizePresence(content));
       } else if (content.k === 'want') {
         this.setLiveWant(msg.group, event.sender, normalizeWant(content));
+      } else if (content.k === 'type') {
+        this.setLiveTyping(msg.group, event.sender, content.ch);
       }
     } catch (e) {
       console.warn(`ephemeral from ${msg.sender} undecryptable: ${e.message}`);
@@ -561,12 +597,16 @@ export class Controller {
     switch (content.k) {
       case 'chat': {
         this.ensureChannel(record, content.ch);
+        // A line landing is proof the sender stopped composing — clear their
+        // typing signal now instead of waiting for it to age out.
+        this.clearTyping(record.id, sender);
         await this.storeMessage({
           server: record.id,
           channel: content.ch,
           sender,
           text: content.text,
           ts: messageTs(content.ts),
+          ...(normalizeReply(content.reply) ? { reply: normalizeReply(content.reply) } : {}),
         });
         break;
       }
@@ -595,6 +635,13 @@ export class Controller {
         // A rally — same ephemeral discipline as presence: a controller-side
         // map, reader-expired, never persisted to the record or the backup.
         this.setLiveWant(record.id, sender, normalizeWant(content));
+        break;
+      }
+      case 'type': {
+        // A typing signal — same ephemeral discipline again. Only ever fanned
+        // out over the no-log path, but handled here too so the two receive
+        // routes stay symmetric.
+        this.setLiveTyping(record.id, sender, content.ch);
         break;
       }
       case 'react': {
@@ -1221,7 +1268,7 @@ export class Controller {
     this.scheduleBackup();
   }
 
-  async sendChat(serverId, channel, text) {
+  async sendChat(serverId, channel, text, reply) {
     // The timestamp is the sender's, carried on the wire, so every device —
     // and the kept-history log — stamps this message identically. Otherwise
     // each recipient's own receive-clock ts would (a) order messages
@@ -1232,14 +1279,32 @@ export class Controller {
     // network send fails (offline, half-open socket), it stays visible as
     // *failed* with a retry — instead of silently vanishing from the input.
     const ts = Date.now();
-    await this.storeMessage({ server: serverId, channel, sender: this.me, text, ts, pending: true });
-    await this.deliverChat(serverId, channel, text, ts);
+    const quote = normalizeReply(reply);
+    await this.storeMessage({
+      server: serverId,
+      channel,
+      sender: this.me,
+      text,
+      ts,
+      pending: true,
+      ...(quote ? { reply: quote } : {}),
+    });
+    // Sending a line means I've stopped composing — drop my own typing
+    // signal so a peer's "is typing" clears the instant the message lands.
+    await this.deliverChat(serverId, channel, text, ts, quote);
   }
 
   /** Network half of sendChat; also the retry path for a failed line. */
-  async deliverChat(serverId, channel, text, ts) {
+  async deliverChat(serverId, channel, text, ts, reply) {
+    const quote = normalizeReply(reply);
     try {
-      await this.sendContent(serverId, { k: 'chat', ch: channel, text, ts });
+      await this.sendContent(serverId, {
+        k: 'chat',
+        ch: channel,
+        text,
+        ts,
+        ...(quote ? { reply: quote } : {}),
+      });
     } catch (e) {
       await this.db.msgPatch(serverId, channel, this.me, ts, (m) => ({
         ...m,
@@ -1251,7 +1316,14 @@ export class Controller {
     }
     await this.db.msgPatch(serverId, channel, this.me, ts, ({ pending, failed, ...m }) => m);
     this.dispatch({ type: 'refreshMessages' });
-    this.appendHistory(serverId, channel, { server: serverId, channel, sender: this.me, text, ts });
+    this.appendHistory(serverId, channel, {
+      server: serverId,
+      channel,
+      sender: this.me,
+      text,
+      ts,
+      ...(quote ? { reply: quote } : {}),
+    });
   }
 
   /** Retry a message that failed to send (still stored locally). */
@@ -1262,7 +1334,7 @@ export class Controller {
       failed: false,
     }));
     this.dispatch({ type: 'refreshMessages' });
-    await this.deliverChat(serverId, channel, message.text, message.ts);
+    await this.deliverChat(serverId, channel, message.text, message.ts, message.reply);
   }
 
   /** Announce a game launch as a first-class message: renders as a join
@@ -1319,6 +1391,43 @@ export class Controller {
     const map = this.liveWants.get(serverId) ?? {};
     map[handle] = entry;
     this.liveWants.set(serverId, map);
+    this.dispatch({ type: 'servers', servers: this.snapshotServers() });
+  }
+
+  /** Announce that I'm composing in `channel`. Ephemeral to the bone — same
+      no-log fan-out as presence, never persisted, never push-woken (a typing
+      blip must not wake a closed app). Throttled to one signal per heartbeat
+      so a fast typist doesn't flood the group; the reader-side TTL keeps the
+      indicator lit between beats and lets it fade on its own if I stop. */
+  async typing(serverId, channel) {
+    if (!this.servers.get(serverId)) return;
+    if (!this._typingSentAt) this._typingSentAt = new Map();
+    const key = `${serverId}/${channel}`;
+    const now = Date.now();
+    const last = this._typingSentAt.get(key) ?? 0;
+    if (now - last < TYPING_HEARTBEAT_MS) return;
+    this._typingSentAt.set(key, now);
+    // Best-effort: a dropped typing signal is a non-event, so never surface
+    // it — the draft the user is writing matters, this hint doesn't.
+    await this.sendEphemeral(serverId, { k: 'type', ch: channel }).catch(() => {});
+  }
+
+  setLiveTyping(serverId, handle, channel) {
+    if (handle === this.me) return; // never show my own typing back to me
+    if (!this.liveTyping) this.liveTyping = new Map();
+    const map = this.liveTyping.get(serverId) ?? {};
+    map[handle] = { channel: String(channel ?? ''), ts: Date.now() };
+    this.liveTyping.set(serverId, map);
+    this.dispatch({ type: 'servers', servers: this.snapshotServers() });
+  }
+
+  /** Drop a member's typing signal outright — called when a line of theirs
+      lands (they've clearly stopped) so the indicator clears without waiting
+      out the TTL. */
+  clearTyping(serverId, handle) {
+    const map = this.liveTyping?.get(serverId);
+    if (!map || !(handle in map)) return;
+    delete map[handle];
     this.dispatch({ type: 'servers', servers: this.snapshotServers() });
   }
 
@@ -1385,6 +1494,9 @@ export class Controller {
         : message.game
           ? { game: message.game }
           : { text: message.text }),
+      // A reply's quote rides into kept history too, so a joiner reading the
+      // channel back sees what each answer was answering.
+      ...(message.reply ? { reply: message.reply } : {}),
     };
     sealHistoryEntry(meta.hkey, entry)
       .then((payload) =>
@@ -1450,6 +1562,7 @@ export class Controller {
             : gameRef
               ? { game: gameRef }
               : { text: String(entry.text ?? '') }),
+          ...(normalizeReply(entry.reply) ? { reply: normalizeReply(entry.reply) } : {}),
           fromHistory: true,
         };
         if (message.ts < cutoff || seen.has(messageFingerprint(message))) continue;
@@ -2261,6 +2374,8 @@ export class Controller {
         presence: { ...(this.livePresence?.get(r.id) ?? {}) },
         // Live only: open rallies — who wants to play what right now.
         wants: { ...(this.liveWants?.get(r.id) ?? {}) },
+        // Live only: who is composing right now, per channel. Reader-expired.
+        typing: { ...(this.liveTyping?.get(r.id) ?? {}) },
       }));
   }
 

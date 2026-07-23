@@ -701,11 +701,12 @@ export default function App() {
                 channel={channel}
                 me={state.me}
                 messages={state.messages}
-                onSend={(text) =>
+                onSend={(text, reply) =>
                   controllerRef.current
-                    .sendChat(server, channel, text)
+                    .sendChat(server, channel, text, reply)
                     .catch((e) => dispatch({ type: 'toast', text: e.message }))
                 }
+                onType={() => controllerRef.current?.typing(server, channel).catch(() => {})}
                 onSendFile={(file) =>
                   controllerRef.current
                     .sendFile(server, channel, file)

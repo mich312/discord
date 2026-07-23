@@ -51,6 +51,8 @@ const servers = [
     wants: {
       charlie: { want: { id: 'g3', name: 'Tanks! Night Ops', kind: 'activity' }, ts: now - 4 * 60e3 },
     },
+    // Live typing signal in #general (reader-expires ~6s after `ts`).
+    typing: { charlie: { channel: 'general', ts: now } },
     rsvps: {
       bob: { at: now + 52 * H, ts: now - 3 * H },
       dana: { at: now + 52 * H, ts: now - 2 * H },
@@ -117,6 +119,12 @@ const messages = [
   { sender: 'dana', text: 'trailer leaves at 6am sharp — pack the spare diffuser tonight', ts: now - 2.2 * H, reacts: { '👍': ['alice', 'bob'] } },
   { sender: 'bob', file: { name: 'stint-plan.pdf', mime: 'application/pdf', size: 182044 }, ts: now - 1.1 * H },
   { sender: 'bob', text: 'plan B if it rains: box on lap 14 and go long', ts: now - 1.1 * H + 20e3 },
+  {
+    sender: 'alice',
+    text: 'good call — I’ll prep the wets either way',
+    ts: now - 1.05 * H,
+    reply: { sender: 'bob', ts: now - 1.1 * H + 20e3, text: 'plan B if it rains: box on lap 14 and go long' },
+  },
 ];
 
 // 2×2 png so the eager image-decrypt path renders something real.

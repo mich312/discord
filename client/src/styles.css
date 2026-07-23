@@ -1139,7 +1139,7 @@ kbd {
 
 .msg-line {
   position: relative;
-  padding: 1px 64px 1px 0;
+  padding: 1px 90px 1px 0;
   overflow-wrap: anywhere;
   color: var(--ink);
 }
@@ -2021,6 +2021,119 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
   cursor: pointer;
 }
 .react-pick:hover { background: var(--hover); }
+
+/* reply: a hover affordance that floats top-right, left of the reaction add
+   and the timestamp, so replying is one click without a context menu */
+.react.msg-reply {
+  position: absolute;
+  top: 1px;
+  right: 60px;
+  padding: 2px 7px;
+  background: none;
+  border-color: transparent;
+  color: var(--ink-mute);
+  opacity: 0;
+}
+.react.msg-reply:hover { color: var(--ink-dim); border-color: transparent; }
+.msg-line:hover .react.msg-reply, .react.msg-reply:focus-visible { opacity: 1; }
+@media (hover: none) { .react.msg-reply { opacity: 1; } }
+
+/* the quote a reply carries, shown above the answering line. Clickable to
+   scroll to the original; inert-but-readable (.orphan) when this device —
+   a joiner with no scrollback — never had it. */
+.reply-quote {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+  margin: 2px 0 3px;
+  padding: 1px 6px 1px 7px;
+  background: none;
+  border: none;
+  border-left: 2px solid var(--hairline-strong);
+  font-size: var(--text-xs);
+  color: var(--ink-mute);
+  cursor: pointer;
+  text-align: left;
+}
+.reply-quote:hover:not(.orphan) { color: var(--ink-dim); border-left-color: var(--accent); }
+.reply-quote.orphan { cursor: default; }
+.reply-quote .rq-who { font-weight: 650; color: var(--ink-dim); flex-shrink: 0; }
+.reply-quote .rq-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
+
+/* reply bar: the line you're answering, parked above the composer */
+.reply-bar {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  margin: 0 0 6px;
+  padding: 5px 10px;
+  background: var(--raised);
+  border: 1px solid var(--hairline);
+  border-left: 2px solid var(--accent);
+  border-radius: var(--r-sm);
+  font-size: var(--text-xs);
+  color: var(--ink-mute);
+}
+.reply-bar .rb-label { flex-shrink: 0; }
+.reply-bar .rb-label strong { color: var(--ink-dim); font-weight: 650; }
+.reply-bar .rb-text {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink-dim);
+}
+.reply-bar .rb-cancel {
+  flex-shrink: 0;
+  display: inline-grid;
+  place-items: center;
+  padding: 2px;
+  background: none;
+  border: none;
+  border-radius: var(--r-sm);
+  color: var(--ink-mute);
+  cursor: pointer;
+}
+.reply-bar .rb-cancel:hover { color: var(--ink); background: var(--hover); }
+
+/* typing indicator: a quiet italic line reserving its own row above the
+   composer so the input never jumps as it comes and goes */
+.typing-line {
+  height: 15px;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 0 12px;
+  font-size: var(--text-xs);
+  font-style: italic;
+  color: var(--ink-mute);
+}
+.typing-dots { display: inline-flex; gap: 3px; }
+.typing-dots i {
+  width: 4px;
+  height: 4px;
+  border-radius: 50%;
+  background: var(--ink-mute);
+  animation: typing-bounce 1.2s infinite ease-in-out;
+}
+.typing-dots i:nth-child(2) { animation-delay: 0.15s; }
+.typing-dots i:nth-child(3) { animation-delay: 0.3s; }
+@keyframes typing-bounce {
+  0%, 60%, 100% { opacity: 0.3; transform: translateY(0); }
+  30% { opacity: 1; transform: translateY(-2px); }
+}
+@media (prefers-reduced-motion: reduce) {
+  .typing-dots i { animation: none; opacity: 0.6; }
+}
+
+/* the flash when you jump to a quoted message */
+.msg-line.flash { animation: msg-flash 1.2s var(--ease); }
+@keyframes msg-flash {
+  0% { background: var(--accent-soft); }
+  100% { background: transparent; }
+}
 
 /* verified check beside the sender name */
 .sender-check { display: inline-grid; place-items: center; color: var(--ok); }

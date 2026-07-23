@@ -1,8 +1,8 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import Seal from './Seal.jsx';
-import { describeRetention } from '../lib/controller.js';
+import { describeRetention, freshTyping } from '../lib/controller.js';
 import { nameHue } from '../lib/avatar.js';
-import { Lock, Paperclip, Clock, Wave, Gamepad, Check, Plus } from './icons.jsx';
+import { Lock, Paperclip, Clock, Wave, Gamepad, Check, Plus, Reply, X } from './icons.jsx';
 
 // The reaction palette: small on purpose. Reactions ride MLS like any
 // message and live on the stored message; kept-history skips them.
@@ -56,6 +56,85 @@ function Reactions({ message, me, onReact }) {
         </span>
       )}
     </span>
+  );
+}
+
+// A message's device-local identity, used to anchor a reply's "jump to
+// original" and to tell whether the quoted line is even present here — a
+// joiner with no scrollback often won't have it, and the quote must still
+// read on its own.
+const midOf = (m) => `${m.sender}:${m.ts}`;
+
+// The quoted snapshot a reply carries. Built at reply time from whatever the
+// answered line was — text, or a short stand-in for a file / game card — and
+// bounded, because it travels inside every reply and renders as plain text.
+function quoteOf(m) {
+  const text = m.file
+    ? `📎 ${m.file.name}`
+    : m.game
+      ? `opened ${m.game?.name ?? 'a game'}`
+      : (m.text ?? '');
+  return { sender: m.sender, ts: m.ts, text: text.slice(0, 140) };
+}
+
+// The quote block shown above a reply. Clickable to scroll to the original
+// when this device has it; inert (but still readable) when it doesn't.
+function QuotedReply({ reply, me, onJump }) {
+  const preview = reply.text?.trim() || 'attachment';
+  return (
+    <button
+      type="button"
+      className={onJump ? 'reply-quote' : 'reply-quote orphan'}
+      data-testid="reply-quote"
+      onClick={onJump ?? undefined}
+      disabled={!onJump}
+      title={onJump ? 'jump to the quoted message' : 'the quoted message isn’t on this device'}
+    >
+      <Reply size={11} />
+      <span className="rq-who">{reply.sender === me ? 'you' : reply.sender}</span>
+      <span className="rq-text">{preview}</span>
+    </button>
+  );
+}
+
+// "alice is typing…" — driven entirely by the ephemeral typing map, filtered
+// to this channel and reader-expired. A 1s ticker lets a signal fade on its
+// own when the composer falls silent, without any "stopped typing" event.
+function TypingLine({ typing, channel, me }) {
+  const [now, setNow] = useState(() => Date.now());
+  const present = Object.entries(typing ?? {}).filter(
+    ([who, e]) => who !== me && e?.channel === channel
+  );
+  useEffect(() => {
+    if (!present.length) return;
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [present.length]);
+  const names = present
+    .filter(([, e]) => freshTyping(e, now))
+    .map(([who]) => who)
+    .sort();
+  const label =
+    names.length === 0
+      ? null
+      : names.length === 1
+        ? `${names[0]} is typing`
+        : names.length === 2
+          ? `${names[0]} and ${names[1]} are typing`
+          : `${names[0]}, ${names[1]} and ${names.length - 2} more are typing`;
+  return (
+    <div className="typing-line" data-testid="typing-line" aria-live="polite">
+      {label && (
+        <>
+          <span className="typing-dots" aria-hidden="true">
+            <i />
+            <i />
+            <i />
+          </span>
+          {label}
+        </>
+      )}
+    </div>
   );
 }
 
@@ -224,9 +303,31 @@ export default function Messages({
   onLaunchGame,
   onReact,
   onRetry,
+  onType,
 }) {
   const [draft, setDraft] = useState('');
+  const [replyTo, setReplyTo] = useState(null);
+  const inputRef = useRef(null);
   const scroller = useRef(null);
+  // Which lines this device actually holds — a reply's "jump to original"
+  // only lights up when the quoted line is one of them.
+  const present = useMemo(() => new Set(messages.map(midOf)), [messages]);
+  // A reply pins to one message; if that message drops out from under us
+  // (retention, channel switch), quietly abandon the reply.
+  useEffect(() => {
+    if (replyTo && !present.has(`${replyTo.sender}:${replyTo.ts}`)) setReplyTo(null);
+  }, [present, replyTo]);
+  const startReply = (m) => {
+    setReplyTo(quoteOf(m));
+    inputRef.current?.focus();
+  };
+  const jumpTo = (id) => {
+    const el = scroller.current?.querySelector(`[data-mid="${CSS.escape(id)}"]`);
+    if (!el) return;
+    el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    el.classList.add('flash');
+    setTimeout(() => el.classList.remove('flash'), 1200);
+  };
   // Stay pinned to the newest line only while the user is already at (or
   // near) the bottom — a reaction or backfill elsewhere must not yank
   // someone out of their scrollback.
@@ -333,7 +434,19 @@ export default function Messages({
                 <div
                   className={m.failed ? 'msg-line failed' : m.pending ? 'msg-line pending' : 'msg-line'}
                   key={`${m.ts}:${i}`}
+                  data-mid={midOf(m)}
                 >
+                  {m.reply && (
+                    <QuotedReply
+                      reply={m.reply}
+                      me={me}
+                      onJump={
+                        present.has(`${m.reply.sender}:${m.reply.ts}`)
+                          ? () => jumpTo(`${m.reply.sender}:${m.reply.ts}`)
+                          : null
+                      }
+                    />
+                  )}
                   {m.file ? (
                     <Attachment key={m.file.blob} file={m.file} fetchFile={fetchFile} />
                   ) : m.game ? (
@@ -358,6 +471,16 @@ export default function Messages({
                       failed — retry
                     </button>
                   ) : null}
+                  {!server.restored && onSend && !m.pending && !m.failed ? (
+                    <button
+                      className="react msg-reply"
+                      data-testid="msg-reply"
+                      title="reply"
+                      onClick={() => startReply(m)}
+                    >
+                      <Reply size={11} />
+                    </button>
+                  ) : null}
                   <Reactions message={m} me={me} onReact={server.restored ? null : onReact} />
                 </div>
               ))}
@@ -374,6 +497,25 @@ export default function Messages({
           </div>
         ) : (
         <>
+        <TypingLine typing={server.typing} channel={channel} me={me} />
+        {replyTo && (
+          <div className="reply-bar" data-testid="reply-bar">
+            <Reply size={12} />
+            <span className="rb-label">
+              replying to <strong>{replyTo.sender === me ? 'you' : replyTo.sender}</strong>
+            </span>
+            <span className="rb-text">{replyTo.text?.trim() || 'attachment'}</span>
+            <button
+              type="button"
+              className="rb-cancel"
+              data-testid="reply-cancel"
+              title="cancel reply"
+              onClick={() => setReplyTo(null)}
+            >
+              <X size={12} />
+            </button>
+          </div>
+        )}
         <form
           className="composer"
           onSubmit={(e) => {
@@ -381,7 +523,9 @@ export default function Messages({
             const text = draft.trim();
             if (!text) return;
             setDraft('');
-            onSend(text);
+            const reply = replyTo;
+            setReplyTo(null);
+            onSend(text, reply);
           }}
         >
           <label className="attach" title="attach a file (encrypted before it leaves this device)">
@@ -398,9 +542,13 @@ export default function Messages({
             />
           </label>
           <input
+            ref={inputRef}
             type="text"
             value={draft}
-            onChange={(e) => setDraft(e.target.value)}
+            onChange={(e) => {
+              setDraft(e.target.value);
+              if (e.target.value) onType?.();
+            }}
             placeholder={`Message #${channel}`}
             aria-label={`Message #${channel}`}
             data-testid="composer"

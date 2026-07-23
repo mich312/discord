@@ -218,6 +218,13 @@ export const Clock = (p) => (
   </Svg>
 );
 
+export const Reply = (p) => (
+  <Svg {...p}>
+    <path d="M6.5 4 3 7.3l3.5 3.3" />
+    <path d="M3 7.3h5.2a4 4 0 0 1 4 4v1.4" />
+  </Svg>
+);
+
 export const ArrowRight = (p) => (
   <Svg {...p}>
     <path d="M2.5 8h11M9.5 4l4 4-4 4" />
