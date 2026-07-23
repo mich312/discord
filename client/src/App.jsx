@@ -25,6 +25,7 @@ import {
   markNotifPrompted,
 } from './lib/notify-prompt.js';
 import Seal from './components/Seal.jsx';
+import BootLoader from './components/BootLoader.jsx';
 import { Key, ShieldCheck, LinkGlyph, Sun, QuorumGlyph, Gear, LogOut } from './components/icons.jsx';
 import { markPlayed, bumpPlayCount } from './lib/games.js';
 
@@ -459,7 +460,7 @@ export default function App() {
   }
 
   if (state.phase === 'loading') {
-    return <div className="centered muted">loading…</div>;
+    return <BootLoader />;
   }
   if (state.phase === 'onboarding') {
     return <Onboarding controller={controllerRef.current} />;

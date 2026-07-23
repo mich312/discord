@@ -21,6 +21,7 @@ import Onboarding from './components/Onboarding.jsx';
 import CallStage from './components/CallStage.jsx';
 import GameStage from './components/GameStage.jsx';
 import Seal from './components/Seal.jsx';
+import BootLoader from './components/BootLoader.jsx';
 import { Key, ShieldCheck, QuorumGlyph, Gear, LogOut } from './components/icons.jsx';
 
 const params = new URLSearchParams(location.search);
@@ -240,7 +241,7 @@ const modals = {
   },
 };
 
-function PreviewShell({ empty = false, banner = false, modal = null, palette = false, stage = null, landing = false, game = null, idle = false }) {
+function PreviewShell({ empty = false, banner = false, modal = null, palette = false, stage = null, landing = false, game = null, idle = false, emptyChat = false }) {
   const vc = idle ? voiceIdle : voice;
   const me = 'alice';
   // channel: null means the circle's hub page, same as App.jsx.
@@ -367,7 +368,7 @@ function PreviewShell({ empty = false, banner = false, modal = null, palette = f
                 server={activeServer}
                 channel={active.channel}
                 me={me}
-                messages={messages}
+                messages={emptyChat ? [] : messages}
                 onSend={noop}
                 onSendFile={noop}
                 fetchFile={async (f) => {
@@ -470,8 +471,10 @@ function PreviewShell({ empty = false, banner = false, modal = null, palette = f
 }
 
 function pick() {
+  if (view === 'boot') return <BootLoader />;
   if (view === 'onboarding' || view === 'invited') return <Onboarding controller={mockController} />;
   if (view === 'empty') return <PreviewShell empty />;
+  if (view === 'emptychat') return <PreviewShell emptyChat />;
   if (view === 'overview') return <PreviewShell landing />;
   if (view === 'overview-idle') return <PreviewShell landing idle />;
   if (view === 'banner') return <PreviewShell banner />;

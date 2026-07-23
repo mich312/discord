@@ -299,7 +299,16 @@ function Attachment({ file, fetchFile }) {
 
   if (isImage) {
     if (error) return <span className="muted">attachment: {error}</span>;
-    if (!url) return <span className="muted">decrypting {file.name}…</span>;
+    if (!url)
+      return (
+        <span
+          className="attachment-skeleton"
+          data-testid="attachment-skeleton"
+          role="img"
+          aria-label={`decrypting ${file.name}`}
+          title={`decrypting ${file.name}…`}
+        />
+      );
     return <img className="attachment-img" src={url} alt={file.name} data-testid="attachment-img" />;
   }
   return (
@@ -440,6 +449,7 @@ export default function Messages({
   // someone out of their scrollback.
   const pinned = useRef(true);
   const folded = useMemo(() => fold(messages), [messages]);
+  const hasLines = useMemo(() => messages.some((m) => !m.system), [messages]);
   const members = server.members.length;
   const meta = server.chanMeta?.[channel] ?? {};
   const shelf = server.overview?.games ?? [];
@@ -609,6 +619,25 @@ export default function Messages({
             </div>
           );
         })}
+        {!hasLines && (
+          <div className="channel-empty" data-testid="channel-empty">
+            <span className="ce-glyph" aria-hidden="true">
+              <Lock size={18} />
+            </span>
+            <p className="ce-title">
+              {server.restored ? (
+                <>Nothing restored in <strong>#{channel}</strong> yet</>
+              ) : (
+                <>No messages in <strong>#{channel}</strong> yet</>
+              )}
+            </p>
+            <p className="ce-sub muted">
+              {server.restored
+                ? 'Kept-history rooms fill in here once you re-join and catch up.'
+                : 'Say something — it’s end-to-end encrypted before it leaves this device.'}
+            </p>
+          </div>
+        )}
       </div>
       <div className="composer-dock">
         {server.restored ? (
