@@ -1,21 +1,22 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import Seal from './Seal.jsx';
-import { describeRetention } from '../lib/controller.js';
+import { describeRetention, freshTyping } from '../lib/controller.js';
 import { nameHue } from '../lib/avatar.js';
-import { Lock, Paperclip, Clock, Wave, Gamepad, Check, Plus } from './icons.jsx';
+import { Lock, Paperclip, Clock, Wave, Gamepad, Check, Plus, Reply, Pencil, Trash, X } from './icons.jsx';
 
 // The reaction palette: small on purpose. Reactions ride MLS like any
 // message and live on the stored message; kept-history skips them.
 const EMOJI = ['👍', '🔥', '😂', '❤️', '💀', '😮'];
 
-function Reactions({ message, me, onReact }) {
-  const [picking, setPicking] = useState(false);
+// Display-only reaction pills under a line. The add trigger lives in the
+// hover toolbar (MessageActions), not here.
+function ReactionPills({ message, me, onReact }) {
   const reacts = message.reacts ?? {};
   const entries = Object.entries(reacts).filter(([, who]) => who.length);
-  if (!entries.length && !onReact) return null;
+  if (!entries.length) return null;
   const target = { sender: message.sender, ts: message.ts };
   return (
-    <span className={entries.length ? 'reacts' : 'reacts empty'}>
+    <span className="reacts">
       {entries.map(([emo, who]) => (
         <button
           key={emo}
@@ -27,15 +28,39 @@ function Reactions({ message, me, onReact }) {
           {emo} {who.length}
         </button>
       ))}
-      {onReact && (
+    </span>
+  );
+}
+
+// The floating hover toolbar at a line's top-right: react (with picker),
+// reply, and — on your own live text lines — edit and delete. Delete is a
+// two-tap confirm so a stray click can't tombstone a message.
+function MessageActions({ message, me, onReact, onReply, onEdit, onDelete }) {
+  const [picking, setPicking] = useState(false);
+  const [confirmDel, setConfirmDel] = useState(false);
+  useEffect(() => {
+    if (!confirmDel) return;
+    const t = setTimeout(() => setConfirmDel(false), 3000);
+    return () => clearTimeout(t);
+  }, [confirmDel]);
+  const mine = message.sender === me;
+  const target = { sender: message.sender, ts: message.ts };
+  const canReact = !!onReact;
+  const canReply = !!onReply;
+  const canEdit = mine && onEdit && message.text != null && !message.file && !message.game;
+  const canDelete = mine && !!onDelete;
+  if (!canReact && !canReply && !canEdit && !canDelete) return null;
+  return (
+    <span className="msg-actions" data-testid="msg-actions">
+      {canReact && (
         <span className="react-add-wrap">
           <button
-            className="react react-add"
+            className="msg-act"
             title="add reaction"
             data-testid="react-add"
             onClick={() => setPicking((v) => !v)}
           >
-            <Plus size={11} />
+            <Plus size={13} />
           </button>
           {picking && (
             <span className="react-picker" data-testid="react-picker">
@@ -55,7 +80,151 @@ function Reactions({ message, me, onReact }) {
           )}
         </span>
       )}
+      {canReply && (
+        <button className="msg-act" title="reply" data-testid="msg-reply" onClick={() => onReply(message)}>
+          <Reply size={13} />
+        </button>
+      )}
+      {canEdit && (
+        <button className="msg-act" title="edit" data-testid="msg-edit" onClick={() => onEdit(message)}>
+          <Pencil size={13} />
+        </button>
+      )}
+      {canDelete &&
+        (confirmDel ? (
+          <button
+            className="msg-act danger"
+            title="click again to delete for everyone (the sealed history copy stays)"
+            data-testid="msg-del-confirm"
+            onClick={() => {
+              setConfirmDel(false);
+              onDelete(message);
+            }}
+          >
+            delete?
+          </button>
+        ) : (
+          <button
+            className="msg-act"
+            title="delete"
+            data-testid="msg-del"
+            onClick={() => setConfirmDel(true)}
+          >
+            <Trash size={13} />
+          </button>
+        ))}
     </span>
+  );
+}
+
+// Render message text with @mentions of current members highlighted; the
+// reader's own handle glows brighter. Matching is done at render time
+// against the live roster, so nothing about mentions rides the wire.
+function MessageText({ text, members, me }) {
+  const nodes = useMemo(() => {
+    const roster = new Set(members ?? []);
+    const out = [];
+    // @handle where handle is one of the current members (case-insensitive).
+    const re = /@([a-zA-Z0-9_.-]{1,64})/g;
+    let last = 0;
+    let m;
+    while ((m = re.exec(text)) != null) {
+      const handle = [...roster].find((h) => h.toLowerCase() === m[1].toLowerCase());
+      if (!handle) continue;
+      if (m.index > last) out.push(text.slice(last, m.index));
+      out.push(
+        <span
+          key={`${m.index}`}
+          className={handle === me ? 'mention self' : 'mention'}
+          data-testid="mention"
+        >
+          @{handle}
+        </span>
+      );
+      last = m.index + m[0].length;
+    }
+    if (last < text.length) out.push(text.slice(last));
+    return out;
+  }, [text, members, me]);
+  return <span className="text">{nodes}</span>;
+}
+
+// A message's device-local identity, used to anchor a reply's "jump to
+// original" and to tell whether the quoted line is even present here — a
+// joiner with no scrollback often won't have it, and the quote must still
+// read on its own.
+const midOf = (m) => `${m.sender}:${m.ts}`;
+
+// The quoted snapshot a reply carries. Built at reply time from whatever the
+// answered line was — text, or a short stand-in for a file / game card — and
+// bounded, because it travels inside every reply and renders as plain text.
+function quoteOf(m) {
+  const text = m.file
+    ? `📎 ${m.file.name}`
+    : m.game
+      ? `opened ${m.game?.name ?? 'a game'}`
+      : (m.text ?? '');
+  return { sender: m.sender, ts: m.ts, text: text.slice(0, 140) };
+}
+
+// The quote block shown above a reply. Clickable to scroll to the original
+// when this device has it; inert (but still readable) when it doesn't.
+function QuotedReply({ reply, me, onJump }) {
+  const preview = reply.text?.trim() || 'attachment';
+  return (
+    <button
+      type="button"
+      className={onJump ? 'reply-quote' : 'reply-quote orphan'}
+      data-testid="reply-quote"
+      onClick={onJump ?? undefined}
+      disabled={!onJump}
+      title={onJump ? 'jump to the quoted message' : 'the quoted message isn’t on this device'}
+    >
+      <Reply size={11} />
+      <span className="rq-who">{reply.sender === me ? 'you' : reply.sender}</span>
+      <span className="rq-text">{preview}</span>
+    </button>
+  );
+}
+
+// "alice is typing…" — driven entirely by the ephemeral typing map, filtered
+// to this channel and reader-expired. A 1s ticker lets a signal fade on its
+// own when the composer falls silent, without any "stopped typing" event.
+function TypingLine({ typing, channel, me }) {
+  const [now, setNow] = useState(() => Date.now());
+  const present = Object.entries(typing ?? {}).filter(
+    ([who, e]) => who !== me && e?.channel === channel
+  );
+  useEffect(() => {
+    if (!present.length) return;
+    const id = setInterval(() => setNow(Date.now()), 1000);
+    return () => clearInterval(id);
+  }, [present.length]);
+  const names = present
+    .filter(([, e]) => freshTyping(e, now))
+    .map(([who]) => who)
+    .sort();
+  const label =
+    names.length === 0
+      ? null
+      : names.length === 1
+        ? `${names[0]} is typing`
+        : names.length === 2
+          ? `${names[0]} and ${names[1]} are typing`
+          : `${names[0]}, ${names[1]} and ${names.length - 2} more are typing`;
+  return (
+    <div className="typing-line" data-testid="typing-line" aria-live="polite">
+      {label && (
+        <>
+          <span className="typing-dots" aria-hidden="true">
+            <i />
+            <i />
+            <i />
+          </span>
+          {label}
+        </>
+      )}
+    </div>
   );
 }
 
@@ -130,7 +299,16 @@ function Attachment({ file, fetchFile }) {
 
   if (isImage) {
     if (error) return <span className="muted">attachment: {error}</span>;
-    if (!url) return <span className="muted">decrypting {file.name}…</span>;
+    if (!url)
+      return (
+        <span
+          className="attachment-skeleton"
+          data-testid="attachment-skeleton"
+          role="img"
+          aria-label={`decrypting ${file.name}`}
+          title={`decrypting ${file.name}…`}
+        />
+      );
     return <img className="attachment-img" src={url} alt={file.name} data-testid="attachment-img" />;
   }
   return (
@@ -224,14 +402,54 @@ export default function Messages({
   onLaunchGame,
   onReact,
   onRetry,
+  onType,
+  onEdit,
+  onDelete,
 }) {
   const [draft, setDraft] = useState('');
+  const [replyTo, setReplyTo] = useState(null);
+  // The line being edited (a message), or null. Editing takes over the
+  // composer, so it and a pending reply are mutually exclusive.
+  const [editing, setEditing] = useState(null);
+  const inputRef = useRef(null);
   const scroller = useRef(null);
+  // Which lines this device actually holds — a reply's "jump to original"
+  // only lights up when the quoted line is one of them.
+  const present = useMemo(() => new Set(messages.map(midOf)), [messages]);
+  // A reply or edit pins to one message; if that message drops out from
+  // under us (retention, channel switch, a delete), quietly let it go.
+  useEffect(() => {
+    if (replyTo && !present.has(`${replyTo.sender}:${replyTo.ts}`)) setReplyTo(null);
+    if (editing && !present.has(`${editing.sender}:${editing.ts}`)) setEditing(null);
+  }, [present, replyTo, editing]);
+  const startReply = (m) => {
+    setEditing(null);
+    setReplyTo(quoteOf(m));
+    inputRef.current?.focus();
+  };
+  const startEdit = (m) => {
+    setReplyTo(null);
+    setEditing(m);
+    setDraft(m.text ?? '');
+    inputRef.current?.focus();
+  };
+  const cancelEdit = () => {
+    setEditing(null);
+    setDraft('');
+  };
+  const jumpTo = (id) => {
+    const el = scroller.current?.querySelector(`[data-mid="${CSS.escape(id)}"]`);
+    if (!el) return;
+    el.scrollIntoView({ block: 'center', behavior: 'smooth' });
+    el.classList.add('flash');
+    setTimeout(() => el.classList.remove('flash'), 1200);
+  };
   // Stay pinned to the newest line only while the user is already at (or
   // near) the bottom — a reaction or backfill elsewhere must not yank
   // someone out of their scrollback.
   const pinned = useRef(true);
   const folded = useMemo(() => fold(messages), [messages]);
+  const hasLines = useMemo(() => messages.some((m) => !m.system), [messages]);
   const members = server.members.length;
   const meta = server.chanMeta?.[channel] ?? {};
   const shelf = server.overview?.games ?? [];
@@ -333,37 +551,93 @@ export default function Messages({
                 <div
                   className={m.failed ? 'msg-line failed' : m.pending ? 'msg-line pending' : 'msg-line'}
                   key={`${m.ts}:${i}`}
+                  data-mid={midOf(m)}
                 >
-                  {m.file ? (
-                    <Attachment key={m.file.blob} file={m.file} fetchFile={fetchFile} />
-                  ) : m.game ? (
-                    <GameInvite
-                      game={m.game}
-                      sender={m.sender}
-                      me={me}
-                      shelf={shelf}
-                      onLaunchGame={onLaunchGame ?? (() => {})}
-                    />
+                  {m.deleted ? (
+                    <span className="text deleted" data-testid="msg-deleted">
+                      <Trash size={11} /> message deleted
+                    </span>
                   ) : (
-                    <span className="text">{m.text}</span>
+                    <>
+                      {m.reply && (
+                        <QuotedReply
+                          reply={m.reply}
+                          me={me}
+                          onJump={
+                            present.has(`${m.reply.sender}:${m.reply.ts}`)
+                              ? () => jumpTo(`${m.reply.sender}:${m.reply.ts}`)
+                              : null
+                          }
+                        />
+                      )}
+                      {m.file ? (
+                        <Attachment key={m.file.blob} file={m.file} fetchFile={fetchFile} />
+                      ) : m.game ? (
+                        <GameInvite
+                          game={m.game}
+                          sender={m.sender}
+                          me={me}
+                          shelf={shelf}
+                          onLaunchGame={onLaunchGame ?? (() => {})}
+                        />
+                      ) : (
+                        <>
+                          <MessageText text={m.text ?? ''} members={server.members} me={me} />
+                          {m.edited && (
+                            <span className="edited-tag" title="edited — the kept-history copy keeps the original">
+                              (edited)
+                            </span>
+                          )}
+                        </>
+                      )}
+                      {i > 0 && <time>{timeOf(m.ts)}</time>}
+                      {m.failed && onRetry ? (
+                        <button
+                          className="button msg-retry"
+                          data-testid="msg-retry"
+                          title="this message never reached the relay"
+                          onClick={() => onRetry(m)}
+                        >
+                          failed — retry
+                        </button>
+                      ) : null}
+                      {!server.restored && !m.pending && !m.failed ? (
+                        <MessageActions
+                          message={m}
+                          me={me}
+                          onReact={onReact}
+                          onReply={onSend ? startReply : null}
+                          onEdit={startEdit}
+                          onDelete={onDelete}
+                        />
+                      ) : null}
+                      <ReactionPills message={m} me={me} onReact={server.restored ? null : onReact} />
+                    </>
                   )}
-                  {i > 0 && <time>{timeOf(m.ts)}</time>}
-                  {m.failed && onRetry ? (
-                    <button
-                      className="button msg-retry"
-                      data-testid="msg-retry"
-                      title="this message never reached the relay"
-                      onClick={() => onRetry(m)}
-                    >
-                      failed — retry
-                    </button>
-                  ) : null}
-                  <Reactions message={m} me={me} onReact={server.restored ? null : onReact} />
                 </div>
               ))}
             </div>
           );
         })}
+        {!hasLines && (
+          <div className="channel-empty" data-testid="channel-empty">
+            <span className="ce-glyph" aria-hidden="true">
+              <Lock size={18} />
+            </span>
+            <p className="ce-title">
+              {server.restored ? (
+                <>Nothing restored in <strong>#{channel}</strong> yet</>
+              ) : (
+                <>No messages in <strong>#{channel}</strong> yet</>
+              )}
+            </p>
+            <p className="ce-sub muted">
+              {server.restored
+                ? 'Kept-history rooms fill in here once you re-join and catch up.'
+                : 'Say something — it’s end-to-end encrypted before it leaves this device.'}
+            </p>
+          </div>
+        )}
       </div>
       <div className="composer-dock">
         {server.restored ? (
@@ -374,14 +648,60 @@ export default function Messages({
           </div>
         ) : (
         <>
+        {!editing && <TypingLine typing={server.typing} channel={channel} me={me} />}
+        {editing ? (
+          <div className="reply-bar editing" data-testid="edit-bar">
+            <Pencil size={12} />
+            <span className="rb-label">editing your message</span>
+            <span className="rb-hint mono">Esc to cancel</span>
+            <button
+              type="button"
+              className="rb-cancel"
+              data-testid="edit-cancel"
+              title="cancel edit"
+              onClick={cancelEdit}
+            >
+              <X size={12} />
+            </button>
+          </div>
+        ) : replyTo ? (
+          <div className="reply-bar" data-testid="reply-bar">
+            <Reply size={12} />
+            <span className="rb-label">
+              replying to <strong>{replyTo.sender === me ? 'you' : replyTo.sender}</strong>
+            </span>
+            <span className="rb-text">{replyTo.text?.trim() || 'attachment'}</span>
+            <button
+              type="button"
+              className="rb-cancel"
+              data-testid="reply-cancel"
+              title="cancel reply"
+              onClick={() => setReplyTo(null)}
+            >
+              <X size={12} />
+            </button>
+          </div>
+        ) : null}
         <form
           className="composer"
           onSubmit={(e) => {
             e.preventDefault();
             const text = draft.trim();
-            if (!text) return;
+            if (!text) {
+              if (editing) cancelEdit();
+              return;
+            }
+            if (editing) {
+              const target = editing;
+              setEditing(null);
+              setDraft('');
+              onEdit?.(target, text);
+              return;
+            }
             setDraft('');
-            onSend(text);
+            const reply = replyTo;
+            setReplyTo(null);
+            onSend(text, reply);
           }}
         >
           <label className="attach" title="attach a file (encrypted before it leaves this device)">
@@ -398,14 +718,21 @@ export default function Messages({
             />
           </label>
           <input
+            ref={inputRef}
             type="text"
             value={draft}
-            onChange={(e) => setDraft(e.target.value)}
-            placeholder={`Message #${channel}`}
-            aria-label={`Message #${channel}`}
+            onChange={(e) => {
+              setDraft(e.target.value);
+              if (e.target.value && !editing) onType?.();
+            }}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape' && editing) cancelEdit();
+            }}
+            placeholder={editing ? 'Edit your message' : `Message #${channel}`}
+            aria-label={editing ? 'Edit your message' : `Message #${channel}`}
             data-testid="composer"
           />
-          <span className="send-hint mono" aria-hidden="true">↩ send</span>
+          <span className="send-hint mono" aria-hidden="true">{editing ? '↩ save' : '↩ send'}</span>
         </form>
         <div className="composer-note">
           <Lock size={11} />

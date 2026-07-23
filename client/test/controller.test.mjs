@@ -3,9 +3,9 @@
 // sync" bug), backup contents, and ephemeral presence routing.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { Controller } from '../src/lib/controller.js';
+import { Controller, freshTyping } from '../src/lib/controller.js';
 import { b64 } from '../src/lib/relay.js';
-import { openBackup } from '../src/lib/history.js';
+import { openBackup, openHistoryEntry } from '../src/lib/history.js';
 
 function fakeDb() {
   const messages = [];
@@ -309,6 +309,147 @@ test('presence rides the ephemeral fan-out, not the group log', async () => {
   assert.deepEqual(kinds, ['ephemeral'], 'no log append for presence');
   const me = c.livePresence.get('srv').alice;
   assert.equal(me.playing.id, 'g1');
+});
+
+test('a reply carries a quoted snapshot that survives send, store, and history', async () => {
+  const appended = [];
+  const { c } = makeController({
+    relayHandler: (msg) => {
+      if (msg.t === 'history_append') appended.push(msg);
+      return Promise.resolve({ seq: 1 });
+    },
+  });
+  // Kept-history on, so the reply must also ride the sealed log.
+  const hkey = b64.enc(new Uint8Array(32));
+  const r = record({ chanMeta: { general: { hid: 'h1', hkey } } });
+  c.servers.set('srv', r);
+  await c.sendChat('srv', 'general', 'agreed', { sender: 'bob', ts: 111, text: 'ship it?' });
+  const mine = c.db.messages.filter((m) => !m.system);
+  assert.equal(mine.length, 1);
+  assert.deepEqual(mine[0].reply, { sender: 'bob', ts: 111, text: 'ship it?' }, 'quote stored on the line');
+  const sent = c.relay.requests.find((m) => m.t === 'send');
+  assert.ok(sent, 'the chat went out on the group log');
+  // appendHistory seals asynchronously and isn't awaited by deliverChat.
+  await new Promise((r) => setTimeout(r, 30));
+  assert.equal(appended.length, 1, 'and the reply was appended to kept history');
+  const entry = await openHistoryEntry(hkey, appended[0].payload);
+  assert.deepEqual(entry.reply, { sender: 'bob', ts: 111, text: 'ship it?' }, 'quote sealed into history');
+  clearTimeout(c.backupTimer);
+});
+
+test('a malformed reply is dropped, not stored', async () => {
+  const { c } = makeController();
+  c.servers.set('srv', record());
+  // No ts — not a resolvable quote.
+  await c.sendChat('srv', 'general', 'hi', { sender: 'bob', text: 'no ts' });
+  const mine = c.db.messages.filter((m) => !m.system);
+  assert.equal(mine[0].reply, undefined, 'garbage quote left off the line');
+  clearTimeout(c.backupTimer);
+});
+
+test('a received chat carries its reply through and clears the sender typing', async () => {
+  const { c } = makeController();
+  const r = record();
+  c.servers.set('srv', r);
+  // Bob is mid-compose…
+  c.setLiveTyping('srv', 'bob', 'general');
+  assert.ok(c.liveTyping.get('srv').bob, 'typing signal is live');
+  // …then his line (a reply) lands.
+  await c.onContent(
+    r,
+    'bob',
+    JSON.stringify({ k: 'chat', ch: 'general', text: 'yes', ts: 222, reply: { sender: 'alice', ts: 200, text: 'ok?' } })
+  );
+  const stored = c.db.messages.find((m) => !m.system && m.sender === 'bob');
+  assert.deepEqual(stored.reply, { sender: 'alice', ts: 200, text: 'ok?' }, 'incoming quote preserved');
+  assert.ok(!c.liveTyping.get('srv').bob, 'the landed line cleared bob’s typing signal');
+  clearTimeout(c.backupTimer);
+});
+
+test('typing rides the ephemeral fan-out, is throttled, and never push-wakes', async () => {
+  const { c } = makeController();
+  c.servers.set('srv', record());
+  await c.typing('srv', 'general');
+  await c.typing('srv', 'general'); // within the heartbeat window — coalesced
+  const eph = c.relay.requests.filter((m) => m.t === 'ephemeral');
+  assert.equal(eph.length, 1, 'a burst of keystrokes sends one signal, not many');
+  assert.equal(eph[0].notify, undefined, 'typing never wakes a closed app');
+  // My own typing is never reflected back at me.
+  assert.equal(c.liveTyping?.get('srv')?.alice, undefined);
+});
+
+test('freshTyping expires a signal after its window', () => {
+  const t0 = 10_000;
+  assert.equal(freshTyping({ ts: t0 }, t0 + 1000), true, 'fresh within the window');
+  assert.equal(freshTyping({ ts: t0 }, t0 + 9000), false, 'stale past it');
+  assert.equal(freshTyping(null, t0), false, 'no entry is never fresh');
+});
+
+test('editMessage patches my own line, marks it edited, and fans out an edit', async () => {
+  const { c } = makeController();
+  c.servers.set('srv', record());
+  await c.sendChat('srv', 'general', 'helo');
+  await c.editMessage('srv', 'general', c.db.messages.find((m) => !m.system), 'hello');
+  const line = c.db.messages.find((m) => !m.system);
+  assert.equal(line.text, 'hello', 'text updated in place');
+  assert.equal(line.edited, true, 'edited marker set');
+  const edit = c.relay.requests.filter((m) => m.t === 'send');
+  assert.ok(edit.length >= 2, 'the edit went out on the group log');
+  clearTimeout(c.backupTimer);
+});
+
+test('an incoming edit can only touch its own author’s line', async () => {
+  const { c } = makeController();
+  const r = record();
+  c.servers.set('srv', r);
+  // A line authored by bob.
+  await c.storeMessage({ server: 'srv', channel: 'general', sender: 'bob', text: 'original', ts: 500 });
+  // Mallory tries to rewrite bob's line (same ts) — the (sender, ts) key misses.
+  await c.onContent(r, 'mallory', JSON.stringify({ k: 'edit', ch: 'general', to: { ts: 500 }, text: 'hijacked' }));
+  assert.equal(c.db.messages.find((m) => m.ts === 500).text, 'original', 'a stranger cannot edit it');
+  // Bob edits his own line — it lands.
+  await c.onContent(r, 'bob', JSON.stringify({ k: 'edit', ch: 'general', to: { ts: 500 }, text: 'fixed' }));
+  assert.equal(c.db.messages.find((m) => m.ts === 500).text, 'fixed', 'the author’s edit lands');
+  assert.equal(c.db.messages.find((m) => m.ts === 500).edited, true);
+  clearTimeout(c.backupTimer);
+});
+
+test('deleteMessage tombstones my line and strips its body; a delete fans out', async () => {
+  const { c } = makeController();
+  c.servers.set('srv', record());
+  await c.sendChat('srv', 'general', 'oops wrong channel', { sender: 'bob', ts: 9, text: 'x' });
+  await c.deleteMessage('srv', 'general', c.db.messages.find((m) => !m.system));
+  const line = c.db.messages.find((m) => !m.system);
+  assert.equal(line.deleted, true, 'tombstoned');
+  assert.equal(line.text, undefined, 'body stripped');
+  assert.equal(line.reply, undefined, 'quote stripped too');
+  clearTimeout(c.backupTimer);
+});
+
+test('a history backfill never resurrects a deleted line or duplicates an edited one', async () => {
+  const hkey = b64.enc(new Uint8Array(32));
+  // Two sealed originals sit in the relay's history log.
+  const { sealHistoryEntry } = await import('../src/lib/history.js');
+  const entries = [
+    { seq: 1, payload: await sealHistoryEntry(hkey, { sender: 'alice', ts: 100, text: 'to be deleted' }) },
+    { seq: 2, payload: await sealHistoryEntry(hkey, { sender: 'alice', ts: 200, text: 'original wording' }) },
+  ];
+  const { c } = makeController({
+    relayHandler: (msg) => (msg.t === 'history_fetch' ? Promise.resolve({ entries }) : Promise.resolve({ seq: 1 })),
+  });
+  const r = record({ chanMeta: { general: { hid: 'h1', hkey } }, hcursor: {} });
+  c.servers.set('srv', r);
+  // Locally: ts 100 was deleted, ts 200 was edited.
+  await c.storeMessage({ server: 'srv', channel: 'general', sender: 'alice', ts: 100, deleted: true });
+  await c.storeMessage({ server: 'srv', channel: 'general', sender: 'alice', ts: 200, text: 'edited wording', edited: true });
+  await c.backfillHistory(r);
+  const at100 = c.db.messages.filter((m) => m.ts === 100 && !m.system);
+  const at200 = c.db.messages.filter((m) => m.ts === 200 && !m.system);
+  assert.equal(at100.length, 1, 'deleted line not resurrected from history');
+  assert.equal(at100[0].deleted, true, 'it stays a tombstone');
+  assert.equal(at200.length, 1, 'edited line not duplicated by its original');
+  assert.equal(at200[0].text, 'edited wording', 'the edited copy stands');
+  clearTimeout(c.backupTimer);
 });
 
 test('a rally rides the ephemeral fan-out too, never the group log', async () => {

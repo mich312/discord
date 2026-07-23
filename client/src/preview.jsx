@@ -21,6 +21,7 @@ import Onboarding from './components/Onboarding.jsx';
 import CallStage from './components/CallStage.jsx';
 import GameStage from './components/GameStage.jsx';
 import Seal from './components/Seal.jsx';
+import BootLoader from './components/BootLoader.jsx';
 import { Key, ShieldCheck, QuorumGlyph, Gear, LogOut } from './components/icons.jsx';
 
 const params = new URLSearchParams(location.search);
@@ -51,6 +52,8 @@ const servers = [
     wants: {
       charlie: { want: { id: 'g3', name: 'Tanks! Night Ops', kind: 'activity' }, ts: now - 4 * 60e3 },
     },
+    // Live typing signal in #general (reader-expires ~6s after `ts`).
+    typing: { charlie: { channel: 'general', ts: now } },
     rsvps: {
       bob: { at: now + 52 * H, ts: now - 3 * H },
       dana: { at: now + 52 * H, ts: now - 2 * H },
@@ -117,6 +120,15 @@ const messages = [
   { sender: 'dana', text: 'trailer leaves at 6am sharp — pack the spare diffuser tonight', ts: now - 2.2 * H, reacts: { '👍': ['alice', 'bob'] } },
   { sender: 'bob', file: { name: 'stint-plan.pdf', mime: 'application/pdf', size: 182044 }, ts: now - 1.1 * H },
   { sender: 'bob', text: 'plan B if it rains: box on lap 14 and go long', ts: now - 1.1 * H + 20e3 },
+  {
+    sender: 'alice',
+    text: 'good call — I’ll prep the wets either way',
+    ts: now - 1.05 * H,
+    reply: { sender: 'bob', ts: now - 1.1 * H + 20e3, text: 'plan B if it rains: box on lap 14 and go long' },
+  },
+  { sender: 'dana', text: 'thanks @alice — leave the intermediates too, forecast is shaky', ts: now - 1.0 * H },
+  { sender: 'bob', text: 'grid slot confirmed: P4 (was P5)', ts: now - 0.9 * H, edited: true },
+  { sender: 'charlie', ts: now - 0.85 * H, deleted: true },
 ];
 
 // 2×2 png so the eager image-decrypt path renders something real.
@@ -229,7 +241,7 @@ const modals = {
   },
 };
 
-function PreviewShell({ empty = false, banner = false, modal = null, palette = false, stage = null, landing = false, game = null, idle = false }) {
+function PreviewShell({ empty = false, banner = false, modal = null, palette = false, stage = null, landing = false, game = null, idle = false, emptyChat = false }) {
   const vc = idle ? voiceIdle : voice;
   const me = 'alice';
   // channel: null means the circle's hub page, same as App.jsx.
@@ -356,7 +368,7 @@ function PreviewShell({ empty = false, banner = false, modal = null, palette = f
                 server={activeServer}
                 channel={active.channel}
                 me={me}
-                messages={messages}
+                messages={emptyChat ? [] : messages}
                 onSend={noop}
                 onSendFile={noop}
                 fetchFile={async (f) => {
@@ -371,6 +383,8 @@ function PreviewShell({ empty = false, banner = false, modal = null, palette = f
                   setLiveGame(g);
                 }}
                 onReact={noop}
+                onEdit={noop}
+                onDelete={noop}
               />
             ) : (
               <Overview
@@ -457,8 +471,10 @@ function PreviewShell({ empty = false, banner = false, modal = null, palette = f
 }
 
 function pick() {
+  if (view === 'boot') return <BootLoader />;
   if (view === 'onboarding' || view === 'invited') return <Onboarding controller={mockController} />;
   if (view === 'empty') return <PreviewShell empty />;
+  if (view === 'emptychat') return <PreviewShell emptyChat />;
   if (view === 'overview') return <PreviewShell landing />;
   if (view === 'overview-idle') return <PreviewShell landing idle />;
   if (view === 'banner') return <PreviewShell banner />;
