@@ -2327,6 +2327,65 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
   to { opacity: 1; transform: none; }
 }
 
+/* message in flight: a sent line rides at reduced opacity, then eases up to
+   full the instant the relay acks (the .pending class drops). The transition
+   lives on the base so the settle animates; the failed state overrides it. */
+.msg-line .text { transition: opacity var(--slow) var(--ease); }
+.msg-line.pending .text { opacity: 0.5; }
+
+/* rail: a new circle tile scales in (also a soft entrance on first paint) */
+.circle-list > li { animation: tile-in 260ms var(--ease); }
+@keyframes tile-in {
+  from { opacity: 0; transform: scale(0.72); }
+  to { opacity: 1; transform: none; }
+}
+
+/* roster: a member row settles in when it (re)appears — e.g. sliding into
+   the "in call" or "playing" group — and the speaking ring ramps both ways
+   instead of snapping */
+.member { animation: member-in 200ms var(--ease); }
+@keyframes member-in {
+  from { opacity: 0; transform: translateX(4px); }
+  to { opacity: 1; transform: none; }
+}
+.member .seal-avatar { transition: box-shadow var(--slow) var(--ease); }
+/* the live-count badge breathes so "3 live" reads as now, not a static tally */
+.member-count.live { animation: live-breathe 2.6s var(--ease) infinite; }
+@keyframes live-breathe {
+  0%, 100% { opacity: 1; }
+  50% { opacity: 0.6; }
+}
+
+/* call stage: bubbles stagger in when the stage opens; a new participant's
+   bubble animates on join. The speaking ring breathes while a leg is live. */
+.stage-bubble { animation: bubble-in 240ms var(--ease) both; }
+.stage-bubble:nth-child(2) { animation-delay: 45ms; }
+.stage-bubble:nth-child(3) { animation-delay: 90ms; }
+.stage-bubble:nth-child(4) { animation-delay: 135ms; }
+.stage-bubble:nth-child(5) { animation-delay: 180ms; }
+.stage-bubble:nth-child(n + 6) { animation-delay: 220ms; }
+@keyframes bubble-in {
+  from { opacity: 0; transform: scale(0.9) translateY(6px); }
+  to { opacity: 1; transform: none; }
+}
+.stage-bubble.speaking .bubble-seal svg { animation: speak-glow 1.7s ease-in-out infinite; }
+.stage-bubble.speaking .bubble-cam { animation: speak-glow-cam 1.7s ease-in-out infinite; }
+@keyframes speak-glow {
+  0%, 100% { box-shadow: 0 0 0 2px var(--ok), 0 0 9px var(--ok-soft); }
+  50% { box-shadow: 0 0 0 2px var(--ok), 0 0 20px var(--ok-soft); }
+}
+@keyframes speak-glow-cam {
+  0%, 100% { box-shadow: 0 0 0 2px var(--ok), 0 0 9px var(--ok-soft); }
+  50% { box-shadow: 0 0 0 2px var(--ok), 0 0 20px var(--ok-soft); }
+}
+
+/* mobile drawers already slide on transform + the shared ease; hint the
+   compositor so the slide stays smooth on low-end phones (820px is where
+   the sidebar/roster actually become fixed edge drawers) */
+@media (max-width: 820px) {
+  .sidebar, .members { will-change: transform; }
+}
+
 /* verified check beside the sender name */
 .sender-check { display: inline-grid; place-items: center; color: var(--ok); }
 
