@@ -125,6 +125,9 @@ const messages = [
     ts: now - 1.05 * H,
     reply: { sender: 'bob', ts: now - 1.1 * H + 20e3, text: 'plan B if it rains: box on lap 14 and go long' },
   },
+  { sender: 'dana', text: 'thanks @alice — leave the intermediates too, forecast is shaky', ts: now - 1.0 * H },
+  { sender: 'bob', text: 'grid slot confirmed: P4 (was P5)', ts: now - 0.9 * H, edited: true },
+  { sender: 'charlie', ts: now - 0.85 * H, deleted: true },
 ];
 
 // 2×2 png so the eager image-decrypt path renders something real.
@@ -379,6 +382,8 @@ function PreviewShell({ empty = false, banner = false, modal = null, palette = f
                   setLiveGame(g);
                 }}
                 onReact={noop}
+                onEdit={noop}
+                onDelete={noop}
               />
             ) : (
               <Overview

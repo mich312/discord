@@ -1139,7 +1139,7 @@ kbd {
 
 .msg-line {
   position: relative;
-  padding: 1px 90px 1px 0;
+  padding: 1px 64px 1px 0;
   overflow-wrap: anywhere;
   color: var(--ink);
 }
@@ -1975,10 +1975,6 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
 
 /* reactions: pills under a message line */
 .reacts { display: flex; gap: 6px; margin-top: 5px; flex-wrap: wrap; align-items: center; }
-/* no reactions yet: the add button floats beside the timestamp on hover
-   instead of reserving a row under every message */
-.reacts.empty { position: absolute; right: 34px; top: 1px; margin: 0; }
-.reacts.empty .react.react-add { background: none; border-color: transparent; }
 .react {
   display: inline-flex;
   align-items: center;
@@ -1994,15 +1990,50 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
 }
 .react:hover { border-color: var(--hairline-strong); }
 .react.on { background: var(--accent-soft); border-color: var(--accent); color: var(--ink); }
+
+/* hover toolbar: react / reply / edit / delete, a raised card at the line's
+   top-right that overlays rather than reserving a row on every message */
+.msg-actions {
+  position: absolute;
+  top: -13px;
+  right: 8px;
+  z-index: 5;
+  display: flex;
+  gap: 1px;
+  padding: 2px;
+  background: var(--raised);
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--r-sm);
+  box-shadow: var(--overlay-shadow);
+  opacity: 0;
+  pointer-events: none;
+  transition: opacity var(--fast) var(--ease);
+}
+.msg-line:hover .msg-actions,
+.msg-actions:hover,
+.msg-actions:focus-within { opacity: 1; pointer-events: auto; }
+@media (hover: none) { .msg-actions { opacity: 1; pointer-events: auto; } }
 .react-add-wrap { position: relative; display: inline-flex; }
-.react.react-add { padding: 2px 7px; color: var(--ink-mute); opacity: 0; }
-.msg-line:hover .react.react-add, .react.react-add:focus-visible,
-.react-add-wrap:has(.react-picker) .react.react-add { opacity: 1; }
-@media (hover: none) { .react.react-add { opacity: 1; } }
+.msg-act {
+  display: inline-grid;
+  place-items: center;
+  min-width: 24px;
+  height: 22px;
+  padding: 0 5px;
+  background: none;
+  border: none;
+  border-radius: var(--r-sm);
+  color: var(--ink-mute);
+  font-size: var(--text-xs);
+  cursor: pointer;
+  transition: color var(--fast) var(--ease), background var(--fast) var(--ease);
+}
+.msg-act:hover { color: var(--ink); background: var(--hover); }
+.msg-act.danger { color: var(--danger, #c0392b); font-weight: 650; padding: 0 8px; }
 .react-picker {
   position: absolute;
-  bottom: calc(100% + 6px);
-  left: 0;
+  top: calc(100% + 6px);
+  right: 0;
   z-index: 10;
   display: flex;
   gap: 2px;
@@ -2022,29 +2053,34 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
 }
 .react-pick:hover { background: var(--hover); }
 
-/* reply: a hover affordance that floats top-right, left of the reaction add
-   and the timestamp, so replying is one click without a context menu */
-.react.msg-reply {
-  position: absolute;
-  top: 1px;
-  right: 60px;
-  padding: 2px 7px;
-  background: none;
-  border-color: transparent;
-  color: var(--ink-mute);
-  opacity: 0;
+/* @mentions: matched against the live roster at render time */
+.mention {
+  padding: 0 3px;
+  border-radius: var(--r-sm);
+  background: color-mix(in srgb, var(--accent) 12%, transparent);
+  color: var(--accent-ink, var(--accent));
+  font-weight: 600;
 }
-.react.msg-reply:hover { color: var(--ink-dim); border-color: transparent; }
-.msg-line:hover .react.msg-reply, .react.msg-reply:focus-visible { opacity: 1; }
-@media (hover: none) { .react.msg-reply { opacity: 1; } }
+.mention.self { background: var(--accent-soft); color: var(--ink); }
+
+/* the "(edited)" marker and the tombstone a delete leaves behind */
+.edited-tag { margin-left: 5px; font-size: var(--text-xs); color: var(--ink-mute); }
+.text.deleted {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  color: var(--ink-mute);
+  font-style: italic;
+}
 
 /* the quote a reply carries, shown above the answering line. Clickable to
    scroll to the original; inert-but-readable (.orphan) when this device —
    a joiner with no scrollback — never had it. */
 .reply-quote {
-  display: inline-flex;
+  display: flex;
   align-items: center;
   gap: 5px;
+  width: fit-content;
   max-width: 100%;
   margin: 2px 0 3px;
   padding: 1px 6px 1px 7px;
@@ -2097,6 +2133,9 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
   cursor: pointer;
 }
 .reply-bar .rb-cancel:hover { color: var(--ink); background: var(--hover); }
+/* editing reuses the reply bar's frame with a warmer edge and a keyboard hint */
+.reply-bar.editing { border-left-color: var(--warn, #d08b1f); }
+.reply-bar .rb-hint { flex: 1; text-align: right; color: var(--ink-mute); font-size: var(--text-xs); }
 
 /* typing indicator: a quiet italic line reserving its own row above the
    composer so the input never jumps as it comes and goes */

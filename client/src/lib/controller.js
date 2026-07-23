@@ -42,6 +42,18 @@
 //   {k:'react', ch, to:{sender,ts},
 //    emo, op}                      — a reaction on one message (op add|del).
 //                                   emo is a short string rendered as text
+//   {k:'edit', ch, to:{ts}, text} — edit one of MY OWN lines. The patch keys
+//                                   on (sender, ts) and the sender is the
+//                                   authenticated MLS sender, so an edit can
+//                                   only ever touch its author's message —
+//                                   no separate ACL needed. Not replayed into
+//                                   kept history: the sealed original stands
+//                                   (stated in the UI), same as reactions
+//   {k:'del', ch, to:{ts}}        — tombstone one of MY OWN lines: same
+//                                   (sender, ts) self-scoping as edit. A
+//                                   tombstone for live/future readers, not a
+//                                   redaction — devices that already saw it,
+//                                   and the kept-history copy, keep the text
 //   {k:'type', ch}                — ephemeral typing signal: the sender is
 //                                   composing in channel `ch` right now.
 //                                   Same discipline as presence — fanned out
@@ -653,6 +665,36 @@ export class Controller {
           sender: String(to.sender),
           ts: Number(to.ts),
         }, emo, op, sender);
+        this.dispatch({ type: 'refreshMessages' });
+        break;
+      }
+      case 'edit': {
+        const ts = Number(content.to?.ts);
+        const text = String(content.text ?? '');
+        if (!Number.isFinite(ts) || !text) break;
+        // Keyed on (sender, ts): the patch lands only if a line with this
+        // authenticated sender and ts exists locally, so no one can edit
+        // anyone else's message and a joiner without the line simply no-ops.
+        await this.db.msgPatch(record.id, String(content.ch ?? ''), sender, ts, (m) =>
+          m.deleted ? m : { ...m, text, edited: true }
+        );
+        this.dispatch({ type: 'refreshMessages' });
+        break;
+      }
+      case 'del': {
+        const ts = Number(content.to?.ts);
+        if (!Number.isFinite(ts)) break;
+        // Same (sender, ts) self-scoping as edit. Strip the body to a
+        // tombstone; reactions go with it. The sealed history copy and any
+        // device that already received the line are untouched — a delete is
+        // not a redaction, and the UI says so.
+        await this.db.msgPatch(record.id, String(content.ch ?? ''), sender, ts, (m) => ({
+          sender: m.sender,
+          server: m.server,
+          channel: m.channel,
+          ts: m.ts,
+          deleted: true,
+        }));
         this.dispatch({ type: 'refreshMessages' });
         break;
       }
@@ -1465,6 +1507,40 @@ export class Controller {
     return present;
   }
 
+  /** Edit one of my own lines. Optimistic: patch locally, then fan out an
+      `edit` envelope keyed on the message ts. Only text messages are
+      editable (a file/game card has nothing to retype). Kept history is
+      left alone — the sealed original stands, and the UI says so. */
+  async editMessage(serverId, channel, message, text) {
+    const record = this.servers.get(serverId);
+    if (!record || message.sender !== this.me) return;
+    const next = String(text ?? '').trim();
+    if (!next || next === message.text) return;
+    await this.db.msgPatch(serverId, channel, this.me, message.ts, (m) =>
+      m.deleted ? m : { ...m, text: next, edited: true }
+    );
+    this.dispatch({ type: 'refreshMessages' });
+    await this.sendContent(serverId, { k: 'edit', ch: channel, to: { ts: message.ts }, text: next });
+  }
+
+  /** Delete one of my own lines — a tombstone, not a redaction. Patches the
+      local copy to a stub and fans out a `del`; devices that already have
+      the line, and the kept-history copy, are untouched (the UI is explicit
+      that a delete can't reach back). */
+  async deleteMessage(serverId, channel, message) {
+    const record = this.servers.get(serverId);
+    if (!record || message.sender !== this.me) return;
+    await this.db.msgPatch(serverId, channel, this.me, message.ts, (m) => ({
+      sender: m.sender,
+      server: m.server,
+      channel: m.channel,
+      ts: m.ts,
+      deleted: true,
+    }));
+    this.dispatch({ type: 'refreshMessages' });
+    await this.sendContent(serverId, { k: 'del', ch: channel, to: { ts: message.ts } });
+  }
+
   /** Answer the hub's next-event card. Keyed to the event timestamp, so
       answers for a replaced event simply stop counting. */
   async rsvp(serverId, at, going) {
@@ -1537,6 +1613,12 @@ export class Controller {
       if (!reply.entries?.length) continue;
       const existing = await this.db.msgsFor(record.id, channel);
       const seen = new Set(existing.filter((m) => !m.system).map(messageFingerprint));
+      // Also key by (sender, ts): a line that was edited or deleted locally
+      // has a different body than its sealed original, so a content-only
+      // dedup would re-add that original from history — resurrecting a
+      // deleted line, or duplicating an edited one. The identity key blocks
+      // both; the edited/tombstoned local copy is the one that stands.
+      const known = new Set(existing.filter((m) => !m.system).map((m) => `${m.sender}:${m.ts}`));
       const cutoff = meta.retention ? Date.now() - meta.retention * 1000 : 0;
       let added = 0;
       let maxSeq = cursor;
@@ -1565,8 +1647,10 @@ export class Controller {
           ...(normalizeReply(entry.reply) ? { reply: normalizeReply(entry.reply) } : {}),
           fromHistory: true,
         };
-        if (message.ts < cutoff || seen.has(messageFingerprint(message))) continue;
+        const id = `${message.sender}:${message.ts}`;
+        if (message.ts < cutoff || seen.has(messageFingerprint(message)) || known.has(id)) continue;
         seen.add(messageFingerprint(message));
+        known.add(id);
         await this.db.msgAdd(message);
         added += 1;
       }

@@ -31,8 +31,12 @@ import { markPlayed, bumpPlayCount } from './lib/games.js';
 /** Content identity of a message for merging a load snapshot with live
     arrivals — same idea as history.js's fingerprint, plus the system flag. */
 function messageKey(m) {
-  const body = m.file ? `f:${m.file.blob}` : m.game ? `g:${m.game.id}` : `t:${m.text ?? ''}`;
-  return `${m.system ? 's' : 'm'}|${m.sender}|${m.ts}|${body}`;
+  // Identity, not content: this keys the load/live merge below, and an
+  // edited or deleted line keeps the same (sender, ts) while its body
+  // changes — the fresh copy must replace the old one, not stack beside it
+  // (the same reason msgPatch keys on (sender, ts)). System chips carry no
+  // stable ts identity, so keep their text in the key to tell them apart.
+  return m.system ? `s|${m.sender}|${m.ts}|${m.text ?? ''}` : `m|${m.sender}|${m.ts}`;
 }
 
 const initial = {
@@ -730,6 +734,16 @@ export default function App() {
                 onRetry={(m) =>
                   controllerRef.current
                     .retryMessage(server, channel, m)
+                    .catch((e) => dispatch({ type: 'toast', text: e.message }))
+                }
+                onEdit={(m, text) =>
+                  controllerRef.current
+                    .editMessage(server, channel, m, text)
+                    .catch((e) => dispatch({ type: 'toast', text: e.message }))
+                }
+                onDelete={(m) =>
+                  controllerRef.current
+                    .deleteMessage(server, channel, m)
                     .catch((e) => dispatch({ type: 'toast', text: e.message }))
                 }
               />

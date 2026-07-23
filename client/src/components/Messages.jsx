@@ -2,20 +2,21 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import Seal from './Seal.jsx';
 import { describeRetention, freshTyping } from '../lib/controller.js';
 import { nameHue } from '../lib/avatar.js';
-import { Lock, Paperclip, Clock, Wave, Gamepad, Check, Plus, Reply, X } from './icons.jsx';
+import { Lock, Paperclip, Clock, Wave, Gamepad, Check, Plus, Reply, Pencil, Trash, X } from './icons.jsx';
 
 // The reaction palette: small on purpose. Reactions ride MLS like any
 // message and live on the stored message; kept-history skips them.
 const EMOJI = ['👍', '🔥', '😂', '❤️', '💀', '😮'];
 
-function Reactions({ message, me, onReact }) {
-  const [picking, setPicking] = useState(false);
+// Display-only reaction pills under a line. The add trigger lives in the
+// hover toolbar (MessageActions), not here.
+function ReactionPills({ message, me, onReact }) {
   const reacts = message.reacts ?? {};
   const entries = Object.entries(reacts).filter(([, who]) => who.length);
-  if (!entries.length && !onReact) return null;
+  if (!entries.length) return null;
   const target = { sender: message.sender, ts: message.ts };
   return (
-    <span className={entries.length ? 'reacts' : 'reacts empty'}>
+    <span className="reacts">
       {entries.map(([emo, who]) => (
         <button
           key={emo}
@@ -27,15 +28,39 @@ function Reactions({ message, me, onReact }) {
           {emo} {who.length}
         </button>
       ))}
-      {onReact && (
+    </span>
+  );
+}
+
+// The floating hover toolbar at a line's top-right: react (with picker),
+// reply, and — on your own live text lines — edit and delete. Delete is a
+// two-tap confirm so a stray click can't tombstone a message.
+function MessageActions({ message, me, onReact, onReply, onEdit, onDelete }) {
+  const [picking, setPicking] = useState(false);
+  const [confirmDel, setConfirmDel] = useState(false);
+  useEffect(() => {
+    if (!confirmDel) return;
+    const t = setTimeout(() => setConfirmDel(false), 3000);
+    return () => clearTimeout(t);
+  }, [confirmDel]);
+  const mine = message.sender === me;
+  const target = { sender: message.sender, ts: message.ts };
+  const canReact = !!onReact;
+  const canReply = !!onReply;
+  const canEdit = mine && onEdit && message.text != null && !message.file && !message.game;
+  const canDelete = mine && !!onDelete;
+  if (!canReact && !canReply && !canEdit && !canDelete) return null;
+  return (
+    <span className="msg-actions" data-testid="msg-actions">
+      {canReact && (
         <span className="react-add-wrap">
           <button
-            className="react react-add"
+            className="msg-act"
             title="add reaction"
             data-testid="react-add"
             onClick={() => setPicking((v) => !v)}
           >
-            <Plus size={11} />
+            <Plus size={13} />
           </button>
           {picking && (
             <span className="react-picker" data-testid="react-picker">
@@ -55,8 +80,73 @@ function Reactions({ message, me, onReact }) {
           )}
         </span>
       )}
+      {canReply && (
+        <button className="msg-act" title="reply" data-testid="msg-reply" onClick={() => onReply(message)}>
+          <Reply size={13} />
+        </button>
+      )}
+      {canEdit && (
+        <button className="msg-act" title="edit" data-testid="msg-edit" onClick={() => onEdit(message)}>
+          <Pencil size={13} />
+        </button>
+      )}
+      {canDelete &&
+        (confirmDel ? (
+          <button
+            className="msg-act danger"
+            title="click again to delete for everyone (the sealed history copy stays)"
+            data-testid="msg-del-confirm"
+            onClick={() => {
+              setConfirmDel(false);
+              onDelete(message);
+            }}
+          >
+            delete?
+          </button>
+        ) : (
+          <button
+            className="msg-act"
+            title="delete"
+            data-testid="msg-del"
+            onClick={() => setConfirmDel(true)}
+          >
+            <Trash size={13} />
+          </button>
+        ))}
     </span>
   );
+}
+
+// Render message text with @mentions of current members highlighted; the
+// reader's own handle glows brighter. Matching is done at render time
+// against the live roster, so nothing about mentions rides the wire.
+function MessageText({ text, members, me }) {
+  const nodes = useMemo(() => {
+    const roster = new Set(members ?? []);
+    const out = [];
+    // @handle where handle is one of the current members (case-insensitive).
+    const re = /@([a-zA-Z0-9_.-]{1,64})/g;
+    let last = 0;
+    let m;
+    while ((m = re.exec(text)) != null) {
+      const handle = [...roster].find((h) => h.toLowerCase() === m[1].toLowerCase());
+      if (!handle) continue;
+      if (m.index > last) out.push(text.slice(last, m.index));
+      out.push(
+        <span
+          key={`${m.index}`}
+          className={handle === me ? 'mention self' : 'mention'}
+          data-testid="mention"
+        >
+          @{handle}
+        </span>
+      );
+      last = m.index + m[0].length;
+    }
+    if (last < text.length) out.push(text.slice(last));
+    return out;
+  }, [text, members, me]);
+  return <span className="text">{nodes}</span>;
 }
 
 // A message's device-local identity, used to anchor a reply's "jump to
@@ -304,22 +394,39 @@ export default function Messages({
   onReact,
   onRetry,
   onType,
+  onEdit,
+  onDelete,
 }) {
   const [draft, setDraft] = useState('');
   const [replyTo, setReplyTo] = useState(null);
+  // The line being edited (a message), or null. Editing takes over the
+  // composer, so it and a pending reply are mutually exclusive.
+  const [editing, setEditing] = useState(null);
   const inputRef = useRef(null);
   const scroller = useRef(null);
   // Which lines this device actually holds — a reply's "jump to original"
   // only lights up when the quoted line is one of them.
   const present = useMemo(() => new Set(messages.map(midOf)), [messages]);
-  // A reply pins to one message; if that message drops out from under us
-  // (retention, channel switch), quietly abandon the reply.
+  // A reply or edit pins to one message; if that message drops out from
+  // under us (retention, channel switch, a delete), quietly let it go.
   useEffect(() => {
     if (replyTo && !present.has(`${replyTo.sender}:${replyTo.ts}`)) setReplyTo(null);
-  }, [present, replyTo]);
+    if (editing && !present.has(`${editing.sender}:${editing.ts}`)) setEditing(null);
+  }, [present, replyTo, editing]);
   const startReply = (m) => {
+    setEditing(null);
     setReplyTo(quoteOf(m));
     inputRef.current?.focus();
+  };
+  const startEdit = (m) => {
+    setReplyTo(null);
+    setEditing(m);
+    setDraft(m.text ?? '');
+    inputRef.current?.focus();
+  };
+  const cancelEdit = () => {
+    setEditing(null);
+    setDraft('');
   };
   const jumpTo = (id) => {
     const el = scroller.current?.querySelector(`[data-mid="${CSS.escape(id)}"]`);
@@ -436,52 +543,67 @@ export default function Messages({
                   key={`${m.ts}:${i}`}
                   data-mid={midOf(m)}
                 >
-                  {m.reply && (
-                    <QuotedReply
-                      reply={m.reply}
-                      me={me}
-                      onJump={
-                        present.has(`${m.reply.sender}:${m.reply.ts}`)
-                          ? () => jumpTo(`${m.reply.sender}:${m.reply.ts}`)
-                          : null
-                      }
-                    />
-                  )}
-                  {m.file ? (
-                    <Attachment key={m.file.blob} file={m.file} fetchFile={fetchFile} />
-                  ) : m.game ? (
-                    <GameInvite
-                      game={m.game}
-                      sender={m.sender}
-                      me={me}
-                      shelf={shelf}
-                      onLaunchGame={onLaunchGame ?? (() => {})}
-                    />
+                  {m.deleted ? (
+                    <span className="text deleted" data-testid="msg-deleted">
+                      <Trash size={11} /> message deleted
+                    </span>
                   ) : (
-                    <span className="text">{m.text}</span>
+                    <>
+                      {m.reply && (
+                        <QuotedReply
+                          reply={m.reply}
+                          me={me}
+                          onJump={
+                            present.has(`${m.reply.sender}:${m.reply.ts}`)
+                              ? () => jumpTo(`${m.reply.sender}:${m.reply.ts}`)
+                              : null
+                          }
+                        />
+                      )}
+                      {m.file ? (
+                        <Attachment key={m.file.blob} file={m.file} fetchFile={fetchFile} />
+                      ) : m.game ? (
+                        <GameInvite
+                          game={m.game}
+                          sender={m.sender}
+                          me={me}
+                          shelf={shelf}
+                          onLaunchGame={onLaunchGame ?? (() => {})}
+                        />
+                      ) : (
+                        <>
+                          <MessageText text={m.text ?? ''} members={server.members} me={me} />
+                          {m.edited && (
+                            <span className="edited-tag" title="edited — the kept-history copy keeps the original">
+                              (edited)
+                            </span>
+                          )}
+                        </>
+                      )}
+                      {i > 0 && <time>{timeOf(m.ts)}</time>}
+                      {m.failed && onRetry ? (
+                        <button
+                          className="button msg-retry"
+                          data-testid="msg-retry"
+                          title="this message never reached the relay"
+                          onClick={() => onRetry(m)}
+                        >
+                          failed — retry
+                        </button>
+                      ) : null}
+                      {!server.restored && !m.pending && !m.failed ? (
+                        <MessageActions
+                          message={m}
+                          me={me}
+                          onReact={onReact}
+                          onReply={onSend ? startReply : null}
+                          onEdit={startEdit}
+                          onDelete={onDelete}
+                        />
+                      ) : null}
+                      <ReactionPills message={m} me={me} onReact={server.restored ? null : onReact} />
+                    </>
                   )}
-                  {i > 0 && <time>{timeOf(m.ts)}</time>}
-                  {m.failed && onRetry ? (
-                    <button
-                      className="button msg-retry"
-                      data-testid="msg-retry"
-                      title="this message never reached the relay"
-                      onClick={() => onRetry(m)}
-                    >
-                      failed — retry
-                    </button>
-                  ) : null}
-                  {!server.restored && onSend && !m.pending && !m.failed ? (
-                    <button
-                      className="react msg-reply"
-                      data-testid="msg-reply"
-                      title="reply"
-                      onClick={() => startReply(m)}
-                    >
-                      <Reply size={11} />
-                    </button>
-                  ) : null}
-                  <Reactions message={m} me={me} onReact={server.restored ? null : onReact} />
                 </div>
               ))}
             </div>
@@ -497,8 +619,23 @@ export default function Messages({
           </div>
         ) : (
         <>
-        <TypingLine typing={server.typing} channel={channel} me={me} />
-        {replyTo && (
+        {!editing && <TypingLine typing={server.typing} channel={channel} me={me} />}
+        {editing ? (
+          <div className="reply-bar editing" data-testid="edit-bar">
+            <Pencil size={12} />
+            <span className="rb-label">editing your message</span>
+            <span className="rb-hint mono">Esc to cancel</span>
+            <button
+              type="button"
+              className="rb-cancel"
+              data-testid="edit-cancel"
+              title="cancel edit"
+              onClick={cancelEdit}
+            >
+              <X size={12} />
+            </button>
+          </div>
+        ) : replyTo ? (
           <div className="reply-bar" data-testid="reply-bar">
             <Reply size={12} />
             <span className="rb-label">
@@ -515,13 +652,23 @@ export default function Messages({
               <X size={12} />
             </button>
           </div>
-        )}
+        ) : null}
         <form
           className="composer"
           onSubmit={(e) => {
             e.preventDefault();
             const text = draft.trim();
-            if (!text) return;
+            if (!text) {
+              if (editing) cancelEdit();
+              return;
+            }
+            if (editing) {
+              const target = editing;
+              setEditing(null);
+              setDraft('');
+              onEdit?.(target, text);
+              return;
+            }
             setDraft('');
             const reply = replyTo;
             setReplyTo(null);
@@ -547,13 +694,16 @@ export default function Messages({
             value={draft}
             onChange={(e) => {
               setDraft(e.target.value);
-              if (e.target.value) onType?.();
+              if (e.target.value && !editing) onType?.();
             }}
-            placeholder={`Message #${channel}`}
-            aria-label={`Message #${channel}`}
+            onKeyDown={(e) => {
+              if (e.key === 'Escape' && editing) cancelEdit();
+            }}
+            placeholder={editing ? 'Edit your message' : `Message #${channel}`}
+            aria-label={editing ? 'Edit your message' : `Message #${channel}`}
             data-testid="composer"
           />
-          <span className="send-hint mono" aria-hidden="true">↩ send</span>
+          <span className="send-hint mono" aria-hidden="true">{editing ? '↩ save' : '↩ send'}</span>
         </form>
         <div className="composer-note">
           <Lock size={11} />

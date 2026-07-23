@@ -225,6 +225,19 @@ export const Reply = (p) => (
   </Svg>
 );
 
+export const Pencil = (p) => (
+  <Svg {...p}>
+    <path d="M10.5 2.7 13.3 5.5 6 12.8l-3.3.9.9-3.3 7-7Z" />
+    <path d="M9.4 3.8 12.2 6.6" />
+  </Svg>
+);
+
+export const Trash = (p) => (
+  <Svg {...p}>
+    <path d="M3 4.5h10M6 4.5V3h4v1.5M4.3 4.5l.6 8.2a1 1 0 0 0 1 1h4.2a1 1 0 0 0 1-1l.6-8.2" />
+  </Svg>
+);
+
 export const ArrowRight = (p) => (
   <Svg {...p}>
     <path d="M2.5 8h11M9.5 4l4 4-4 4" />
