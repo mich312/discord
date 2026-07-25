@@ -10,7 +10,9 @@ name: ci
 # formatter is a separate mechanical change.
 on:
   push:
-    branches: [main]
+    # Work in this repo happens on claude/* branches and reaches main via PR,
+    # so test those branches directly rather than waiting for a PR to open.
+    branches: [main, 'claude/**']
   pull_request:
   workflow_call:
   workflow_dispatch:
