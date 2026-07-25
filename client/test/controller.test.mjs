@@ -30,6 +30,11 @@ function fakeDb() {
         if (messages[i].server === server) messages.splice(i, 1);
       }
     },
+    msgsDelete: async (server, channel) => {
+      for (let i = messages.length - 1; i >= 0; i--) {
+        if (messages[i].server === server && messages[i].channel === channel) messages.splice(i, 1);
+      }
+    },
     kvPut: async () => {},
     kvGet: async () => null,
   };
@@ -469,4 +474,189 @@ test('a rally rides the ephemeral fan-out too, never the group log', async () =>
   const standDown = c.relay.requests[1];
   assert.equal(standDown.notify, undefined, 'standing down notifies no one');
   assert.equal(standDown.notify_kind, undefined, 'standing down carries no push label');
+});
+
+// --- §0.6: the admin gate fails closed for destructive envelopes ----------
+// Previously senderIsAdmin returned true whenever the role was unknown, so a
+// non-admin's chan-del reached db.msgsDelete during the window before a fresh
+// joiner's first roster fetch landed — irreversible local history loss.
+
+test('chan-del from a sender whose role cannot be established is dropped, not applied', async () => {
+  const { c } = makeController({
+    // The ACL fetch fails, so the role stays unknown even after the re-pull.
+    relayHandler: (msg) =>
+      msg.t === 'members' ? Promise.reject(new Error('offline')) : Promise.resolve({ seq: 1 }),
+  });
+  const r = record({ channels: ['general', 'design'] });
+  c.servers.set('srv', r);
+  await c.db.msgAdd({ server: 'srv', channel: 'design', sender: 'bob', ts: 1, text: 'keep me' });
+
+  await c.onContent(r, 'mallory', JSON.stringify({ k: 'chan-del', ch: 'design' }));
+
+  assert.ok(r.channels.includes('design'), 'the channel survives an unestablished sender');
+  assert.equal(
+    c.db.messages.filter((m) => m.channel === 'design' && !m.system).length,
+    1,
+    'and its history was not deleted'
+  );
+  clearTimeout(c.backupTimer);
+});
+
+test('chanset from a sender whose role cannot be established cannot flip kept history', async () => {
+  const { c } = makeController({
+    relayHandler: (msg) =>
+      msg.t === 'members' ? Promise.reject(new Error('offline')) : Promise.resolve({ seq: 1 }),
+  });
+  const r = record();
+  c.servers.set('srv', r);
+
+  await c.onContent(
+    r,
+    'mallory',
+    JSON.stringify({ k: 'chanset', ch: 'general', meta: { hid: 'log1', hkey: 'k' } })
+  );
+
+  assert.equal(r.chanMeta?.general, undefined, 'the settings change was refused');
+  clearTimeout(c.backupTimer);
+});
+
+test('a real admin still gets destructive envelopes applied after the ACL re-pull', async () => {
+  // The fail-closed path must not break the promotion-lag case: bob is cached
+  // as a member but the ACL says admin, so his delete must still land.
+  const { c } = makeController({
+    relayHandler: (msg) =>
+      msg.t === 'members'
+        ? Promise.resolve({ members: [{ user: 'alice', role: 'member' }, { user: 'bob', role: 'admin' }] })
+        : Promise.resolve({ seq: 1 }),
+  });
+  const r = record({ channels: ['general', 'design'], roles: { bob: 'member' } });
+  c.servers.set('srv', r);
+
+  await c.onContent(r, 'bob', JSON.stringify({ k: 'chan-del', ch: 'design' }));
+
+  assert.ok(!r.channels.includes('design'), 'the promoted admin’s delete landed');
+  assert.equal(r.roles.bob, 'admin', 'roles were refreshed');
+  clearTimeout(c.backupTimer);
+});
+
+test('additive envelopes still fail open when the role is unknown', async () => {
+  // Deliberate asymmetry: a stray channel is recoverable, deleted history is
+  // not, so `chan` keeps the permissive behaviour `chan-del` gives up.
+  const { c } = makeController({
+    relayHandler: (msg) =>
+      msg.t === 'members' ? Promise.reject(new Error('offline')) : Promise.resolve({ seq: 1 }),
+  });
+  const r = record();
+  c.servers.set('srv', r);
+
+  await c.onContent(r, 'newcomer', JSON.stringify({ k: 'chan', ch: 'design' }));
+
+  assert.ok(r.channels.includes('design'), 'an additive create from an unknown role still applies');
+  clearTimeout(c.backupTimer);
+});
+
+// --- §0.2: verification is bound to a key, not a handle -------------------
+// Previously markVerified stored only the peer's handle, so the ✓ survived a
+// key change — including a relay substituting a KeyPackage for that handle,
+// which is exactly what safety numbers exist to detect.
+
+function verifyController(safetyNumbers) {
+  // safetyNumbers: peer -> current number, mutable between calls so a test
+  // can simulate the peer's key changing under it.
+  const { c, dispatched } = makeController();
+  c.crypto = async (cmd, args) => {
+    if (cmd === 'safetyNumber') {
+      const sn = safetyNumbers[args.peer];
+      if (!sn) throw new Error(`no member named ${args.peer}`);
+      return sn;
+    }
+    return {};
+  };
+  return { c, dispatched };
+}
+
+test('markVerified records the safety number that was actually compared', async () => {
+  const { c } = verifyController({ bob: '11111 22222' });
+  const r = record();
+  c.servers.set('srv', r);
+
+  await c.markVerified('srv', 'bob');
+
+  assert.equal(r.verifiedSn.bob, '11111 22222', 'the checked number is stored');
+  assert.deepEqual(r.verified, ['bob'], 'and the roster array still renders it');
+  clearTimeout(c.backupTimer);
+});
+
+test("a peer's key changing clears their badge on the next membership change", async () => {
+  const numbers = { bob: '11111 22222' };
+  const { c } = verifyController(numbers);
+  const r = record();
+  c.servers.set('srv', r);
+  await c.markVerified('srv', 'bob');
+
+  // The relay substitutes a different key for the same handle: the safety
+  // number moves, which is the only signal that anything happened.
+  numbers.bob = '99999 88888';
+  const changed = await c.revalidateVerified(r);
+
+  assert.equal(changed, true, 'the change was detected');
+  assert.deepEqual(r.verified, [], 'the ✓ is gone');
+  assert.equal(r.verifiedSn.bob, undefined, 'and the stale binding was dropped');
+  assert.ok(
+    c.db.messages.some((m) => m.system && m.text.includes("bob's safety number changed")),
+    'the user is told, rather than the badge silently vanishing'
+  );
+  clearTimeout(c.backupTimer);
+});
+
+test('an unchanged key keeps the badge across membership changes', async () => {
+  const { c } = verifyController({ bob: '11111 22222' });
+  const r = record();
+  c.servers.set('srv', r);
+  await c.markVerified('srv', 'bob');
+
+  const changed = await c.revalidateVerified(r);
+
+  assert.equal(changed, false, 'nothing moved');
+  assert.deepEqual(r.verified, ['bob'], 'the ✓ survives a routine epoch bump');
+  clearTimeout(c.backupTimer);
+});
+
+test('legacy handle-only verifications are reset rather than trusted', async () => {
+  // A record written before this change proves the user compared digits once,
+  // but not against which key — so it cannot rule out a later substitution.
+  const { c } = verifyController({ bob: '11111 22222' });
+  const r = record({ verified: ['bob'] });
+  c.servers.set('srv', r);
+
+  const changed = await c.revalidateVerified(r);
+
+  assert.equal(changed, true);
+  assert.deepEqual(r.verified, [], 'the unbound badge is dropped');
+  assert.ok(
+    c.db.messages.some((m) => m.system && m.text.includes('verification badges were reset')),
+    'and the reset is explained'
+  );
+  clearTimeout(c.backupTimer);
+});
+
+test('a verified member who left keeps their binding, so a re-add is still checked', async () => {
+  const numbers = { bob: '11111 22222' };
+  const { c } = verifyController(numbers);
+  const r = record();
+  c.servers.set('srv', r);
+  await c.markVerified('srv', 'bob');
+
+  // bob is removed: no MLS view of him, so nothing to compare yet.
+  r.members = ['alice'];
+  delete numbers.bob;
+  await c.revalidateVerified(r);
+  assert.equal(r.verifiedSn.bob, '11111 22222', 'the binding is retained while he is away');
+
+  // He is re-added with a fresh key — that must not silently re-verify him.
+  r.members = ['alice', 'bob'];
+  numbers.bob = '55555 44444';
+  await c.revalidateVerified(r);
+  assert.deepEqual(r.verified, [], 'the re-add is caught by the retained binding');
+  clearTimeout(c.backupTimer);
 });

@@ -510,6 +510,7 @@ export class Controller {
       seen: prior?.seen ?? {},
       hcursor: prior?.hcursor ?? {},
       verified: prior?.verified,
+      verifiedSn: prior?.verifiedSn,
       members,
       epoch,
       lastSeq: msg.after,
@@ -585,6 +586,9 @@ export class Controller {
             `members now: ${event.members.join(', ')} (epoch ${event.epoch})`
           );
         }
+        // A membership change is when a key can enter or re-enter the group,
+        // so re-check every badge against the key it was granted for.
+        await this.revalidateVerified(record);
         // Every epoch change kills parked GroupInfo blobs; refresh ours.
         await this.refreshInvites(record);
         this.refreshRoles(record.id);
@@ -802,9 +806,10 @@ export class Controller {
         // A channel's settings changed: topic, auto-delete, or history
         // (the history key itself rides in `meta.hkey` — inside MLS, so
         // the relay never sees it). The sender's copy is authoritative.
-        // Same advisory admin gate as `chan`: ignore senders we know are
-        // not admins, fail open while roles are still syncing.
-        if (!(await this.senderIsAdmin(record, sender))) break;
+        // Admin gate, failing closed: this envelope carries the
+        // kept-history and auto-delete switches, so applying one from a
+        // sender whose role we can't establish is a security downgrade.
+        if (!(await this.senderIsAdmin(record, sender, { destructive: true }))) break;
         if (!record.channels.includes(content.ch)) record.channels.push(content.ch);
         record.chanMeta = { ...(record.chanMeta ?? {}), [content.ch]: content.meta ?? {} };
         await this.addSystemMessage(
@@ -881,7 +886,7 @@ export class Controller {
         break;
       }
       case 'chan-ren': {
-        if (!(await this.senderIsAdmin(record, sender))) break;
+        if (!(await this.senderIsAdmin(record, sender, { destructive: true }))) break;
         if (record.channels.includes(content.ch) && !record.channels.includes(content.to)) {
           record.channels = record.channels.map((c) => (c === content.ch ? content.to : c));
           this.markChannelDeleted(record, content.ch);
@@ -898,7 +903,8 @@ export class Controller {
         break;
       }
       case 'chan-del': {
-        if (!(await this.senderIsAdmin(record, sender))) break;
+        // Fails closed: this reaches db.msgsDelete below.
+        if (!(await this.senderIsAdmin(record, sender, { destructive: true }))) break;
         if (record.channels.includes(content.ch) && record.channels.length > 1) {
           record.channels = record.channels.filter((c) => c !== content.ch);
           this.markChannelDeleted(record, content.ch);
@@ -913,7 +919,7 @@ export class Controller {
         break;
       }
       case 'vchan-ren': {
-        if (!(await this.senderIsAdmin(record, sender))) break;
+        if (!(await this.senderIsAdmin(record, sender, { destructive: true }))) break;
         const rooms = record.voiceChannels ?? ['lounge'];
         if (rooms.includes(content.ch) && !rooms.includes(content.to)) {
           record.voiceChannels = rooms.map((c) => (c === content.ch ? content.to : c));
@@ -928,7 +934,8 @@ export class Controller {
         break;
       }
       case 'vchan-del': {
-        if (!(await this.senderIsAdmin(record, sender))) break;
+        // Fails closed: removes the room and force-leaves anyone in a call.
+        if (!(await this.senderIsAdmin(record, sender, { destructive: true }))) break;
         const rooms = record.voiceChannels ?? ['lounge'];
         if (rooms.includes(content.ch)) {
           record.voiceChannels = rooms.filter((c) => c !== content.ch);
@@ -1824,19 +1831,40 @@ export class Controller {
 
   // === roles ==============================================================
 
-  /** Advisory admin gate for admin-only envelopes (overview, chanset,
-      channel create/rename/delete). MLS can't enforce roles; the relay's
-      ACL is the source of truth, but our cache of it can lag a promotion —
-      an admin's edit arriving just after they were promoted must not be
-      silently dropped because this device still has them as "member".
-      Fail open while the role is unknown; on a cache that disagrees,
-      re-pull the ACL once and re-check before dropping. */
-  async senderIsAdmin(record, sender) {
+  /** Admin gate for admin-only envelopes (overview, chanset, channel
+      create/rename/delete). MLS can't enforce roles; the relay's ACL is the
+      source of truth, but our cache of it can lag a promotion — an admin's
+      edit arriving just after they were promoted must not be silently
+      dropped because this device still has them as "member". So a sender we
+      don't have as an admin always costs one ACL re-pull before we decide.
+
+      When that re-pull still leaves the role unknown (the fetch failed, or
+      the sender isn't in the roster yet) the two classes of envelope are
+      NOT symmetric, so `destructive` picks the safe direction:
+
+      - Additive envelopes (create a channel, edit the home base) fail
+        *open*. A wrong guess leaves a stray channel, and the meta snapshot
+        that trails these repairs the opposite error anyway.
+      - Destructive envelopes fail *closed*. `chan-del` reaches
+        `db.msgsDelete` and irreversibly drops this device's only copy of a
+        room's history — in an E2EE app with no server-side backup, no later
+        role sync can undo that. `chanset` counts as destructive too: it
+        carries the kept-history and retention switches, so applying one
+        from an unverified sender is a forward-secrecy downgrade. */
+  async senderIsAdmin(record, sender, { destructive = false } = {}) {
     const cached = record.roles?.[sender];
-    if (!cached || cached === 'admin') return true;
+    if (cached === 'admin') return true;
     await this.refreshRoles(record.id);
     const fresh = record.roles?.[sender];
-    return !fresh || fresh === 'admin';
+    if (fresh === 'admin') return true;
+    if (fresh) return false; // authoritative: in the roster, not an admin
+    if (destructive) {
+      console.warn(
+        `dropped a destructive envelope from ${sender} in ${record.id}: role still unknown after an ACL refresh`
+      );
+      return false;
+    }
+    return true;
   }
 
   /** Pull the relay's roster roles (admin/member) into the local record.
@@ -2246,11 +2274,72 @@ export class Controller {
     return this.crypto('safetyNumber', { group: serverId, peer });
   }
 
+  /** Verification is stored against the *key* it was performed on, not the
+      handle. `record.verifiedSn` maps peer -> the safety number the user
+      actually compared out of band; `record.verified` stays the plain array
+      the roster renders from, derived from it.
+
+      The safety number is a collision-resistant function of both parties'
+      MLS identity keys (crypto-core `safety_number`), so it is already the
+      binding we need: if the peer's key is ever replaced — a remove/re-add,
+      or a relay substituting a KeyPackage — the number no longer matches what
+      was checked, and `revalidateVerified` drops the badge. Storing only the
+      handle, as this did before, left a ✓ that survived a key change and so
+      certified nothing. */
   async markVerified(serverId, peer) {
     const record = this.servers.get(serverId);
-    record.verified = [...new Set([...(record.verified ?? []), peer])];
+    const sn = await this.safetyNumber(serverId, peer);
+    record.verifiedSn = { ...(record.verifiedSn ?? {}), [peer]: sn };
+    record.verified = Object.keys(record.verifiedSn);
     await this.db.serverPut(record);
     this.dispatch({ type: 'servers', servers: this.snapshotServers() });
+  }
+
+  /** Re-derive every stored safety number and clear the ones that moved.
+      Runs on each membership change, which is when a key can enter the group.
+
+      Records written before verification was key-bound carry a `verified`
+      array with no `verifiedSn`. Those are dropped rather than adopted: the
+      user did compare digits at some point, but nothing recorded against
+      what, so a substitution that happened after that check would be
+      indistinguishable from a clean history. Re-verifying is cheap; a ✓ that
+      might certify the wrong key is not. */
+  async revalidateVerified(record) {
+    const legacy = !record.verifiedSn && record.verified?.length;
+    if (legacy) {
+      record.verifiedSn = {};
+      record.verified = [];
+      await this.addSystemMessage(
+        record.id,
+        'verification badges were reset — safety numbers are now checked against the key that was verified. Please re-check the members you trust.'
+      );
+      return true;
+    }
+    const stored = record.verifiedSn;
+    if (!stored || !Object.keys(stored).length) return false;
+
+    let changed = false;
+    for (const [peer, was] of Object.entries(stored)) {
+      // Someone who has left the group keeps their entry: if they are ever
+      // re-added the check below runs against the new key and catches it.
+      if (!record.members?.includes(peer)) continue;
+      let now;
+      try {
+        now = await this.safetyNumber(record.id, peer);
+      } catch {
+        continue; // no MLS view of this peer right now; decide next time
+      }
+      if (now !== was) {
+        delete stored[peer];
+        changed = true;
+        await this.addSystemMessage(
+          record.id,
+          `${peer}'s safety number changed — verification cleared. Check it again before trusting this device.`
+        );
+      }
+    }
+    if (changed) record.verified = Object.keys(stored);
+    return changed;
   }
 
   // === web push ===========================================================
@@ -2383,6 +2472,7 @@ export class Controller {
       seen: prior?.seen ?? {},
       hcursor: prior?.hcursor ?? {},
       verified: prior?.verified,
+      verifiedSn: prior?.verifiedSn,
       members,
       epoch,
       lastSeq: sent.seq,
@@ -2450,6 +2540,8 @@ export class Controller {
         voiceChannels: [...(r.voiceChannels ?? ['lounge'])],
         members: [...r.members],
         roles: { ...(r.roles ?? {}) },
+        verified: [...(r.verified ?? [])],
+        verifiedSn: { ...(r.verifiedSn ?? {}) },
         notices: [...(r.notices ?? [])],
         rsvps: { ...(r.rsvps ?? {}) },
         overview: r.overview ? JSON.parse(JSON.stringify(r.overview)) : r.overview,
