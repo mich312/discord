@@ -168,9 +168,12 @@ fn a_key_package_naming_someone_else_is_refused() {
     alice.create_group(G).unwrap();
 
     // alice asked for bob; the relay answered with charlie's KeyPackage.
-    let err = alice
-        .add_member(G, &charlie.key_package().unwrap(), "bob", &bob.signature_public_key())
-        .expect_err("a credential naming charlie must not be admitted as bob");
+    // AddResult deliberately has no Debug (it carries commit/welcome bytes),
+    // so unwrap the error by hand rather than via expect_err.
+    let err = match alice.add_member(G, &charlie.key_package().unwrap(), "bob", &bob.signature_public_key()) {
+        Ok(_) => panic!("a credential naming charlie must not be admitted as bob"),
+        Err(e) => e,
+    };
     assert!(
         err.to_string().contains("identity mismatch"),
         "expected an identity mismatch, got: {err}"
@@ -195,9 +198,10 @@ fn a_substituted_key_under_the_right_name_is_refused() {
         "the impostor is a different keypair under the same handle"
     );
 
-    let err = alice
-        .add_member(G, &impostor.key_package().unwrap(), "bob", &real_bob.signature_public_key())
-        .expect_err("a KeyPackage under bob's name but another key must be refused");
+    let err = match alice.add_member(G, &impostor.key_package().unwrap(), "bob", &real_bob.signature_public_key()) {
+        Ok(_) => panic!("a KeyPackage under bob's name but another key must be refused"),
+        Err(e) => e,
+    };
     assert!(
         err.to_string().contains("unexpected signature key"),
         "expected a key mismatch, got: {err}"
@@ -213,9 +217,10 @@ fn the_genuine_key_package_still_admits_the_member() {
     let mut bob = ChatClient::new("bob").unwrap();
     alice.create_group(G).unwrap();
 
-    let add = alice
-        .add_member(G, &bob.key_package().unwrap(), "bob", &bob.signature_public_key())
-        .expect("the real bob is still addable");
+    let add = match alice.add_member(G, &bob.key_package().unwrap(), "bob", &bob.signature_public_key()) {
+        Ok(a) => a,
+        Err(e) => panic!("the real bob is still addable, got: {e}"),
+    };
     bob.join_from_welcome(&add.welcome).unwrap();
     assert_eq!(alice.members(G).unwrap(), vec!["alice", "bob"]);
     assert_eq!(bob.members(G).unwrap(), vec!["alice", "bob"]);
