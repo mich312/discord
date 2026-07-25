@@ -1,0 +1,125 @@
+name: ci
+
+# The test gate. Runs on every PR and every push to main, and is called by
+# deploy.yml as a required prerequisite — nothing reaches production without
+# these jobs going green first.
+#
+# Deliberately NOT gated on `cargo fmt --check`: the Rust here is
+# hand-formatted and is not rustfmt-clean under any single config, so a
+# formatting gate would fail for reasons unrelated to correctness. Adopting a
+# formatter is a separate mechanical change.
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_call:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    name: rust tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # The relay's Postgres contract tests are skipped unless TEST_DATABASE_URL
+    # is set (relay/tests/pg_store.rs:1-3). Providing it here means the
+    # PgStore/MemoryStore parity suite actually runs, which is where the
+    # known store divergences live.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: relay_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: cargo test
+        env:
+          TEST_DATABASE_URL: postgres://postgres:test@127.0.0.1:5432/relay_test
+        run: cargo test --workspace --all-targets
+
+      # Advisory for now: clippy has never run against this codebase, so
+      # -D warnings would be red on day one for pre-existing lints. Flip
+      # `continue-on-error` off once the existing backlog is cleared.
+      - name: cargo clippy (advisory)
+        continue-on-error: true
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+  client:
+    name: client tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+
+      - run: npm ci
+        working-directory: client
+
+      - name: node --test
+        run: npm test
+        working-directory: client
+
+  build:
+    name: wasm + client build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+
+      - name: install wasm-pack
+        run: curl -sSf https://rustwasm.github.io/wasm-pack/installer/init.sh | sh
+
+      # binaryen >= 116 — below that, build-wasm.sh silently ships an
+      # unoptimized artifact. Installing it here means CI exercises the
+      # optimized path the Docker image also builds.
+      - name: install binaryen
+        run: sudo apt-get update && sudo apt-get install -y binaryen
+
+      - name: build wasm
+        run: ./crypto-core/build-wasm.sh
+
+      - run: npm ci
+        working-directory: client
+
+      # Also exercises scripts/inject-sri.mjs, which exits non-zero if the
+      # build layout changes such that no asset tags get stamped.
+      - name: vite build + SRI
+        run: npm run build
+        working-directory: client

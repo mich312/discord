@@ -18,7 +18,13 @@ concurrency:
   cancel-in-progress: false
 
 jobs:
+  # The test gate. Deploy cannot start until every job in ci.yml is green —
+  # previously main deployed straight to production with nothing run at all.
+  tests:
+    uses: ./.github/workflows/ci.yml
+
   deploy:
+    needs: tests
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4      # only to get ci/deploy.sh onto the runner
