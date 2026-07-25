@@ -44,8 +44,8 @@ const commands = {
     client.createGroup(group);
     return { epoch: Number(client.epoch(group)), state: snapshot() };
   },
-  addMember({ group, keyPackage }) {
-    const r = client.addMember(group, keyPackage);
+  addMember({ group, keyPackage, expectIdentity, expectKey }) {
+    const r = client.addMember(group, keyPackage, expectIdentity, expectKey);
     return {
       commit: r.commit,
       welcome: r.welcome,

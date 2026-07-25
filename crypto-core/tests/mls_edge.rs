@@ -25,7 +25,7 @@ fn operations_on_an_unknown_group_error_cleanly() {
     assert!(alice.send_message(G, "hi").is_err());
     assert!(alice.export_group_info(G).is_err());
     assert!(alice.remove_member(G, "bob").is_err());
-    assert!(alice.add_member(G, &bob.key_package().unwrap()).is_err());
+    assert!(alice.add_member(G, &bob.key_package().unwrap(), "bob", &bob.signature_public_key()).is_err());
     assert!(alice.safety_number(G, "bob").is_err());
 }
 
@@ -67,7 +67,7 @@ fn joining_the_same_welcome_twice_is_rejected() {
     let mut alice = ChatClient::new("alice").unwrap();
     let mut bob = ChatClient::new("bob").unwrap();
     alice.create_group(G).unwrap();
-    let add = alice.add_member(G, &bob.key_package().unwrap()).unwrap();
+    let add = alice.add_member(G, &bob.key_package().unwrap(), "bob", &bob.signature_public_key()).unwrap();
 
     assert_eq!(bob.join_from_welcome(&add.welcome).unwrap(), G);
     // Replaying the same Welcome must not silently re-join or overwrite state.
@@ -137,11 +137,11 @@ fn a_stale_epoch_message_does_not_wedge_the_receiver() {
     let mut bob = ChatClient::new("bob").unwrap();
     let mut charlie = ChatClient::new("charlie").unwrap();
     alice.create_group(G).unwrap();
-    let add_bob = alice.add_member(G, &bob.key_package().unwrap()).unwrap();
+    let add_bob = alice.add_member(G, &bob.key_package().unwrap(), "bob", &bob.signature_public_key()).unwrap();
     bob.join_from_welcome(&add_bob.welcome).unwrap();
 
     let stale = bob.send_message(G, "epoch 1").unwrap();
-    let add_charlie = alice.add_member(G, &charlie.key_package().unwrap()).unwrap();
+    let add_charlie = alice.add_member(G, &charlie.key_package().unwrap(), "charlie", &charlie.signature_public_key()).unwrap();
     charlie.join_from_welcome(&add_charlie.welcome).unwrap();
     // charlie never held epoch-1 keys.
     assert!(charlie.process_incoming(&stale).is_err());
@@ -151,4 +151,72 @@ fn a_stale_epoch_message_does_not_wedge_the_receiver() {
         Event::Message { text, .. } => assert_eq!(text, "epoch 2"),
         other => panic!("expected message, got {other:?}"),
     }
+}
+
+// --- KeyPackage identity binding -----------------------------------------
+// The relay is what serves KeyPackages, and `KeyPackageIn::validate` only
+// checks a KeyPackage against itself — it happily validates one minted by
+// anybody. These pin down that the adder binds the KeyPackage to the handle
+// and pinned key it asked for, so a relay cannot answer "give me bob's
+// KeyPackage" with one that makes the relay a member reading everything.
+
+#[test]
+fn a_key_package_naming_someone_else_is_refused() {
+    let mut alice = ChatClient::new("alice").unwrap();
+    let bob = ChatClient::new("bob").unwrap();
+    let charlie = ChatClient::new("charlie").unwrap();
+    alice.create_group(G).unwrap();
+
+    // alice asked for bob; the relay answered with charlie's KeyPackage.
+    let err = alice
+        .add_member(G, &charlie.key_package().unwrap(), "bob", &bob.signature_public_key())
+        .expect_err("a credential naming charlie must not be admitted as bob");
+    assert!(
+        err.to_string().contains("identity mismatch"),
+        "expected an identity mismatch, got: {err}"
+    );
+    assert_eq!(alice.epoch(G).unwrap(), 0, "the group must not have advanced");
+    assert_eq!(alice.members(G).unwrap(), vec!["alice"], "and nobody was added");
+}
+
+#[test]
+fn a_substituted_key_under_the_right_name_is_refused() {
+    // The real attack: the relay mints its own KeyPackage bearing
+    // BasicCredential("bob") — the identity matches, so only the pinned
+    // signature key distinguishes it from the genuine article.
+    let mut alice = ChatClient::new("alice").unwrap();
+    let real_bob = ChatClient::new("bob").unwrap();
+    let impostor = ChatClient::new("bob").unwrap();
+    alice.create_group(G).unwrap();
+
+    assert_ne!(
+        real_bob.signature_public_key(),
+        impostor.signature_public_key(),
+        "the impostor is a different keypair under the same handle"
+    );
+
+    let err = alice
+        .add_member(G, &impostor.key_package().unwrap(), "bob", &real_bob.signature_public_key())
+        .expect_err("a KeyPackage under bob's name but another key must be refused");
+    assert!(
+        err.to_string().contains("unexpected signature key"),
+        "expected a key mismatch, got: {err}"
+    );
+    assert_eq!(alice.epoch(G).unwrap(), 0, "the group must not have advanced");
+    assert_eq!(alice.members(G).unwrap(), vec!["alice"], "and the impostor is not a member");
+}
+
+#[test]
+fn the_genuine_key_package_still_admits_the_member() {
+    // Positive control: the checks must not break the ordinary path.
+    let mut alice = ChatClient::new("alice").unwrap();
+    let mut bob = ChatClient::new("bob").unwrap();
+    alice.create_group(G).unwrap();
+
+    let add = alice
+        .add_member(G, &bob.key_package().unwrap(), "bob", &bob.signature_public_key())
+        .expect("the real bob is still addable");
+    bob.join_from_welcome(&add.welcome).unwrap();
+    assert_eq!(alice.members(G).unwrap(), vec!["alice", "bob"]);
+    assert_eq!(bob.members(G).unwrap(), vec!["alice", "bob"]);
 }

@@ -30,6 +30,14 @@ pub enum CoreError {
     AlreadyInGroup(String),
     #[error("bad state bundle: {0}")]
     BadState(String),
+    /// A KeyPackage's credential named someone other than the person the
+    /// caller meant to add — i.e. whoever served it substituted an identity.
+    #[error("key package identity mismatch: asked for {expected}, got {got}")]
+    IdentityMismatch { expected: String, got: String },
+    /// The credential named the right person but carried a signature key
+    /// other than the one pinned for that handle.
+    #[error("key package for {0} carries an unexpected signature key")]
+    KeyMismatch(String),
     #[error("{0}")]
     Mls(String),
 }
@@ -289,12 +297,48 @@ impl ChatClient {
 
     /// Add a member from their serialized KeyPackage. Returns the commit
     /// (for the group) and the Welcome (for the joiner), both serialized.
-    pub fn add_member(&mut self, id: &str, key_package_bytes: &[u8]) -> Result<AddResult, CoreError> {
+    ///
+    /// `expected_identity` and `expected_key` bind the KeyPackage to the
+    /// person the caller actually meant to add. This is load-bearing: the
+    /// relay is what hands out KeyPackages, and `validate` below only checks
+    /// a KeyPackage against *itself*. Without these two checks a relay can
+    /// answer a `fetch_kp` for "bob" with one it minted, bearing
+    /// `BasicCredential("bob")` — it becomes a real MLS member decrypting
+    /// everything from this epoch forward while the roster still reads "bob".
+    ///
+    /// `expected_key` is the signature key the relay has pinned for that
+    /// handle: the same key that authenticates their WebSocket and the one
+    /// the safety number is computed over. That still means trusting the
+    /// relay on first contact — this is TOFU, not proof. What it buys is
+    /// that the relay must now lie *consistently*, and that the lie changes
+    /// the safety number, so an out-of-band check can catch it. Paired with
+    /// key-bound verification on the client, a substitution can no longer
+    /// hide behind a ✓ that was granted for a different key.
+    pub fn add_member(
+        &mut self,
+        id: &str,
+        key_package_bytes: &[u8],
+        expected_identity: &str,
+        expected_key: &[u8],
+    ) -> Result<AddResult, CoreError> {
         let kp_in = KeyPackageIn::tls_deserialize_exact(key_package_bytes)
             .map_err(CoreError::mls)?;
         let key_package = kp_in
             .validate(self.provider.crypto(), ProtocolVersion::Mls10)
             .map_err(CoreError::mls)?;
+
+        let leaf = key_package.leaf_node();
+        let got = identity_of(leaf.credential());
+        if got.as_deref() != Some(expected_identity) {
+            return Err(CoreError::IdentityMismatch {
+                expected: expected_identity.to_string(),
+                got: got.unwrap_or_else(|| "<non-basic credential>".to_string()),
+            });
+        }
+        if leaf.signature_key().as_slice() != expected_key {
+            return Err(CoreError::KeyMismatch(expected_identity.to_string()));
+        }
+
         let group = self
             .groups
             .get_mut(id)

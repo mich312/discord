@@ -170,7 +170,18 @@ pub enum ServerMsg {
     AdminList { rid: u64, users: Vec<String>, groups: Vec<GroupEntry> },
     Ok { rid: u64, #[serde(skip_serializing_if = "Option::is_none")] seq: Option<u64> },
     Error { #[serde(skip_serializing_if = "Option::is_none")] rid: Option<u64>, message: String },
-    Kp { rid: u64, user: String, #[serde(skip_serializing_if = "Option::is_none")] payload: Option<String> },
+    /// A consumed KeyPackage for `user`, plus the signature key this relay
+    /// has pinned for that handle. The adder checks the KeyPackage's
+    /// credential and signature key against `user`/`pubkey` before adding —
+    /// otherwise a relay could answer with a KeyPackage it minted itself and
+    /// join the group. Optional only so an older relay stays parseable; a
+    /// client that gets no `pubkey` refuses the add.
+    Kp {
+        rid: u64,
+        user: String,
+        #[serde(skip_serializing_if = "Option::is_none")] payload: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")] pubkey: Option<String>,
+    },
     Msg { group: String, seq: u64, epoch: u64, sender: String, payload: String },
     Welcome { from: String, group: String, after: u64, payload: String },
     Invite { rid: u64, group: String, payload: String },

@@ -1681,9 +1681,22 @@ export class Controller {
     if (!reply.payload) {
       throw new Error(`${user} has no published key packages (have they signed up?)`);
     }
+    // The relay serves both halves, so make it commit to a consistent story:
+    // the KeyPackage's credential must name `user` and carry the signature
+    // key pinned for that handle. Without this the relay can hand back a
+    // KeyPackage it minted itself and join the group as "user". Refuse
+    // outright if the relay declines to state a key — an add is not urgent
+    // enough to do blind.
+    if (!reply.pubkey) {
+      throw new Error(
+        `the relay did not provide an identity key for ${user}; refusing to add them unverified`
+      );
+    }
     const { commit, welcome, epoch, members, state } = await this.crypto('addMember', {
       group: serverId,
       keyPackage: b64.dec(reply.payload),
+      expectIdentity: user,
+      expectKey: b64.dec(reply.pubkey),
     });
     await this.persistState(state);
     const sent = await this.relay.request({

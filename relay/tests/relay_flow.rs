@@ -292,7 +292,10 @@ async fn full_flow_with_offline_welcome() {
 
     let kp = alice.request(json!({"t": "fetch_kp", "user": "bob"})).await;
     let kp_bytes = B64.decode(kp["payload"].as_str().unwrap()).unwrap();
-    let add = alice.mls.add_member("g1", &kp_bytes).unwrap();
+    // The relay serves the pinned identity key alongside the KeyPackage;
+    // the adder binds one to the other.
+    let kp_pubkey = B64.decode(kp["pubkey"].as_str().unwrap()).unwrap();
+    let add = alice.mls.add_member("g1", &kp_bytes, "bob", &kp_pubkey).unwrap();
 
     // Commit goes on the log first so the Welcome can point past it.
     let epoch = alice.mls.epoch("g1").unwrap();
@@ -345,7 +348,10 @@ async fn catch_up_replays_missed_messages_in_order() {
     alice.request(json!({"t": "create_group", "group": "g1"})).await;
     let kp = alice.request(json!({"t": "fetch_kp", "user": "bob"})).await;
     let kp_bytes = B64.decode(kp["payload"].as_str().unwrap()).unwrap();
-    let add = alice.mls.add_member("g1", &kp_bytes).unwrap();
+    // The relay serves the pinned identity key alongside the KeyPackage;
+    // the adder binds one to the other.
+    let kp_pubkey = B64.decode(kp["pubkey"].as_str().unwrap()).unwrap();
+    let add = alice.mls.add_member("g1", &kp_bytes, "bob", &kp_pubkey).unwrap();
     let epoch = alice.mls.epoch("g1").unwrap();
     let reply = alice
         .request(json!({"t": "send", "group": "g1", "epoch": epoch, "payload": B64.encode(&add.commit)}))
@@ -534,7 +540,10 @@ async fn ephemeral_messages_fan_out_but_never_touch_the_log() {
     alice.request(json!({"t": "create_group", "group": "g1"})).await;
     let kp = alice.request(json!({"t": "fetch_kp", "user": "bob"})).await;
     let kp_bytes = B64.decode(kp["payload"].as_str().unwrap()).unwrap();
-    let add = alice.mls.add_member("g1", &kp_bytes).unwrap();
+    // The relay serves the pinned identity key alongside the KeyPackage;
+    // the adder binds one to the other.
+    let kp_pubkey = B64.decode(kp["pubkey"].as_str().unwrap()).unwrap();
+    let add = alice.mls.add_member("g1", &kp_bytes, "bob", &kp_pubkey).unwrap();
     let epoch = alice.mls.epoch("g1").unwrap();
     let reply = alice
         .request(json!({"t": "send", "group": "g1", "epoch": epoch, "payload": B64.encode(&add.commit)}))

@@ -26,7 +26,7 @@ fn two_party_create_join_exchange() {
 
     // bob publishes a KeyPackage; alice adds him.
     let bob_kp = bob.key_package().unwrap();
-    let add = alice.add_member(G, &bob_kp).unwrap();
+    let add = alice.add_member(G, &bob_kp, "bob", &bob.signature_public_key()).unwrap();
     assert_eq!(alice.epoch(G).unwrap(), 1);
 
     // bob joins from the Welcome; the group id travels inside it.
@@ -50,11 +50,11 @@ fn third_member_join_advances_epoch_for_everyone() {
     let mut charlie = ChatClient::new("charlie").unwrap();
 
     alice.create_group(G).unwrap();
-    let add_bob = alice.add_member(G, &bob.key_package().unwrap()).unwrap();
+    let add_bob = alice.add_member(G, &bob.key_package().unwrap(), "bob", &bob.signature_public_key()).unwrap();
     bob.join_from_welcome(&add_bob.welcome).unwrap();
 
     // alice adds charlie; bob learns about it from the commit.
-    let add_charlie = alice.add_member(G, &charlie.key_package().unwrap()).unwrap();
+    let add_charlie = alice.add_member(G, &charlie.key_package().unwrap(), "charlie", &charlie.signature_public_key()).unwrap();
     charlie.join_from_welcome(&add_charlie.welcome).unwrap();
     match bob.process_incoming(&add_charlie.commit).unwrap() {
         Event::MembershipChange { epoch, members, .. } => {
@@ -81,9 +81,9 @@ fn removal_rotates_epoch_and_locks_out_removed_member() {
     let mut charlie = ChatClient::new("charlie").unwrap();
 
     alice.create_group(G).unwrap();
-    let add_bob = alice.add_member(G, &bob.key_package().unwrap()).unwrap();
+    let add_bob = alice.add_member(G, &bob.key_package().unwrap(), "bob", &bob.signature_public_key()).unwrap();
     bob.join_from_welcome(&add_bob.welcome).unwrap();
-    let add_charlie = alice.add_member(G, &charlie.key_package().unwrap()).unwrap();
+    let add_charlie = alice.add_member(G, &charlie.key_package().unwrap(), "charlie", &charlie.signature_public_key()).unwrap();
     charlie.join_from_welcome(&add_charlie.welcome).unwrap();
     bob.process_incoming(&add_charlie.commit).unwrap();
 
@@ -109,13 +109,13 @@ fn wrong_epoch_message_is_rejected_not_fatal() {
     let mut charlie = ChatClient::new("charlie").unwrap();
 
     alice.create_group(G).unwrap();
-    let add_bob = alice.add_member(G, &bob.key_package().unwrap()).unwrap();
+    let add_bob = alice.add_member(G, &bob.key_package().unwrap(), "bob", &bob.signature_public_key()).unwrap();
     bob.join_from_welcome(&add_bob.welcome).unwrap();
 
     // bob encrypts at epoch 1, but alice advances to epoch 2 before it lands
     // (out-of-order delivery: the commit overtakes the message).
     let stale = bob.send_message(G, "sent at epoch 1").unwrap();
-    let add_charlie = alice.add_member(G, &charlie.key_package().unwrap()).unwrap();
+    let add_charlie = alice.add_member(G, &charlie.key_package().unwrap(), "charlie", &charlie.signature_public_key()).unwrap();
     charlie.join_from_welcome(&add_charlie.welcome).unwrap();
 
     // charlie never had epoch-1 keys — the stale message must fail for him.
@@ -136,8 +136,8 @@ fn multiple_groups_route_by_message_group_id() {
 
     alice.create_group("team").unwrap();
     alice.create_group("club").unwrap();
-    let add1 = alice.add_member("team", &bob.key_package().unwrap()).unwrap();
-    let add2 = alice.add_member("club", &bob.key_package().unwrap()).unwrap();
+    let add1 = alice.add_member("team", &bob.key_package().unwrap(), "bob", &bob.signature_public_key()).unwrap();
+    let add2 = alice.add_member("club", &bob.key_package().unwrap(), "bob", &bob.signature_public_key()).unwrap();
     assert_eq!(bob.join_from_welcome(&add1.welcome).unwrap(), "team");
     assert_eq!(bob.join_from_welcome(&add2.welcome).unwrap(), "club");
     assert_eq!(bob.group_ids(), vec!["club", "team"]);
@@ -167,7 +167,7 @@ fn state_snapshot_survives_reload_with_live_ratchets() {
     let mut bob = ChatClient::new("bob").unwrap();
 
     alice.create_group(G).unwrap();
-    let add = alice.add_member(G, &bob.key_package().unwrap()).unwrap();
+    let add = alice.add_member(G, &bob.key_package().unwrap(), "bob", &bob.signature_public_key()).unwrap();
     bob.join_from_welcome(&add.welcome).unwrap();
     let blob = alice.send_message(G, "before reload").unwrap();
     expect_message(bob.process_incoming(&blob).unwrap(), "alice", "before reload");
@@ -190,7 +190,7 @@ fn state_snapshot_survives_reload_with_live_ratchets() {
 
     // Epoch changes still work post-restore.
     let mut charlie = ChatClient::new("charlie").unwrap();
-    let add = alice.add_member(G, &charlie.key_package().unwrap()).unwrap();
+    let add = alice.add_member(G, &charlie.key_package().unwrap(), "charlie", &charlie.signature_public_key()).unwrap();
     charlie.join_from_welcome(&add.welcome).unwrap();
     match bob.process_incoming(&add.commit).unwrap() {
         Event::MembershipChange { epoch, .. } => assert_eq!(epoch, 2),
@@ -221,7 +221,7 @@ fn identity_bundle_restores_account_but_not_groups() {
     let mut bob = ChatClient::new("bob").unwrap();
     let mut alice = restored;
     bob.create_group("g2").unwrap();
-    let add = bob.add_member("g2", &alice.key_package().unwrap()).unwrap();
+    let add = bob.add_member("g2", &alice.key_package().unwrap(), "alice", &alice.signature_public_key()).unwrap();
     alice.join_from_welcome(&add.welcome).unwrap();
     let blob = alice.send_message("g2", "back from the dead").unwrap();
     expect_message(bob.process_incoming(&blob).unwrap(), "alice", "back from the dead");
@@ -234,7 +234,7 @@ fn external_commit_join_via_group_info() {
     let mut charlie = ChatClient::new("charlie").unwrap();
 
     alice.create_group(G).unwrap();
-    let add = alice.add_member(G, &bob.key_package().unwrap()).unwrap();
+    let add = alice.add_member(G, &bob.key_package().unwrap(), "bob", &bob.signature_public_key()).unwrap();
     bob.join_from_welcome(&add.welcome).unwrap();
 
     // charlie joins with nobody's help: GroupInfo -> external commit.
@@ -273,7 +273,7 @@ fn stale_group_info_external_commit_is_rejected_by_members() {
     let stale_info = alice.export_group_info(G).unwrap(); // epoch 0
 
     // Group moves on before charlie uses the link.
-    let add = alice.add_member(G, &bob.key_package().unwrap()).unwrap();
+    let add = alice.add_member(G, &bob.key_package().unwrap(), "bob", &bob.signature_public_key()).unwrap();
     bob.join_from_welcome(&add.welcome).unwrap();
 
     // charlie can still BUILD a commit against the stale info…
@@ -298,9 +298,9 @@ fn safety_numbers_are_symmetric_and_pairwise_distinct() {
     let mut charlie = ChatClient::new("charlie").unwrap();
 
     alice.create_group(G).unwrap();
-    let add = alice.add_member(G, &bob.key_package().unwrap()).unwrap();
+    let add = alice.add_member(G, &bob.key_package().unwrap(), "bob", &bob.signature_public_key()).unwrap();
     bob.join_from_welcome(&add.welcome).unwrap();
-    let add = alice.add_member(G, &charlie.key_package().unwrap()).unwrap();
+    let add = alice.add_member(G, &charlie.key_package().unwrap(), "charlie", &charlie.signature_public_key()).unwrap();
     charlie.join_from_welcome(&add.welcome).unwrap();
     bob.process_incoming(&add.commit).unwrap();
 

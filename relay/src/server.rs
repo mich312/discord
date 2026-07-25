@@ -478,8 +478,19 @@ async fn handle_request(
         }
 
         ClientMsg::FetchKp { rid, user: target } => {
+            // Serve the pinned identity key with the KeyPackage so the adder
+            // can check that the two agree before admitting anyone.
+            let pinned = match app.store.get_user_pubkey(&target).await {
+                Ok(p) => p,
+                Err(e) => return err(rid, e),
+            };
             match app.store.take_key_package(&target).await {
-                Ok(kp) => Some(ServerMsg::Kp { rid, user: target, payload: kp.map(|b| B64.encode(b)) }),
+                Ok(kp) => Some(ServerMsg::Kp {
+                    rid,
+                    user: target,
+                    payload: kp.map(|b| B64.encode(b)),
+                    pubkey: pinned.map(|b| B64.encode(b)),
+                }),
                 Err(e) => err(rid, e),
             }
         }
