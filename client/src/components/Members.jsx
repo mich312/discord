@@ -130,7 +130,7 @@ export default function Members({ server, me, canManage, voice, onAdd, onMember,
   };
 
   return (
-    <aside className="members">
+    <aside className="members" id="roster-drawer" aria-label="roster">
       <div className="section-label">
         <span className="overline">members</span>
         {liveCount > 0 ? (

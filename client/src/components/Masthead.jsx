@@ -6,10 +6,31 @@ import { QuorumGlyph, LinkGlyph, CommandGlyph, Sun, Moon, Menu, Users } from './
 // relay state) at the right. Nothing here scrolls; this is the fascia.
 // On narrow screens the sidebar and roster become drawers; the menu and
 // roster toggles below only render (via CSS) when that layout is active.
-export default function Masthead({ server, connection, theme, canInvite, onInvite, onPalette, onTheme, onMenu, onRoster }) {
+export default function Masthead({
+  server,
+  connection,
+  theme,
+  canInvite,
+  onInvite,
+  onPalette,
+  onTheme,
+  onMenu,
+  onRoster,
+  // Which drawer is open, so the toggles can announce their own state.
+  // Without it a screen-reader user pressed "circles & rooms" and got no
+  // indication that anything had happened.
+  drawer = null,
+}) {
   return (
     <header className="masthead">
-      <button className="icon-btn menu-btn" title="circles & rooms" data-testid="menu-toggle" onClick={onMenu}>
+      <button
+        className="icon-btn menu-btn"
+        title="circles & rooms"
+        data-testid="menu-toggle"
+        aria-expanded={drawer === 'nav'}
+        aria-controls="nav-drawer"
+        onClick={onMenu}
+      >
         <Menu />
       </button>
       <div className="masthead-brand">
@@ -47,7 +68,14 @@ export default function Masthead({ server, connection, theme, canInvite, onInvit
           <span className="conn-label">relay·{connection}</span>
         </span>
         {server && (
-          <button className="icon-btn roster-btn" title="roster" data-testid="roster-toggle" onClick={onRoster}>
+          <button
+            className="icon-btn roster-btn"
+            title="roster"
+            data-testid="roster-toggle"
+            aria-expanded={drawer === 'roster'}
+            aria-controls="roster-drawer"
+            onClick={onRoster}
+          >
             <Users />
           </button>
         )}

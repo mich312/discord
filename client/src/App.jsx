@@ -595,6 +595,7 @@ export default function App() {
         onInvite={openInvite}
         onPalette={() => setPaletteOpen(true)}
         onTheme={() => setTheme((t) => (t === 'paper' ? 'carbon' : 'paper'))}
+        drawer={drawer}
         onMenu={() => setDrawer((d) => (d === 'nav' ? null : 'nav'))}
         onRoster={() => setDrawer((d) => (d === 'roster' ? null : 'roster'))}
       />
@@ -631,7 +632,7 @@ export default function App() {
             onClick={() => setDrawer(null)}
           />
         )}
-        <nav className="sidebar">
+        <nav className="sidebar" id="nav-drawer" aria-label="circles and rooms">
           <Rail
             servers={state.servers}
             active={server}
