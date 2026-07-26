@@ -295,8 +295,12 @@ async fn authenticate(socket: &mut WebSocket, app: &App) -> Option<String> {
     };
     let expected_key = pinned.clone().unwrap_or_else(|| claimed_key.clone());
 
+    // Bind the signature to the handle it authenticates, so an answer
+    // captured for one identity cannot be replayed as another.
     let mut signed = AUTH_CONTEXT.to_vec();
     signed.extend_from_slice(&nonce);
+    signed.extend_from_slice(&(user.len() as u32).to_be_bytes());
+    signed.extend_from_slice(user.as_bytes());
     if !verify_sig(&expected_key, &signed, &sig) {
         let _ = send_json(socket, &ServerMsg::Error { rid: None, message: "auth failed".into() }).await;
         return None;
@@ -352,7 +356,9 @@ fn verify_sig(pubkey: &[u8], message: &[u8], sig: &[u8]) -> bool {
     let Ok(key_bytes) = <[u8; 32]>::try_from(pubkey) else { return false };
     let Ok(key) = VerifyingKey::from_bytes(&key_bytes) else { return false };
     let Ok(signature) = Signature::from_slice(sig) else { return false };
-    key.verify(message, &signature).is_ok()
+    // verify_strict rejects small-order / non-canonical keys, which the
+    // permissive verify accepts.
+    key.verify_strict(message, &signature).is_ok()
 }
 
 pub async fn handle_socket(mut socket: WebSocket, app: Arc<App>) {

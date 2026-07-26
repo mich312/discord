@@ -34,7 +34,9 @@ the server's word for it.
 
 JSON over WebSocket text frames at `/ws`. `rid` correlates requests with
 acks. Auth: `hello {user, pubkey}` → `challenge {nonce}` →
-`auth {sig}` (over `"relay-auth-v1" || nonce`) → `ready`.
+`auth {sig}` (over `"relay-auth-v2" || nonce || u32be(len(user)) || user`
+— the handle is bound in, so a captured signature proves who it
+authenticates rather than merely that the key holder was live) → `ready`.
 
 | Request | Reply | Notes |
 |---|---|---|

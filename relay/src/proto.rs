@@ -19,7 +19,7 @@ pub enum ClientMsg {
         #[serde(default)]
         invite: Option<String>,
     },
-    /// Signature over `b"relay-auth-v1" || nonce`.
+    /// Signature over `AUTH_CONTEXT || nonce || u32be(len(user)) || user`.
     Auth { sig: String },
     /// Pre-publish KeyPackages so members can be added while offline.
     PublishKp { rid: u64, payloads: Vec<String> },
@@ -234,4 +234,8 @@ pub struct HistoryEntryOut {
     pub payload: String,
 }
 
-pub const AUTH_CONTEXT: &[u8] = b"relay-auth-v1";
+/// Domain separator for the connection challenge. v2 binds the handle into
+/// the signed bytes: v1 signed only `context || nonce`, so a signature
+/// captured for one identity was a valid proof for any other, and a hostile
+/// relay could forward the real relay's nonce and replay the answer.
+pub const AUTH_CONTEXT: &[u8] = b"relay-auth-v2";

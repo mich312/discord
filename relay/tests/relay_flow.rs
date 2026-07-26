@@ -92,8 +92,10 @@ impl TestClient {
         let challenge = client.recv().await;
         assert_eq!(challenge["t"], "challenge");
         let nonce = B64.decode(challenge["nonce"].as_str().unwrap()).unwrap();
-        let mut signed = b"relay-auth-v1".to_vec();
+        let mut signed = b"relay-auth-v2".to_vec();
         signed.extend_from_slice(&nonce);
+        signed.extend_from_slice(&(name.len() as u32).to_be_bytes());
+        signed.extend_from_slice(name.as_bytes());
         let sig = client.mls.sign(&signed).unwrap();
         client.send_raw(json!({"t": "auth", "sig": B64.encode(sig)})).await;
         let reply = client.recv().await;

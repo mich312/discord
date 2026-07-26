@@ -16,7 +16,7 @@ export const b64 = {
   dec: (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0)),
 };
 
-const AUTH_CONTEXT = 'relay-auth-v1';
+const AUTH_CONTEXT = 'relay-auth-v2';
 
 export class Relay {
   /**
@@ -63,8 +63,15 @@ export class Relay {
       }
       if (msg.t === 'challenge') {
         const nonce = b64.dec(msg.nonce);
-        const context = new TextEncoder().encode(AUTH_CONTEXT);
-        const signed = new Uint8Array([...context, ...nonce]);
+        const enc = new TextEncoder();
+        const context = enc.encode(AUTH_CONTEXT);
+        // The handle is length-prefixed into the signed bytes so a
+        // signature proves *who* it authenticates, not merely that the key
+        // holder was live. Must match relay/src/server.rs.
+        const name = enc.encode(this.opts.name);
+        const len = new Uint8Array(4);
+        new DataView(len.buffer).setUint32(0, name.length, false);
+        const signed = new Uint8Array([...context, ...nonce, ...len, ...name]);
         const sig = await this.opts.sign(signed);
         ws.send(JSON.stringify({ t: 'auth', sig: b64.enc(sig) }));
         return;

@@ -51,9 +51,9 @@ export function parseInviteUrl(loc) {
 
 export function buildInviteUrl(loc, id, rawKey) {
   const params = new URLSearchParams();
-  // Non-default relay (dev/test sessions) must survive into the link.
-  const relay = new URLSearchParams(loc.search).get('relay');
-  if (relay) params.set('relay', relay);
+  // Deliberately does NOT propagate ?relay=. It used to, which turned an
+  // invite link into a way to point someone else's client at a relay of
+  // the sender's choosing. Dev split-port sessions add it by hand.
   params.set('j', id);
   return `${loc.origin}${loc.pathname}?${params}#k=${b64url.enc(rawKey)}`;
 }

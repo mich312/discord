@@ -221,7 +221,28 @@ export default function App() {
     // Default: same origin (single-container mode, relay serves this page).
     // Dev setups (vite on another port) pass ?relay=ws://localhost:9601/ws.
     const wsProto = location.protocol === 'https:' ? 'wss' : 'ws';
-    const relayUrl = params.get('relay') ?? `${wsProto}://${location.host}/ws`;
+    const sameOrigin = `${wsProto}://${location.host}/ws`;
+    // ?relay= used to be honored verbatim, and invite links propagated it —
+    // so a crafted link could point a victim's client at a relay of the
+    // attacker's choosing, which then proxies to the real one. Only accept
+    // an override that stays on this origin, or a loopback address for the
+    // documented `npm run dev` split (vite on another port).
+    const requested = params.get('relay');
+    const allowed =
+      requested &&
+      (() => {
+        try {
+          const u = new URL(requested);
+          if (u.host === location.host) return true;
+          return ['localhost', '127.0.0.1', '[::1]'].includes(u.hostname);
+        } catch {
+          return false;
+        }
+      })();
+    if (requested && !allowed) {
+      console.warn(`ignoring ?relay=${requested}: only this origin or localhost is allowed`);
+    }
+    const relayUrl = allowed ? requested : sameOrigin;
     const controller = new Controller({
       db: null,
       crypto: createCrypto(),
