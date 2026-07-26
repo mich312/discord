@@ -69,6 +69,16 @@
   color-scheme: dark;
 }
 
+/* The paper palette is applied two ways: explicitly, when the user has picked
+   it, and — when they have picked nothing at all — from the operating system.
+   The second rule is what a fresh install gets, and it lives in CSS rather
+   than JavaScript because only CSS runs before the first paint: the CSP
+   forbids the inline <script> that would otherwise do it, so a JS default
+   would flash dark before correcting itself.
+
+   The two blocks are byte-identical by necessity — plain CSS cannot share one
+   declaration body across a media query — and `theme.test.mjs` fails if they
+   ever drift. Edit them together. */
 [data-theme='paper'] {
   --well: #e9e6e0;
   --panel: #f2f0eb;
@@ -93,6 +103,41 @@
   --backdrop: rgba(35, 32, 28, 0.45);
   --overlay-shadow: 0 16px 48px rgba(60, 54, 36, 0.25);
   color-scheme: light;
+}
+
+@media (prefers-color-scheme: light) {
+  :root:not([data-theme]) {
+    --well: #e9e6e0;
+    --panel: #f2f0eb;
+    --raised: #faf9f6;
+    --hover: #eae7e1;
+    --active: #dfdbd3;
+    --ink: #1c1c1e;
+    --ink-dim: #4a4a4d;
+    --ink-mute: #8f8f8c;
+    --hairline: rgba(28, 28, 30, 0.14);
+    --hairline-strong: rgba(28, 28, 30, 0.3);
+    --accent: #e8496b;
+    --accent-ink: #c22c50;
+    --on-accent: #ffffff;
+    --accent-soft: rgba(232, 73, 107, 0.14);
+    --ok: #2f8a57;
+    --ok-soft: rgba(47, 138, 87, 0.12);
+    --danger: #ad4a3c;
+    --danger-soft: rgba(173, 74, 60, 0.1);
+    --scrollbar: rgba(28, 28, 30, 0.25);
+    --backdrop: rgba(35, 32, 28, 0.45);
+    --overlay-shadow: 0 16px 48px rgba(60, 54, 36, 0.25);
+    color-scheme: light;
+  }
+
+  /* The handful of component rules that go beyond the tokens. Their
+     `[data-theme='paper']` originals are further down, beside the components
+     they belong to; these mirror them for the system-preference case. */
+  :root:not([data-theme]) .voice-live-card { border-color: rgba(47, 138, 87, 0.35); }
+  :root:not([data-theme]) .voice-join-pill { color: #fff; }
+  :root:not([data-theme]) .voice-joined-card { border-color: rgba(47, 138, 87, 0.35); }
+  :root:not([data-theme]) .call-orb .seal-avatar { box-shadow: 0 0 0 2px #dff1e6; }
 }
 
 /* ------------------------------------------------------------------ base -- */

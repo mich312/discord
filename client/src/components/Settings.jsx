@@ -9,7 +9,11 @@ import { X, Bell, Sun, Moon, Key, ShieldCheck, Wave, Check } from './icons.jsx';
 export default function Settings({
   me,
   theme,
+  // 'paper' | 'carbon' | null, where null means the theme is following the
+  // operating system. `theme` above is the resolved one either way.
+  themePref = null,
   onTheme,
+  onSystemTheme,
   onEnableNotifications,
   voice,
   secured,
@@ -189,8 +193,20 @@ export default function Settings({
             <span className="settings-row-glyph">{theme === 'paper' ? <Sun size={15} /> : <Moon size={15} />}</span>
             <div className="settings-row-body">
               <div>Theme</div>
-              <div className="fineprint muted">{theme === 'paper' ? 'paper (light)' : 'carbon (dark)'}</div>
+              {/* Say which of the two states you are in. Without this, a
+                  system-following install and a pinned one look identical,
+                  and there is no way to tell that the theme is about to
+                  change by itself at sunset. */}
+              <div className="fineprint muted">
+                {theme === 'paper' ? 'paper (light)' : 'carbon (dark)'}
+                {themePref === null ? ' · following your system' : ''}
+              </div>
             </div>
+            {themePref !== null && (
+              <button className="button ghost" data-testid="settings-theme-system" onClick={onSystemTheme}>
+                use system
+              </button>
+            )}
             <button className="button" data-testid="settings-theme" onClick={onTheme}>
               switch to {theme === 'paper' ? 'carbon' : 'paper'}
             </button>

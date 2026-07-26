@@ -29,6 +29,14 @@ import BootLoader from './components/BootLoader.jsx';
 import { Key, ShieldCheck, LinkGlyph, Sun, QuorumGlyph, Gear, LogOut } from './components/icons.jsx';
 import { markPlayed, bumpPlayCount } from './lib/games.js';
 import { withViewTransition } from './lib/viewTransition.js';
+import {
+  readPref,
+  writePref,
+  resolveTheme,
+  prefersLight,
+  watchSystem,
+  THEME_COLOR,
+} from './lib/theme.js';
 
 /** Content identity of a message for merging a load snapshot with live
     arrivals — same idea as history.js's fingerprint, plus the system flag. */
@@ -159,16 +167,6 @@ function reducer(state, action) {
   }
 }
 
-// Theme is a device preference, not account state — plain localStorage.
-// ('vellum' is accepted for continuity with the previous theme naming.)
-function loadTheme() {
-  try {
-    const v = localStorage.getItem('quorum-theme');
-    return v === 'paper' || v === 'vellum' ? 'paper' : 'carbon';
-  } catch {
-    return 'carbon';
-  }
-}
 
 export default function App() {
   const [state, rawDispatch] = useReducer(reducer, initial);
@@ -187,7 +185,21 @@ export default function App() {
     }
     rawDispatch(action);
   }, []);
-  const [theme, setTheme] = useState(loadTheme);
+  // Theme is a device preference, not account state — plain localStorage.
+  // `themePref` is 'paper' | 'carbon' | null, where null means "follow the
+  // system"; `theme` is what is actually on screen. Everything downstream
+  // sees only the resolved value and stays a two-way toggle.
+  const [themePref, setThemePref] = useState(readPref);
+  const [systemLight, setSystemLight] = useState(prefersLight);
+  useEffect(() => watchSystem(setSystemLight), []);
+  const theme = resolveTheme(themePref, systemLight);
+  // Pin whichever theme is *not* showing, regardless of how the current one
+  // was arrived at — a toggle that did nothing on its first press because the
+  // stored preference already matched the system would read as broken.
+  const toggleTheme = useCallback(
+    () => setThemePref(resolveTheme(themePref, systemLight) === 'paper' ? 'carbon' : 'paper'),
+    [themePref, systemLight],
+  );
   const [paletteOpen, setPaletteOpen] = useState(false);
   // Narrow-screen drawers: the sidebar and roster slide over the messages
   // pane instead of flanking it. null | 'nav' | 'roster'; CSS ignores this
@@ -209,17 +221,21 @@ export default function App() {
   const [notifPrompt, setNotifPrompt] = useState(false);
 
   useEffect(() => {
-    document.documentElement.dataset.theme = theme;
+    // Leaving the attribute *off* is what hands first paint to the CSS
+    // prefers-color-scheme rule, so "follow the system" must clear it rather
+    // than write the resolved value.
+    if (themePref) document.documentElement.dataset.theme = themePref;
+    else delete document.documentElement.dataset.theme;
+    writePref(themePref);
+  }, [themePref]);
+
+  useEffect(() => {
     // Keep the browser/OS chrome (Android address bar, iOS standalone
-    // status bar) in step with the app surface.
+    // status bar) in step with the app surface. This one tracks the resolved
+    // theme, so it follows the system flipping under us.
     document
       .querySelector('meta[name="theme-color"]')
-      ?.setAttribute('content', theme === 'paper' ? '#e9e6e0' : '#09090a');
-    try {
-      localStorage.setItem('quorum-theme', theme);
-    } catch {
-      // private mode etc. — the toggle still works for this session
-    }
+      ?.setAttribute('content', THEME_COLOR[theme]);
   }, [theme]);
 
   useEffect(() => {
@@ -581,7 +597,7 @@ export default function App() {
       label: theme === 'paper' ? 'switch to carbon (dark)' : 'switch to paper (light)',
       hint: 'action',
       glyph: <Sun />,
-      run: () => setTheme((t) => (t === 'paper' ? 'carbon' : 'paper')),
+      run: toggleTheme,
     },
   ];
 
@@ -594,7 +610,7 @@ export default function App() {
         canInvite={canManage}
         onInvite={openInvite}
         onPalette={() => setPaletteOpen(true)}
-        onTheme={() => setTheme((t) => (t === 'paper' ? 'carbon' : 'paper'))}
+        onTheme={toggleTheme}
         drawer={drawer}
         onMenu={() => setDrawer((d) => (d === 'nav' ? null : 'nav'))}
         onRoster={() => setDrawer((d) => (d === 'roster' ? null : 'roster'))}
@@ -969,7 +985,9 @@ export default function App() {
           <Settings
             me={state.me}
             theme={theme}
-            onTheme={() => setTheme((t) => (t === 'paper' ? 'carbon' : 'paper'))}
+            themePref={themePref}
+            onTheme={toggleTheme}
+            onSystemTheme={() => setThemePref(null)}
             onEnableNotifications={() => controllerRef.current.enableNotifications()}
             voice={controllerRef.current?.voice}
             secured={!unsecured}

@@ -21,7 +21,7 @@ analysis; this is the current state.
 | **2** | CI gate, supply chain, deploy health gate + pinned host keys | §2.2 extract `applyEnvelope`/`AccountService`; §2.3 coverage for the named risky paths; §2.4 image-based deploy with fast rollback; §2.6 reproducible builds + integrity manifest for worker and wasm |
 | **3** | Per-group send locks (global hub mutex gone); hourly history sweep; recorded schema version with a rollback guard | Bounded outbound queues; blob and message GC; publish the ceiling |
 | **4** | `/healthz`; connect/disconnect/subscribe logging; `deploy/RUNBOOK.md`; actionable WebAuthn config failure | Prometheus metrics; OpenTelemetry tracing; alerting |
-| **5** | Dialog semantics + focus management on all overlays; WCAG AA contrast; iOS storage-eviction fix; drawer `aria-expanded`/`aria-controls` + labelled landmarks; 44px touch targets | PWA offline shell; rail unread badges; local search; `prefers-color-scheme` |
+| **5** | Dialog semantics + focus management on all overlays; WCAG AA contrast; iOS storage-eviction fix; drawer `aria-expanded`/`aria-controls` + labelled landmarks; 44px touch targets; `prefers-color-scheme` with a system-following default | PWA offline shell; rail unread badges; local search |
 | **7** | `SECURITY.md`; `docs/THREAT_MODEL.md` | cargo-fuzz targets on protocol parsing; epoch state-machine simulation harness |
 
 **Phase 6 is dropped** by decision — see *Decisions taken*. Device
@@ -571,8 +571,23 @@ multi-circle model is unusable past two circles. Local message search (there is
 none, and no copy explains why). A persistent kept-history indicator in the room
 (the forward-secrecy trade is announced once in a chip that scrolls away, which
 falsifies the README's central UX claim). A voice participant cap with a clear
-message instead of a silent mesh meltdown past ~8. `prefers-color-scheme`
-support. An escape hatch on the recovery-download gate.
+message instead of a silent mesh meltdown past ~8. An escape hatch on the
+recovery-download gate.
+
+`prefers-color-scheme` is **done**. The stored preference is now tri-state —
+`'paper' | 'carbon' | null`, where null means follow the system — and a fresh
+install starts there instead of pinning dark. Two details were load-bearing:
+
+- The default is applied in **CSS**, not JavaScript. The CSP allows no inline
+  `<script>`, so nothing JS can do runs before the first paint; a JS default
+  would flash dark and then correct itself. Plain CSS cannot share one
+  declaration body between `[data-theme='paper']` and a media query, so the
+  palette is written twice and `client/test/theme.test.mjs` fails if the two
+  copies ever drift.
+- Existing installs are untouched: the old code wrote the resolved theme back
+  on every mount, so anyone who has run the app already has an explicit value
+  stored and keeps it. Settings gained a *use system* button, without which
+  the tri-state would be one-way.
 
 ### 5.4 Documentation honesty
 
