@@ -107,6 +107,27 @@ import {
 } from './overview.js';
 import { freshPresence, normalizeGameRef, normalizePresence, normalizeWant } from './games.js';
 import { MIN_QUERY, rankHits } from './search.js';
+import {
+  adminRequirement,
+  applyEnvelope,
+  DELETED_MAX,
+  callChatChannel,
+  clearChannelDeleted,
+  clearVoiceDeleted,
+  describeChanMeta,
+  describeRetention,
+  ensureChannel,
+  isCallChat,
+  markChannelDeleted,
+  markVoiceDeleted,
+  messageTs,
+  normalizeReply,
+  parseEnvelope,
+} from './envelope.js';
+
+// Re-exported so the components and tests that already import these from
+// here keep working; they now live beside the reducer that uses them.
+export { callChatChannel, describeRetention, isCallChat, messageTs } from './envelope.js';
 
 /** How many superseded kept-history keys a channel carries for reading.
     Each removal adds one; the cap stops the metadata growing without bound
@@ -121,18 +142,6 @@ const INVITE_TTL_SECONDS = 7 * 24 * 3600;
 // only in memory — a typing signal is never logged or persisted.
 const TYPING_TTL_MS = 6000;
 const TYPING_HEARTBEAT_MS = 3000;
-// A reply carries a *snapshot* of the answered line, not a pointer: E2EE
-// gives a joiner no scrollback to resolve one against, so the quote must be
-// self-contained. Bounded hard — it renders as text, never as markup.
-const REPLY_TEXT_MAX = 140;
-function normalizeReply(r) {
-  if (!r || typeof r !== 'object') return null;
-  const sender = String(r.sender ?? '').slice(0, 64).trim();
-  const ts = Number(r.ts);
-  if (!sender || !Number.isFinite(ts) || ts <= 0) return null;
-  const text = String(r.text ?? '').slice(0, REPLY_TEXT_MAX);
-  return { sender, ts, text };
-}
 /** True while `entry` (a {ts} typing signal) is still within its live
     window. Reader-side expiry, exactly like presence/rally freshness. */
 export function freshTyping(entry, now = Date.now()) {
@@ -643,360 +652,106 @@ export class Controller {
     this.dispatch({ type: 'servers', servers: this.snapshotServers() });
   }
 
+  /**
+   * One authenticated envelope, applied.
+   *
+   * Split in two on purpose (plan §2.2). `applyEnvelope` decides what the
+   * envelope *means* and returns effect descriptors; `runEffects` is the only
+   * part that touches the database, the voice manager or the UI. The rules
+   * that used to need a relay, a worker and a database to exercise are now
+   * reachable from a plain object — see `test/envelope.test.mjs`.
+   */
   async onContent(record, sender, raw) {
-    let content;
-    try {
-      content = JSON.parse(raw);
-    } catch {
-      content = { k: 'chat', ch: 'general', text: raw };
-    }
-    switch (content.k) {
-      case 'chat': {
-        this.ensureChannel(record, content.ch);
-        // A line landing is proof the sender stopped composing — clear their
-        // typing signal now instead of waiting for it to age out.
-        this.clearTyping(record.id, sender);
-        await this.storeMessage({
-          server: record.id,
-          channel: content.ch,
-          sender,
-          text: content.text,
-          ts: messageTs(content.ts),
-          ...(normalizeReply(content.reply) ? { reply: normalizeReply(content.reply) } : {}),
-        });
-        break;
-      }
-      case 'game': {
-        // Same channel handling as chat; the ref is whitelisted and the
-        // Join affordance resolves against the shelf, never this payload.
-        const game = normalizeGameRef(content.game);
-        if (!game) break;
-        this.ensureChannel(record, content.ch);
-        await this.storeMessage({
-          server: record.id,
-          channel: content.ch,
-          sender,
-          game,
-          ts: messageTs(content.ts),
-        });
-        break;
-      }
-      case 'pres': {
-        // Ephemeral by design: kept in a controller-side map, expired by
-        // readers, never written to the record store or the backup.
-        this.setLivePresence(record.id, sender, normalizePresence(content));
-        break;
-      }
-      case 'want': {
-        // A rally — same ephemeral discipline as presence: a controller-side
-        // map, reader-expired, never persisted to the record or the backup.
-        this.setLiveWant(record.id, sender, normalizeWant(content));
-        break;
-      }
-      case 'type': {
-        // A typing signal — same ephemeral discipline again. Only ever fanned
-        // out over the no-log path, but handled here too so the two receive
-        // routes stay symmetric.
-        this.setLiveTyping(record.id, sender, content.ch);
-        break;
-      }
-      case 'react': {
-        const emo = String(content.emo ?? '').slice(0, 8).trim();
-        const to = content.to ?? {};
-        const op = content.op === 'del' ? 'del' : 'add';
-        if (!emo || !to.sender || !Number.isFinite(Number(to.ts))) break;
-        await this.applyReaction(record.id, String(content.ch ?? ''), {
-          sender: String(to.sender),
-          ts: Number(to.ts),
-        }, emo, op, sender);
-        this.dispatch({ type: 'refreshMessages' });
-        break;
-      }
-      case 'edit': {
-        const ts = Number(content.to?.ts);
-        const text = String(content.text ?? '');
-        if (!Number.isFinite(ts) || !text) break;
-        // Keyed on (sender, ts): the patch lands only if a line with this
-        // authenticated sender and ts exists locally, so no one can edit
-        // anyone else's message and a joiner without the line simply no-ops.
-        await this.db.msgPatch(record.id, String(content.ch ?? ''), sender, ts, (m) =>
-          m.deleted ? m : { ...m, text, edited: true }
-        );
-        this.dispatch({ type: 'refreshMessages' });
-        break;
-      }
-      case 'del': {
-        const ts = Number(content.to?.ts);
-        if (!Number.isFinite(ts)) break;
-        // Same (sender, ts) self-scoping as edit. Strip the body to a
-        // tombstone; reactions go with it. The sealed history copy and any
-        // device that already received the line are untouched — a delete is
-        // not a redaction, and the UI says so.
-        await this.db.msgPatch(record.id, String(content.ch ?? ''), sender, ts, (m) => ({
-          sender: m.sender,
-          server: m.server,
-          channel: m.channel,
-          ts: m.ts,
-          deleted: true,
-        }));
-        this.dispatch({ type: 'refreshMessages' });
-        break;
-      }
-      case 'rsvp': {
-        const at = Number(content.at);
-        if (!Number.isFinite(at)) break;
-        const rsvps = { ...(record.rsvps ?? {}) };
-        if (content.going) rsvps[sender] = { at, ts: Date.now() };
-        else delete rsvps[sender];
-        record.rsvps = rsvps;
-        break;
-      }
-      case 'meta': {
-        record.name = content.name ?? record.name;
-        // A device catching up after a (re-)join or restore may be holding a
-        // stale shape: phantom channels a since-departed admin deleted, a game
-        // hub from before the shelf changed, notices long since unpinned. It
-        // resumed the log past those events and will never replay them, but the
-        // rebroadcaster has and is authoritative — so adopt its snapshot
-        // wholesale. The union path below can only ever grow the shape; this is
-        // the one place it must be allowed to shrink.
-        if (record.pendingMetaSync) {
-          record.pendingMetaSync = false;
-          Object.assign(record, reconcileMeta(content));
-          // The snapshot is authoritative about what exists now, so a channel
-          // or voice room it lists is not a tombstone — drop any stale one so
-          // it isn't wrongly blocked from re-appearing.
-          if (record.deletedChannels?.length) {
-            record.deletedChannels = record.deletedChannels.filter(
-              (c) => !record.channels.includes(c)
-            );
-          }
-          if (record.deletedVoice?.length) {
-            record.deletedVoice = record.deletedVoice.filter(
-              (c) => !(record.voiceChannels ?? []).includes(c)
-            );
-          }
-          this.backfillHistory(record).catch((e) => console.warn(`history: ${e.message}`));
+    const content = parseEnvelope(raw);
+
+    // The admin answer is resolved here rather than inside the reducer:
+    // `senderIsAdmin` can consult the relay's ACL, and an async reducer is
+    // not a reducer. Resolved only for the kinds that need it, so ordinary
+    // chat traffic does not pay for a check it never uses.
+    const need = adminRequirement(content?.k);
+    const isAdmin = need ? await this.senderIsAdmin(record, sender, need) : null;
+
+    const { effects } = applyEnvelope(record, sender, content, {
+      isAdmin,
+      inCall: this.voice?.active
+        ? { server: this.voice.active.server, channel: this.voice.active.channel }
+        : null,
+    });
+    await this.runEffects(record, effects);
+  }
+
+  /** Carry out what `applyEnvelope` decided, in order. The order matters:
+      a rename must move the stored rows before the system message that
+      announces it, and the backup is rescheduled last. */
+  async runEffects(record, effects) {
+    for (const e of effects) {
+      switch (e.t) {
+        case 'storeMessage':
+          await this.storeMessage(e.message);
+          break;
+        case 'systemMessage':
+          await this.addSystemMessage(e.server, e.text, e.channel);
+          break;
+        case 'reaction':
+          await this.applyReaction(e.server, e.channel, e.target, e.emo, e.op, e.by);
+          break;
+        case 'editMessage':
+          await this.db.msgPatch(e.server, e.channel, e.sender, e.ts, (m) =>
+            m.deleted ? m : { ...m, text: e.text, edited: true }
+          );
+          break;
+        case 'deleteMessage':
+          // Strip the body to a tombstone; reactions go with it.
+          await this.db.msgPatch(e.server, e.channel, e.sender, e.ts, (m) => ({
+            sender: m.sender,
+            server: m.server,
+            channel: m.channel,
+            ts: m.ts,
+            deleted: true,
+          }));
+          break;
+        case 'renameMessages':
+          await this.db.msgsRename(e.server, e.from, e.to);
+          break;
+        case 'deleteMessages':
+          await this.db.msgsDelete(e.server, e.channel);
+          break;
+        case 'applyRetention':
+          await this.applyRetention(record, e.channel);
+          break;
+        case 'refreshMessages':
+          this.dispatch({ type: 'refreshMessages' });
+          break;
+        case 'refreshRoles':
+          this.refreshRoles(e.server);
+          break;
+        case 'clearTyping':
+          this.clearTyping(e.server, e.sender);
+          break;
+        case 'presence':
+          this.setLivePresence(e.server, e.sender, e.value);
+          break;
+        case 'want':
+          this.setLiveWant(e.server, e.sender, e.value);
+          break;
+        case 'typing':
+          this.setLiveTyping(e.server, e.sender, e.channel);
+          break;
+        case 'leaveVoice':
+          await this.voice.leave();
+          break;
+        case 'backfillHistory':
+          // Fire-and-forget by design: a history fetch must never hold up
+          // applying the rest of the log.
+          this.backfillHistory(record).catch((err) => console.warn(`history: ${err.message}`));
+          break;
+        case 'backup':
           this.scheduleBackup();
           break;
-        }
-        // Union gap-fill: adopt rooms this device is missing, but never a room
-        // it has seen deleted — otherwise a peer that missed the deletion
-        // would resurrect it on every meta rebroadcast (now one per connect).
-        for (const ch of content.channels ?? []) {
-          if (!record.channels.includes(ch) && !(record.deletedChannels ?? []).includes(ch)) {
-            record.channels.push(ch);
-          }
-        }
-        if (content.voiceChannels) {
-          const rooms = record.voiceChannels ?? ['lounge'];
-          for (const ch of content.voiceChannels) {
-            if (!rooms.includes(ch) && !(record.deletedVoice ?? []).includes(ch)) rooms.push(ch);
-          }
-          record.voiceChannels = rooms;
-        }
-        // Gap-fill the home base the same way: a joiner has none, and
-        // explicit edits arrive as their own `overview`/`notice` events.
-        // Adopting it re-parks the backup so it survives a vault restore.
-        if (content.overview !== undefined && record.overview == null) {
-          const adopted = normalizeOverview(content.overview);
-          if (adopted) {
-            record.overview = adopted;
-            this.scheduleBackup();
-          }
-        }
-        // Noticeboard union: ids this device already has win. Authors in a
-        // rebroadcast are vouched for by the rebroadcaster, like the rest
-        // of the metadata a joiner has no scrollback to verify.
-        if (Array.isArray(content.notices) && content.notices.length) {
-          const incoming = content.notices
-            .map((n) => normalizeNotice(n, n?.author))
-            .filter(Boolean);
-          const merged = mergeNotices(record.notices, incoming);
-          if (merged.length !== (record.notices ?? []).length) {
-            record.notices = merged;
-            this.scheduleBackup();
-          }
-        }
-        // Gap-fill RSVPs the same way (a joiner has none). Bounded and
-        // whitelisted: handle -> {at}. Existing local answers win.
-        if (content.rsvps && typeof content.rsvps === 'object') {
-          const mine = record.rsvps ?? {};
-          const merged = { ...mine };
-          for (const [handle, v] of Object.entries(content.rsvps).slice(0, 64)) {
-            const at = Number(v?.at);
-            if (!Number.isFinite(at) || merged[handle]) continue;
-            merged[String(handle).slice(0, 64)] = { at, ts: Number(v?.ts) || Date.now() };
-          }
-          record.rsvps = merged;
-        }
-        // Gap-fill channel settings (a joiner has none): explicit changes
-        // arrive as their own `chanset` events, so never clobber here.
-        if (content.chanMeta) {
-          const mine = record.chanMeta ?? {};
-          for (const [ch, meta] of Object.entries(content.chanMeta)) {
-            mine[ch] = { ...meta, ...(mine[ch] ?? {}) };
-          }
-          record.chanMeta = mine;
-          this.backfillHistory(record).catch((e) => console.warn(`history: ${e.message}`));
-        }
-        break;
-      }
-      case 'chanset': {
-        // A channel's settings changed: topic, auto-delete, or history
-        // (the history key itself rides in `meta.hkey` — inside MLS, so
-        // the relay never sees it). The sender's copy is authoritative.
-        // Admin gate, failing closed: this envelope carries the
-        // kept-history and auto-delete switches, so applying one from a
-        // sender whose role we can't establish is a security downgrade.
-        if (!(await this.senderIsAdmin(record, sender, { destructive: true }))) break;
-        if (!record.channels.includes(content.ch)) record.channels.push(content.ch);
-        record.chanMeta = { ...(record.chanMeta ?? {}), [content.ch]: content.meta ?? {} };
-        await this.addSystemMessage(
-          record.id,
-          `#${content.ch} settings changed by ${sender}${describeChanMeta(content.meta)}`,
-          content.ch
-        );
-        await this.applyRetention(record, content.ch);
-        this.backfillHistory(record).catch((e) => console.warn(`history: ${e.message}`));
-        this.scheduleBackup();
-        break;
-      }
-      case 'overview': {
-        // The home base's admin-edited half changed. Same advisory admin
-        // gate as `chanset`: MLS can't enforce roles, so ignore senders we
-        // know are not admins and fail open while roles are still syncing.
-        if (!(await this.senderIsAdmin(record, sender))) break;
-        record.overview = normalizeOverview(content.ov);
-        await this.addSystemMessage(record.id, `home base updated by ${sender}`);
-        this.scheduleBackup();
-        break;
-      }
-      case 'notice': {
-        // The noticeboard is the whole roster's — any member may pin. The
-        // author is the MLS-authenticated sender, never the payload.
-        if (content.op === 'add') {
-          const notice = normalizeNotice(content.n, sender);
-          if (notice) {
-            record.notices = upsertNotice(record.notices, notice);
-            this.scheduleBackup();
-          }
-        } else if (content.op === 'del') {
-          const target = (record.notices ?? []).find((n) => n.id === content.id);
-          if (target && canRemoveNotice(target, sender, record.roles)) {
-            record.notices = record.notices.filter((n) => n.id !== content.id);
-            this.scheduleBackup();
-          }
-        }
-        break;
-      }
-      case 'file': {
-        this.ensureChannel(record, content.ch);
-        await this.storeMessage({
-          server: record.id,
-          channel: content.ch,
-          sender,
-          file: content.file,
-          ts: messageTs(content.ts),
-        });
-        break;
-      }
-      case 'chan': {
-        // Only admins may create channels. Enforced client-side (the relay
-        // can't read content): ignore a chan from someone we know is not an
-        // admin. Fail open if the sender's role isn't known yet, so a legit
-        // creation racing role sync isn't dropped.
-        if (!(await this.senderIsAdmin(record, sender))) break;
-        this.clearChannelDeleted(record, content.ch);
-        if (!record.channels.includes(content.ch)) {
-          record.channels.push(content.ch);
-          await this.addSystemMessage(record.id, `#${content.ch} created by ${sender}`, content.ch);
-          this.scheduleBackup();
-        }
-        break;
-      }
-      case 'vchan': {
-        if (!(await this.senderIsAdmin(record, sender))) break;
-        this.clearVoiceDeleted(record, content.ch);
-        const rooms = record.voiceChannels ?? ['lounge'];
-        if (!rooms.includes(content.ch)) {
-          record.voiceChannels = [...rooms, content.ch];
-          await this.addSystemMessage(record.id, `voice room "${content.ch}" created by ${sender}`);
-        }
-        break;
-      }
-      case 'chan-ren': {
-        if (!(await this.senderIsAdmin(record, sender, { destructive: true }))) break;
-        if (record.channels.includes(content.ch) && !record.channels.includes(content.to)) {
-          record.channels = record.channels.map((c) => (c === content.ch ? content.to : c));
-          this.markChannelDeleted(record, content.ch);
-          this.clearChannelDeleted(record, content.to);
-          if (record.chanMeta?.[content.ch]) {
-            record.chanMeta = { ...record.chanMeta, [content.to]: record.chanMeta[content.ch] };
-            delete record.chanMeta[content.ch];
-          }
-          await this.db.msgsRename(record.id, content.ch, content.to);
-          await this.addSystemMessage(record.id, `#${content.ch} renamed to #${content.to}`, content.to);
-          this.dispatch({ type: 'refreshMessages' });
-          this.scheduleBackup();
-        }
-        break;
-      }
-      case 'chan-del': {
-        // Fails closed: this reaches db.msgsDelete below.
-        if (!(await this.senderIsAdmin(record, sender, { destructive: true }))) break;
-        if (record.channels.includes(content.ch) && record.channels.length > 1) {
-          record.channels = record.channels.filter((c) => c !== content.ch);
-          this.markChannelDeleted(record, content.ch);
-          if (record.chanMeta?.[content.ch]) {
-            record.chanMeta = { ...record.chanMeta };
-            delete record.chanMeta[content.ch];
-          }
-          await this.db.msgsDelete(record.id, content.ch);
-          await this.addSystemMessage(record.id, `#${content.ch} deleted by ${sender}`);
-          this.scheduleBackup();
-        }
-        break;
-      }
-      case 'vchan-ren': {
-        if (!(await this.senderIsAdmin(record, sender, { destructive: true }))) break;
-        const rooms = record.voiceChannels ?? ['lounge'];
-        if (rooms.includes(content.ch) && !rooms.includes(content.to)) {
-          record.voiceChannels = rooms.map((c) => (c === content.ch ? content.to : c));
-          this.markVoiceDeleted(record, content.ch);
-          this.clearVoiceDeleted(record, content.to);
-          if (this.voice?.active?.server === record.id && this.voice.active.channel === content.ch) {
-            await this.voice.leave();
-          }
-          await this.addSystemMessage(record.id, `voice room "${content.ch}" renamed to "${content.to}"`);
-          this.scheduleBackup();
-        }
-        break;
-      }
-      case 'vchan-del': {
-        // Fails closed: removes the room and force-leaves anyone in a call.
-        if (!(await this.senderIsAdmin(record, sender, { destructive: true }))) break;
-        const rooms = record.voiceChannels ?? ['lounge'];
-        if (rooms.includes(content.ch)) {
-          record.voiceChannels = rooms.filter((c) => c !== content.ch);
-          this.markVoiceDeleted(record, content.ch);
-          if (this.voice?.active?.server === record.id && this.voice.active.channel === content.ch) {
-            await this.voice.leave();
-          }
-          await this.addSystemMessage(record.id, `voice room "${content.ch}" deleted by ${sender}`);
-          this.scheduleBackup();
-        }
-        break;
-      }
-      case 'role': {
-        // Roles live in the relay's ACL; this envelope just tells everyone
-        // to re-read them and leaves a trace in the channel.
-        await this.addSystemMessage(
-          record.id,
-          `${content.user} is now ${content.role === 'admin' ? 'an admin' : 'a regular member'} (changed by ${sender})`
-        );
-        this.refreshRoles(record.id);
-        break;
+        default:
+          // A descriptor with no interpreter is a bug in this file, not bad
+          // input — the reducer is the only thing that produces them.
+          console.warn(`unhandled effect: ${e.t}`);
       }
     }
   }
@@ -1036,43 +791,36 @@ export class Controller {
   // or reordered message for a *deleted* channel must never bring it back.
   // Deleted names are tombstoned (bounded) so only an explicit admin `chan`
   // re-creation can revive them.
-  static DELETED_MAX = 200;
+  // Kept as a re-export rather than a second literal: the bound is enforced
+  // in envelope.js, and two copies of a number is how they drift apart.
+  static DELETED_MAX = DELETED_MAX;
 
   /** Surface an unknown channel for an incoming message, unless it is a call
       thread or a room we have seen deleted. */
+  // Thin delegates: the implementations moved to envelope.js so the reducer
+  // can use them without reaching into a Controller instance. The user-action
+  // methods further down still call them through `this`.
   ensureChannel(record, ch) {
-    if (isCallChat(ch) || record.channels.includes(ch)) return;
-    if ((record.deletedChannels ?? []).includes(ch)) return;
-    record.channels.push(ch);
+    ensureChannel(record, ch);
   }
 
-  /** Remember a removed channel so a stray message can't resurrect it. */
   markChannelDeleted(record, ch) {
-    record.deletedChannels = [...new Set([...(record.deletedChannels ?? []), ch])].slice(
-      -Controller.DELETED_MAX
-    );
+    markChannelDeleted(record, ch);
   }
 
-  /** A channel is legitimately (re-)created: it is no longer a tombstone. */
   clearChannelDeleted(record, ch) {
-    if (record.deletedChannels?.length) {
-      record.deletedChannels = record.deletedChannels.filter((c) => c !== ch);
-    }
+    clearChannelDeleted(record, ch);
   }
 
   /** Voice rooms get the same tombstone treatment as text channels, so the
       meta union (now rebroadcast on every connect to heal divergence) can't
       resurrect a room this device has seen deleted. */
   markVoiceDeleted(record, ch) {
-    record.deletedVoice = [...new Set([...(record.deletedVoice ?? []), ch])].slice(
-      -Controller.DELETED_MAX
-    );
+    markVoiceDeleted(record, ch);
   }
 
   clearVoiceDeleted(record, ch) {
-    if (record.deletedVoice?.length) {
-      record.deletedVoice = record.deletedVoice.filter((c) => c !== ch);
-    }
+    clearVoiceDeleted(record, ch);
   }
 
   /** The full metadata snapshot a joiner (or a peer that missed an event)
@@ -2869,16 +2617,6 @@ export class Controller {
   }
 }
 
-/** A message's timestamp is the sender's clock, carried on the wire, so every
-    device orders and dedupes it identically and it matches the kept-history
-    copy. Older senders (or a hostile payload) may omit it or send garbage; a
-    non-finite/non-positive value falls back to this device's own clock. The
-    history log already trusts the sender's ts, so this only makes live
-    receipt consistent with it. */
-export function messageTs(claimed, now = Date.now()) {
-  const t = Number(claimed);
-  return Number.isFinite(t) && t > 0 ? t : now;
-}
 
 export const UPDATE_TEXT = 'a new version is ready — reload when you get a moment';
 
@@ -2915,34 +2653,5 @@ export function countUnread(msgs, seen, me) {
   return n;
 }
 
-/** A call's conversation thread lives under `voice:<room>` — real E2EE chat
-    storage, but stage-scoped: it must never surface as a text room. */
-export function isCallChat(channel) {
-  return typeof channel === 'string' && channel.startsWith('voice:');
-}
 
-export function callChatChannel(room) {
-  return `voice:${room}`;
-}
 
-/** Human-readable summary of a channel's settings for system messages. */
-function describeChanMeta(meta = {}) {
-  const parts = [];
-  parts.push(meta.hid ? 'history: kept for joiners' : 'history: this-device-only');
-  if (meta.retention) parts.push(`auto-delete: ${describeRetention(meta.retention)}`);
-  if (meta.topic) parts.push(`topic: “${meta.topic}”`);
-  return ` (${parts.join(', ')})`;
-}
-
-export function describeRetention(seconds) {
-  if (!seconds) return 'off';
-  if (seconds % 86400 === 0) {
-    const d = seconds / 86400;
-    return d === 1 ? '1 day' : `${d} days`;
-  }
-  if (seconds % 3600 === 0) {
-    const h = seconds / 3600;
-    return h === 1 ? '1 hour' : `${h} hours`;
-  }
-  return `${seconds}s`;
-}

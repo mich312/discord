@@ -18,7 +18,7 @@ analysis; this is the current state.
 
 | Phase | Done | Open |
 |---|---|---|
-| **2** | CI gate, supply chain, deploy health gate + pinned host keys | §2.2 extract `applyEnvelope`/`AccountService`; §2.3 coverage for the named risky paths; §2.4 image-based deploy with fast rollback; §2.6 reproducible builds + integrity manifest for worker and wasm |
+| **2** | CI gate, supply chain, deploy health gate + pinned host keys; §2.2 `applyEnvelope` extracted | §2.2's other half: `AccountService`; §2.3 coverage for the remaining risky paths; §2.4 image-based deploy with fast rollback; §2.6 reproducible builds + integrity manifest for worker and wasm |
 | **3** | Per-group send locks (global hub mutex gone); hourly history sweep; recorded schema version with a rollback guard; bounded fan-out queues; opt-in blob TTL; published capacity limits | Message-log GC (design in §3.4); disk quotas; measured throughput |
 | **4** | `/healthz`; connect/disconnect/subscribe logging; `deploy/RUNBOOK.md`; actionable WebAuthn config failure; token-gated Prometheus metrics; append-latency histogram; `deploy/alerts.yml` | OpenTelemetry tracing; SLOs |
 | **5** | Dialog semantics + focus management on all overlays; WCAG AA contrast; iOS storage-eviction fix; drawer `aria-expanded`/`aria-controls` + labelled landmarks; 44px touch targets; `prefers-color-scheme` with a system-following default; rail unread badges; local message search; PWA offline shell; update notice; persistent kept-history indicator; voice participant cap | mention badges; iOS add-to-home-screen interstitial; wake lock; visualViewport; popstate |
@@ -41,9 +41,9 @@ there is still no way to revoke a device short of burning the handle.
 ### Next, in order
 
 1. §1.2's sibling work: device revocation and identity key rotation.
-2. §2.2 — extracting `applyEnvelope` as a pure reducer is the highest-value
-   refactor in the codebase; it makes the protocol's semantic core testable
-   without a relay and a worker.
+2. §2.2's other half — `AccountService`. The envelope reducer is done
+   (see below); the vault/sign-in path is still entangled with the
+   controller.
 3. Recovery for groups that forked *before* §1.1 landed.
 4. Phase 4's metrics, then Phase 5's remaining client work.
 5. Phase 7's fuzzing and simulation harness.
@@ -370,10 +370,28 @@ Also correct `README.md:210`: it claims 27 tests; the real count is ~95.
 The architecture review identified clean seams; take the two that unblock
 testing rather than the whole refactor:
 
-- **Extract `applyEnvelope(record, sender, content) → {record, effects}`** as a
-  pure function from `controller.js:602-955`. This is the protocol's semantic
-  core and is currently untestable without a relay and a worker. Highest-value
-  refactor in the codebase.
+- **`applyEnvelope(record, sender, content, ctx) → {record, effects}` — done.**
+  Lives in `client/src/lib/envelope.js`; `Controller.runEffects` is now the
+  only thing that touches the database, the voice manager or the UI.
+  `controller.js` lost ~300 lines and the protocol's semantic core is
+  reachable from a plain object (`test/envelope.test.mjs`, 41 tests).
+
+  Two design points are load-bearing:
+
+  - **Effect-free, not mutation-free.** The record is still mutated in place
+    and handed back, because that is the contract every caller of `onContent`
+    already relies on. A fully immutable record would double the size of the
+    change for no gain in testability, which was the goal.
+  - **The admin gate is resolved *before* the reducer.** `senderIsAdmin` is
+    async — it can consult the relay's ACL — and an async reducer is not a
+    reducer. `adminRequirement(kind)` is the allowlist, so ordinary chat
+    traffic pays for no check, and a kind that needs an answer but did not get
+    one **fails closed**.
+
+  The extraction also surfaced an authorization property nobody had written
+  down: `canRemoveNotice` fails *open* when the remover's role is unknown.
+  That matches the advisory admin gate elsewhere, and it is now pinned by a
+  test that says so rather than being an accident of the code.
 - **Extract `AccountService`** (`controller.js:1966-2207`) — vaults, passkeys,
   sign-in, device linking, ~250 lines with almost no coupling to the rest.
 
