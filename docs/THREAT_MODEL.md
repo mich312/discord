@@ -156,8 +156,35 @@ builds remain the only real fix, for the same reason they were before.
 `SHA-256("quorum-circles-backup-v1" ‖ identity)` opens the circles backup,
 which carries every channel's history key. One compromise of the identity —
 a stolen device, an XSS, a cracked weak password — retroactively unlocks
-every kept-history channel in every circle. There is no rotation and no
-device revocation.
+every kept-history channel in every circle. **There is still no rotation.**
+
+Device revocation now exists, and is **forward-only by decision**. Each
+enrolled device holds the identity sealed under its own passkey's PRF
+secret; revoking deletes that wrap, so the passkey can no longer unlock the
+identity from the relay. Be precise about the two halves:
+
+- **What it defeats.** A credential that outlives the hardware. For a
+  *synced* passkey — iCloud Keychain, Google Password Manager — that is the
+  normal case, not the exotic one: without revocation a recovered or cloned
+  keychain keeps pulling the identity down indefinitely.
+- **What it cannot touch.** A device that already holds the identity in
+  local storage. Nothing running on the relay can reach into it, so a device
+  lost while signed in keeps everything it had synced, kept history
+  included. The UI says so at the button rather than in a help page.
+
+So revocation narrows the window, and does not close §6.3. Closing it needs
+identity key rotation plus per-channel history re-keying, which is a
+separate piece of work and is not scheduled.
+
+Two properties of the revocation surface itself, both covered by tests in
+`relay/tests/account_http.rs`. The device list is metadata only — the type
+it returns has no field for the wrap, so the endpoint cannot leak the sealed
+identity even if a handler forgot to strip it. And deletion is scoped to the
+owner inside the SQL predicate rather than by a prior read: a credential id
+is disclosed by the passkey challenge, so a read-then-check would both race
+a re-enrolment and put "is this id enrolled?" one bug away. An unknown
+device and somebody else's are answered identically, so the endpoint is not
+an enrolment oracle.
 
 ## 7. Non-goals
 

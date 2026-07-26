@@ -30,8 +30,9 @@ analysis; this is the current state.
 | **7** | `SECURITY.md`; `docs/THREAT_MODEL.md`; epoch state-machine simulation harness (`relay/tests/epoch_model.rs`) | cargo-fuzz targets on protocol parsing (blocked on a toolchain decision, §7 below); commissioning the external review |
 
 **Phase 6 is dropped** by decision — see *Decisions taken*. Device
-revocation and identity key rotation were pulled out of it and remain open;
-there is still no way to revoke a device short of burning the handle.
+revocation and identity key rotation were pulled out of it. **Revocation is
+now done, forward-only by decision** (see below); identity key rotation
+remains open.
 
 ### Needs a decision, not engineering
 
@@ -52,7 +53,10 @@ there is still no way to revoke a device short of burning the handle.
 
 ### Next, in order
 
-1. §1.2's sibling work: device revocation and identity key rotation.
+1. Identity key rotation — the remaining half of §1.2's sibling work, and
+   what §6.3 of the threat model actually needs. Device revocation landed
+   forward-only; rotation plus per-channel history re-keying is what closes
+   the master-key problem.
 2. Automatic fork recovery — detection landed in §1.1 part 4; getting a
    current GroupInfo to a stranded device needs the decision recorded there.
 3. Phase 7's fuzzing, once the nightly-toolchain question below is answered.
