@@ -2,10 +2,10 @@
 
 Status: proposed. Written against `266d974`.
 
-**Progress.** §0.1, §0.2, §0.6, §1.1 and the §2.1 CI gate are implemented and
-green in CI. Still open in Phase 0/1: §0.3 (auth-challenge binding), §0.4
-(invite gate consuming a use), §0.5 (blob auth), §0.7, §1.2–§1.8, and
-recovery for groups that forked *before* §1.1 landed.
+**Progress.** §0.1, §0.2, §0.6, §0.8, §1.1 and the §2.1 CI gate are
+implemented and green in CI. Still open in Phase 0/1: §0.3 (auth-challenge
+binding), §0.4 (invite gate consuming a use), §0.5 (blob auth), §0.7,
+§1.2–§1.8, and recovery for groups that forked *before* §1.1 landed.
 
 This plan takes quorum from "impressive MLS learning project" to software you
 could responsibly put in front of paying users. It is ordered by risk, not by
@@ -141,6 +141,34 @@ joiner has no roles until an async fetch lands; in that window a non-admin's
 **Fix:** fail closed for all destructive operations (`chan-del`, `vchan-del`,
 `chanset`, `overview`). Queue-and-retry rather than default-allow when roles are
 unknown.
+
+### 0.8 Make removal actually remove — DONE
+
+Found while tracing what removal does, after the fork work. The MLS commit
+re-keys the group, so a removed member reads no further messages — but two
+other doors stayed open, and one of them was held open *by the removal
+itself*.
+
+- **The kept-history key was never rotated.** `meta.hkey` is minted when
+  history is switched on (`controller.js:1096`) and dropped only when it is
+  switched off; `removeMember` never touched it. A removed member therefore
+  kept a valid key for that channel's *future* entries, with only the relay
+  ACL — the deliberately weak boundary — in the way.
+- **Removal kept the leaver's invite link alive.** `removeMember` called
+  `refreshInvites`, which re-parks a fresh GroupInfo blob under the *same*
+  invite id. `RedeemInvite` (`server.rs:823-835`) grants relay membership to
+  whoever presents the id, with no check against who was removed — its own
+  comment calls the link a bearer token. So a link the removed member still
+  held kept working, and they could rejoin.
+
+**Fixed:** removal now rotates each history-enabled channel's key (archiving
+the superseded one so members can still read the past, capped at 8) and
+revokes every parked invite instead of refreshing it. Both are announced in
+the channel, since revoking also invalidates links held by legitimate
+pending joiners and nothing can tell the two apart.
+
+**Still open here:** there is no way to revoke a *single* invite from the UI,
+and no device revocation at all (Phase 6).
 
 ### 0.7 Remaining Phase-0 items
 
