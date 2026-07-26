@@ -663,3 +663,73 @@ test('a verified member who left keeps their binding, so a re-add is still check
   assert.deepEqual(r.verified, [], 'the re-add is caught by the retained binding');
   clearTimeout(c.backupTimer);
 });
+
+// --- removal has to close every door, not just the MLS one ---------------
+// The MLS commit re-keys the group, but two other doors stayed open: the
+// per-channel kept-history key was minted once and never rotated, and
+// removal *refreshed* parked invite blobs, keeping alive any link the
+// removed member still held.
+
+test('removing someone rotates every kept-history key and keeps the old ones for reading', async () => {
+  const { c } = makeController();
+  const base = c.crypto;
+  c.crypto = async (cmd, args) => {
+    if (cmd === 'removeMember') return { commit: new Uint8Array([9]), epoch: 3, state: null };
+    if (cmd === 'mergeStagedCommit') return { epoch: 3, members: ['alice'], state: null };
+    return base(cmd, args);
+  };
+  const r = record({
+    members: ['alice', 'bob'],
+    roles: { alice: 'admin', bob: 'member' },
+    chanMeta: {
+      general: { hid: 'log1', hkey: 'OLD-KEY' },
+      chatter: {}, // history off — nothing to rotate
+    },
+  });
+  c.servers.set('srv', r);
+
+  await c.removeMember('srv', 'bob');
+
+  const meta = r.chanMeta.general;
+  assert.notEqual(meta.hkey, 'OLD-KEY', 'the write key moved, so bob cannot read what comes next');
+  assert.deepEqual(meta.hkeys, ['OLD-KEY'], 'the superseded key is kept so members can still read the past');
+  assert.equal(r.chanMeta.chatter.hkey, undefined, 'a channel without history is untouched');
+  assert.ok(
+    c.db.messages.some((m) => m.system && m.text.includes('new history key for #general')),
+    'and the rotation is announced'
+  );
+  clearTimeout(c.backupTimer);
+});
+
+test('removing someone revokes the circle’s invite links instead of refreshing them', async () => {
+  const revoked = [];
+  const { c } = makeController({
+    relayHandler: (msg) => {
+      if (msg.t === 'revoke_invite') revoked.push(msg.invite);
+      if (msg.t === 'update_invite') throw new Error('a removed member’s link must not be refreshed');
+      return Promise.resolve({ seq: 2 });
+    },
+  });
+  const base = c.crypto;
+  c.crypto = async (cmd, args) => {
+    if (cmd === 'removeMember') return { commit: new Uint8Array([9]), epoch: 3, state: null };
+    if (cmd === 'mergeStagedCommit') return { epoch: 3, members: ['alice'], state: null };
+    return base(cmd, args);
+  };
+  const r = record({
+    members: ['alice', 'bob'],
+    roles: { alice: 'admin', bob: 'member' },
+    invites: [{ id: 'inv1', key: 'k1' }, { id: 'inv2', key: 'k2' }],
+  });
+  c.servers.set('srv', r);
+
+  await c.removeMember('srv', 'bob');
+
+  assert.deepEqual(revoked, ['inv1', 'inv2'], 'every parked link is killed');
+  assert.deepEqual(r.invites, [], 'and dropped locally');
+  assert.ok(
+    c.db.messages.some((m) => m.system && m.text.includes('2 invite links revoked')),
+    'the admin is told, since this also invalidates links for pending joiners'
+  );
+  clearTimeout(c.backupTimer);
+});

@@ -107,6 +107,11 @@ import {
 } from './overview.js';
 import { freshPresence, normalizeGameRef, normalizePresence, normalizeWant } from './games.js';
 
+/** How many superseded kept-history keys a channel carries for reading.
+    Each removal adds one; the cap stops the metadata growing without bound
+    in a circle with heavy churn, at the cost of the oldest entries becoming
+    unreadable — which auto-delete would have reclaimed anyway. */
+const MAX_ARCHIVED_HISTORY_KEYS = 8;
 const KP_TOPUP = 2; // fresh KeyPackages published per connect
 const INVITE_TTL_SECONDS = 7 * 24 * 3600;
 // Typing signals: readers treat one as stale ~6s after it was sent, and a
@@ -1632,11 +1637,17 @@ export class Controller {
       for (const e of reply.entries) {
         maxSeq = Math.max(maxSeq, e.seq);
         let entry;
-        try {
-          entry = await openHistoryEntry(meta.hkey, e.payload);
-        } catch {
-          continue; // key rotated or blob damaged — skip, don't wedge
+        // Current key first, then keys superseded by a removal — entries
+        // parked before a rotation are still legitimately readable.
+        for (const key of [meta.hkey, ...(meta.hkeys ?? [])]) {
+          try {
+            entry = await openHistoryEntry(key, e.payload);
+            break;
+          } catch {
+            /* try the next key */
+          }
         }
+        if (!entry) continue; // no key opens it — damaged, or rotated past the cap
         // Whitelist fields: an entry is authored by whoever holds the room
         // key, so it must never override where it lands (server/channel)
         // or dress itself up as a system line.
@@ -1782,6 +1793,62 @@ export class Controller {
     }
   }
 
+  /** Mint a fresh kept-history key for every channel that has one, keeping
+      the old keys for reading.
+
+      Removing someone re-keys MLS, so they can decrypt no further *messages*.
+      The per-channel history key was a separate story: it was minted once
+      when history was switched on and never rotated, so a removed member
+      kept a valid key for that channel's future entries too. Only the
+      relay's ACL stood in the way, and the ACL is the deliberately weak
+      boundary — cached ciphertext or a hostile relay defeated it.
+
+      Old keys are archived rather than discarded: the removed member was
+      present for those entries anyway, so destroying them would punish the
+      members who stayed without denying the leaver anything. Rotation is
+      about the future, which is exactly what post-compromise security means.
+      Returns the channels that rotated. */
+  rotateHistoryKeys(record) {
+    const rotated = [];
+    for (const [channel, meta] of Object.entries(record.chanMeta ?? {})) {
+      if (!meta?.hid || !meta?.hkey) continue;
+      const archive = [meta.hkey, ...(meta.hkeys ?? [])].slice(0, MAX_ARCHIVED_HISTORY_KEYS);
+      record.chanMeta = {
+        ...record.chanMeta,
+        [channel]: { ...meta, hkey: generateHistoryKey(), hkeys: archive },
+      };
+      rotated.push(channel);
+    }
+    return rotated;
+  }
+
+  /** Kill every invite link parked for this circle.
+
+      An invite is a bearer token: `redeem_invite` grants relay membership to
+      whoever presents the id, with no check against who was removed. Worse,
+      removal *refreshes* the parked blob to the new epoch, so a link the
+      removed member still holds keeps working — they can walk straight back
+      in. Any link in circulation has to die with them.
+
+      This also invalidates links held by people who were legitimately about
+      to join; there is no way to tell the two apart, so it takes the safe
+      side and says so out loud. */
+  async revokeAllInvites(record) {
+    const invites = record.invites ?? [];
+    if (!invites.length) return 0;
+    let revoked = 0;
+    for (const invite of invites) {
+      try {
+        await this.relay.request({ t: 'revoke_invite', invite: invite.id });
+        revoked += 1;
+      } catch (e) {
+        console.warn(`revoke invite ${invite.id}: ${e.message}`);
+      }
+    }
+    record.invites = [];
+    return revoked;
+  }
+
   /** Remove a member: the MLS commit re-keys the group so they can read and
       send nothing further (the real boundary), and the relay drops them from
       the ACL so they stop being listed and served. UI-gated to admins. */
@@ -1808,8 +1875,29 @@ export class Controller {
       .request({ t: 'disallow', group: serverId, user })
       .catch((e) => console.warn(`disallow ${user}: ${e.message}`));
     await this.addSystemMessage(serverId, `${user} was removed from the circle by you (epoch ${epoch})`);
-    // The epoch moved: any parked invite GroupInfo blob is now stale.
-    await this.refreshInvites(record);
+
+    // Removal has to close every door, not just the MLS one.
+    const rotated = this.rotateHistoryKeys(record);
+    // Do NOT refreshInvites here: re-parking the blob under the same id is
+    // what kept a removed member's link alive. Revoke instead.
+    const revoked = await this.revokeAllInvites(record);
+    if (rotated.length || revoked) {
+      // Members need the new history keys; this is also what tells them the
+      // rotation happened at all.
+      await this.sendContent(serverId, this.metaContent(record));
+    }
+    if (rotated.length) {
+      await this.addSystemMessage(
+        serverId,
+        `new history key for ${rotated.map((c) => `#${c}`).join(', ')} — ${user} cannot read anything kept from here on`
+      );
+    }
+    if (revoked) {
+      await this.addSystemMessage(
+        serverId,
+        `${revoked} invite link${revoked === 1 ? '' : 's'} revoked, in case ${user} still held one — share a new link to invite anyone else`
+      );
+    }
     await this.db.serverPut(record);
     this.dispatch({ type: 'servers', servers: this.snapshotServers() });
     this.scheduleBackup();
