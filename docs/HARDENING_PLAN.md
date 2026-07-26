@@ -2,10 +2,30 @@
 
 Status: proposed. Written against `266d974`.
 
-**Progress.** §0.1, §0.2, §0.6, §0.8, §1.1 and the §2.1 CI gate are
-implemented and green in CI. Still open in Phase 0/1: §0.3 (auth-challenge
-binding), §0.4 (invite gate consuming a use), §0.5 (blob auth), §0.7,
-§1.2–§1.8, and recovery for groups that forked *before* §1.1 landed.
+**Progress.** Phase 0 is complete except §0.4 and part of §0.7; §1.1 and the
+§2.1 CI gate are also done. All of it is green in CI.
+
+Done: §0.1 KeyPackage identity binding · §0.2 key-bound verification ·
+§0.3 auth-challenge binding + `?relay=` allowlist · §0.5 blob upload
+tickets · §0.6 fail-closed authorization · §0.8 removal hardening ·
+§1.1 staged commits + relay epoch CAS · §2.1 the CI gate.
+Also from §0.7: game-iframe origin isolation, CORS scoping, IPv6 /64
+rate-limit bucketing, and the X-Forwarded-For hop fix.
+
+Open, in the order I would take them:
+1. §0.4 — invite gate consuming a use. Needs a store change: the join flow
+   presents the invite twice (Hello, then RedeemInvite), so consuming
+   naively breaks `max_uses: 1`. Requires tracking (invite, user) pairs.
+2. §0.7 remainder — passkey-wrap cross-user takeover, `FetchKp` being
+   unauthenticated and destructive, `Welcome` not constraining `to`,
+   replayable `password_login`.
+3. §1.2–§1.8 — atomic persistence, error taxonomy, infrastructure-failure
+   handling, voice glare, store conformance, protocol versioning.
+4. Recovery for groups that forked *before* §1.1 landed.
+5. Phases 2.2–2.6, then 3–5.
+
+Phases 6 and 7 are gated on decisions and on external parties
+respectively — see "The three decisions I cannot make for you".
 
 This plan takes quorum from "impressive MLS learning project" to software you
 could responsibly put in front of paying users. It is ordered by risk, not by
