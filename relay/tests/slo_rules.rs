@@ -33,7 +33,13 @@ fn referenced(text: &str) -> BTreeSet<String> {
         while end < bytes.len() && (bytes[end].is_ascii_alphanumeric() || bytes[end] == b'_') {
             end += 1;
         }
-        out.insert(text[start..end].to_string());
+        // A bare `quorum_` — the prefix written in prose, as in "a quorum_
+        // name" — is not a reference to anything. Without this, a comment
+        // mentioning the prefix fails the check against a metric that was
+        // never named.
+        if end > start + "quorum_".len() {
+            out.insert(text[start..end].to_string());
+        }
         i = end;
     }
     out
@@ -53,6 +59,39 @@ fn exported() -> BTreeSet<String> {
         }
     }
     out
+}
+
+#[test]
+fn the_extractor_finds_names_the_relay_does_not_export() {
+    // The guard above is only worth having if it can fail, and passing on
+    // correct input proves nothing about that. So drive the two halves with
+    // synthetic input: a made-up metric must be extracted (or a rename would
+    // slip through unseen), and it must not be in the exported set.
+    let names = referenced(
+        r#"
+        expr: sum(rate(quorum_messages_appended_total[5m]))
+              / sum(rate(quorum_invented_metric_total[5m]))
+        summary: "up{job=\"quorum\"} is not a quorum_ name"
+        "#,
+    );
+    assert!(names.contains("quorum_messages_appended_total"), "real names are found: {names:?}");
+    assert!(names.contains("quorum_invented_metric_total"), "invented names are found too");
+    assert!(
+        !names.contains("quorum"),
+        "the bare label value in up{{job=\"quorum\"}} is not a metric reference: {names:?}"
+    );
+    assert!(
+        !names.contains("quorum_"),
+        "the prefix written in prose is not a reference either, or a comment \
+         mentioning it fails the check against a metric nobody named: {names:?}"
+    );
+
+    let exported = exported();
+    assert!(exported.contains("quorum_messages_appended_total"));
+    assert!(
+        !exported.contains("quorum_invented_metric_total"),
+        "the check would not fail on a metric that does not exist"
+    );
 }
 
 #[test]
