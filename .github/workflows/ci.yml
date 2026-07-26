@@ -158,6 +158,88 @@ jobs:
           docker compose -f docker-compose.yml config | grep -q 'quorum-local:dev' \
             || { echo "the local-build default is gone"; exit 1; }
 
+  # Reproducible builds (plan §2.6's remaining half). §6.2 of the threat model
+  # names operator-served code as the largest gap in the design, and the only
+  # real answer is that anyone can rebuild the source and get the bytes being
+  # served. The integrity manifest gives them something to compare; this job
+  # is what establishes there is anything stable to compare against.
+  #
+  # It builds the whole client twice, from a clean tree, and diffs the two
+  # manifests. Written to FAIL when the build is not reproducible — a
+  # reproducibility claim backed by a check that cannot fail is worth nothing.
+  reproducible:
+    name: reproducible build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+      - run: cargo install wasm-pack --locked || cargo install wasm-pack
+      - name: install binaryen
+        env:
+          BINARYEN_VERSION: '119'
+        run: |
+          set -euo pipefail
+          curl -fsSL "https://github.com/WebAssembly/binaryen/releases/download/version_${BINARYEN_VERSION}/binaryen-version_${BINARYEN_VERSION}-x86_64-linux.tar.gz" -o /tmp/b.tar.gz
+          tar -xzf /tmp/b.tar.gz -C /tmp
+          sudo install -m755 "/tmp/binaryen-version_${BINARYEN_VERSION}/bin/wasm-opt" /usr/local/bin/wasm-opt
+      - run: npm ci
+        working-directory: client
+
+      - name: build twice from clean and compare
+        env:
+          WASM_REQUIRE_OPT: '1'
+          # Paths leak into the binary via panic messages and debug info. On a
+          # runner the checkout path is stable, but pinning it is what lets a
+          # rebuild somewhere else match.
+          RUSTFLAGS: '--remap-path-prefix=${{ github.workspace }}=/build'
+          CARGO_INCREMENTAL: '0'
+        run: |
+          set -euo pipefail
+          # SOURCE_DATE_EPOCH from the commit, so anything that stamps a time
+          # stamps the same one on every rebuild of this commit.
+          SOURCE_DATE_EPOCH="$(git log -1 --pretty=%ct)"
+          export SOURCE_DATE_EPOCH
+          echo "SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH"
+
+          build_once() {
+            rm -rf crypto-core/pkg client/public/pkg client/dist
+            cargo clean -p crypto-core
+            ./crypto-core/build-wasm.sh
+            ( cd client && npm run build )
+            cp client/dist/integrity.json "$1"
+          }
+
+          build_once /tmp/first.json
+          build_once /tmp/second.json
+
+          if diff -u /tmp/first.json /tmp/second.json; then
+            echo "✅ two clean builds of this commit produced identical artifacts"
+            {
+              echo "### Reproducible build: verified"
+              echo '```json'
+              cat /tmp/first.json
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "❌ the build is NOT reproducible — the artifacts above differ between two clean builds"
+            {
+              echo "### Reproducible build: FAILED"
+              echo 'Two clean builds of the same commit produced different artifacts:'
+              echo '```diff'
+              diff -u /tmp/first.json /tmp/second.json || true
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
   client:
     name: client tests
     runs-on: ubuntu-latest
