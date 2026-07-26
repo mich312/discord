@@ -2,6 +2,11 @@
 
 Status: proposed. Written against `266d974`.
 
+**Progress.** §0.1, §0.2, §0.6, §1.1 and the §2.1 CI gate are implemented and
+green in CI. Still open in Phase 0/1: §0.3 (auth-challenge binding), §0.4
+(invite gate consuming a use), §0.5 (blob auth), §0.7, §1.2–§1.8, and
+recovery for groups that forked *before* §1.1 landed.
+
 This plan takes quorum from "impressive MLS learning project" to software you
 could responsibly put in front of paying users. It is ordered by risk, not by
 component, and every item names the file it touches and how you know it is done.
@@ -49,7 +54,7 @@ The current build has a hole through which a malicious or compromised relay
 reads all traffic. Until 0.1 and 0.2 land, the README's central claim is false
 and the product should not be represented as end-to-end encrypted.
 
-### 0.1 Bind KeyPackages to identities ⛔ CRITICAL
+### 0.1 Bind KeyPackages to identities ⛔ CRITICAL — DONE
 
 `crypto-core/src/client.rs:292-297` validates a KeyPackage's self-consistency
 and nothing else. It never checks that the embedded `BasicCredential` matches
@@ -76,7 +81,7 @@ everything from that epoch forward. The roster displays "bob".
 returning a mismatched-credential KeyPackage and `add_member` returns an error;
 a second test covers a substituted signature key on a matching identity.
 
-### 0.2 Bind verification to keys, not handle strings ⛔ CRITICAL
+### 0.2 Bind verification to keys, not handle strings ⛔ CRITICAL — DONE
 
 `controller.js:2249-2254` appends the peer's *handle* to `record.verified`.
 Nothing stores the key that was verified and nothing re-checks on epoch or
@@ -126,7 +131,7 @@ WebSocket; require it on PUT. Add a per-IP byte budget and attach the rate
 limiter to the blob routes. Scope `CorsLayer::permissive()` (`lib.rs:81`) to the
 blob routes only — it currently blankets the account endpoints.
 
-### 0.6 Fail closed on authorization
+### 0.6 Fail closed on authorization — DONE
 
 `senderIsAdmin` (`controller.js:1834-1840`) returns `true` when the role cache
 lacks the sender, and `refreshRoles` swallows its errors (`:1855`). A fresh
@@ -165,7 +170,7 @@ unknown.
 
 **Target: 3–4 engineer-weeks. Depends on Phase 0.**
 
-### 1.1 Fix the unrecoverable group fork ⛔ CRITICAL
+### 1.1 Fix the unrecoverable group fork ⛔ CRITICAL — DONE
 
 `merge_pending_commit` fires immediately (`client.rs:305,325`), before the relay
 accepts the commit, and the relay never validates `epoch` — `append_message`
@@ -279,7 +284,7 @@ Today there is **no CI test gate at all**. `.github/workflows/` contains only
 `deploy.yml`, which SSHes into production on every push to `main`. 83 Rust
 integration tests, ~12 in-src unit tests, and 119 client tests never run.
 
-### 2.1 A real CI pipeline
+### 2.1 A real CI pipeline — DONE
 
 On every PR and every push to `main`, blocking the deploy job:
 `cargo fmt --check`, `cargo clippy -- -D warnings`, `cargo test --workspace`,
