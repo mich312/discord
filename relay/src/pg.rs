@@ -9,6 +9,12 @@ use crate::store::{
 use async_trait::async_trait;
 use sqlx::{postgres::PgPoolOptions, PgPool, Row};
 
+/// Bump when a migration is NOT purely additive — i.e. when an older relay
+/// could no longer operate correctly against the new shape. Additive changes
+/// (a new table, a new nullable column) need no bump; the
+/// CREATE TABLE IF NOT EXISTS batch in `migrate` handles those either way.
+pub const SCHEMA_VERSION: i32 = 1;
+
 pub struct PgStore {
     pool: PgPool,
 }
@@ -159,11 +165,49 @@ impl PgStore {
                 uses bigint NOT NULL DEFAULT 0,
                 created_at timestamptz NOT NULL DEFAULT now()
             );
+
+            -- Schema version. Every migration so far has been additive, so
+            -- the batch above was enough and downgrades worked by accident.
+            -- The first destructive change breaks that, and without a
+            -- recorded version an operator cannot tell which shape their
+            -- database is in. Cheap now; not retrofittable after a bad
+            -- upgrade.
+            CREATE TABLE IF NOT EXISTS schema_version (
+                id integer PRIMARY KEY CHECK (id = 1),
+                version integer NOT NULL,
+                applied_at timestamptz NOT NULL DEFAULT now()
+            );
             "#,
         )
         .execute(&self.pool)
         .await
         .map_err(backend)?;
+
+        // Refuse to run against a database written by a NEWER relay: its
+        // shape may have moved in ways this binary does not know about, and
+        // operating on it regardless is how a rollback corrupts data. Older
+        // is fine — the batch above brings it forward.
+        let found: Option<i32> =
+            sqlx::query_scalar("SELECT version FROM schema_version WHERE id = 1")
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(backend)?;
+        if found.is_some_and(|v| v > SCHEMA_VERSION) {
+            return Err(StoreError::Backend(format!(
+                "database is at schema version {}, but this relay understands {SCHEMA_VERSION}. \
+                 It was written by a newer build — upgrade the relay rather than rolling it back.",
+                found.unwrap_or_default()
+            )));
+        }
+        sqlx::query(
+            "INSERT INTO schema_version (id, version) VALUES (1, $1)
+             ON CONFLICT (id) DO UPDATE SET version = $1, applied_at = now()",
+        )
+        .bind(SCHEMA_VERSION)
+        .execute(&self.pool)
+        .await
+        .map_err(backend)?;
+        tracing::info!(version = SCHEMA_VERSION, "schema up to date");
         Ok(())
     }
 }

@@ -224,6 +224,41 @@ channels.
 
 ---
 
+## Upgrading
+
+```sh
+docker compose pull
+docker compose up -d
+curl -s localhost/healthz          # must be {"ok":true,...} before you walk away
+docker compose logs --tail=20 quorum | grep -i schema
+```
+
+The relay migrates its own database on startup. Migrations run behind an
+advisory lock, so starting two instances at once is safe — one waits.
+
+**Back up the database first** (see *Backups*). Not because upgrades usually
+go wrong, but because the way out of one that did is a restore.
+
+**Rolling back.** Downgrading the image works only if the schema has not
+moved. The relay records the schema version it wrote, and an older build that
+finds a *newer* version refuses to start:
+
+```
+database is at schema version 2, but this relay understands 1.
+It was written by a newer build — upgrade the relay rather than rolling it back.
+```
+
+This is deliberate. The alternative — running against a shape the binary does
+not understand — corrupts data quietly instead of failing loudly. Your options
+are to go back to the newer image, or restore the database from the backup you
+took before upgrading. There is no third one, which is the real reason to take
+the backup.
+
+Clients need no coordination: they reconnect with backoff and catch up from the
+ordered log. Expect a few seconds of reconnect noise in the logs, not silence.
+
+---
+
 ## What to escalate rather than fix
 
 - A member reporting they can read a circle they were removed from.

@@ -19,7 +19,7 @@ analysis; this is the current state.
 | Phase | Done | Open |
 |---|---|---|
 | **2** | CI gate, supply chain, deploy health gate + pinned host keys | §2.2 extract `applyEnvelope`/`AccountService`; §2.3 coverage for the named risky paths; §2.4 image-based deploy with fast rollback; §2.6 reproducible builds + integrity manifest for worker and wasm |
-| **3** | Per-group send locks (global hub mutex gone); hourly history sweep | Bounded outbound queues; blob and message GC; schema versioning; publish the ceiling |
+| **3** | Per-group send locks (global hub mutex gone); hourly history sweep; recorded schema version with a rollback guard | Bounded outbound queues; blob and message GC; publish the ceiling |
 | **4** | `/healthz`; connect/disconnect/subscribe logging; `deploy/RUNBOOK.md`; actionable WebAuthn config failure | Prometheus metrics; OpenTelemetry tracing; alerting |
 | **5** | Dialog semantics + focus management on all overlays; WCAG AA contrast; iOS storage-eviction fix; drawer `aria-expanded`/`aria-controls` + labelled landmarks; 44px touch targets | PWA offline shell; rail unread badges; local search; `prefers-color-scheme` |
 | **7** | `SECURITY.md`; `docs/THREAT_MODEL.md` | cargo-fuzz targets on protocol parsing; epoch state-machine simulation harness |
@@ -456,13 +456,23 @@ ciphertext lives forever, quietly contradicting the auto-delete promise.
 **Fix:** a periodic sweeper for expired history, a message retention policy, a
 blob GC keyed on referenced ids, plus disk quotas and alerting.
 
-### 3.5 Schema versioning and upgrades
+### 3.5 Schema versioning and upgrades — **done**
 
-`migrate()` (`pg.rs:28-155`) is idempotent and race-safe behind an advisory
-lock, which is good, but there is no `schema_version` table and no down path.
-That is survivable only because every change so far has been additive; the first
-destructive change strands operators. Add versioning now, while it is cheap, and
-write the upgrade runbook that currently does not exist anywhere in the repo.
+`migrate()` was idempotent and race-safe behind an advisory lock, which was
+good, but there was no `schema_version` table and no down path. That was
+survivable only because every change so far had been additive; the first
+destructive change would have stranded operators.
+
+`migrate` now records `SCHEMA_VERSION` and **refuses to start against a
+database written by a newer relay** rather than operating on a shape it does
+not understand — a rollback that half-works corrupts more than one that
+refuses. Older databases are still brought forward by the same
+`CREATE TABLE IF NOT EXISTS` batch. `deploy/RUNBOOK.md` gained the *Upgrading*
+section, including what that refusal looks like and how to get out of it.
+
+Still open: a genuine down path. Refusing is the correct behaviour at the
+boundary, but it means a rollback past a destructive migration needs a
+restore, and there are no reversal scripts to make it cheaper.
 
 ### 3.6 HA and disaster recovery
 
