@@ -257,9 +257,14 @@ joins, identity recovery, encrypted attachments, safety numbers, and
   Membership itself is cryptographically enforced and cannot be bypassed.
 - **Invite blobs go stale per epoch** — the link creator's client
   refreshes them; if they're offline long enough the link pauses.
-- **One device per identity** — cross-device sync is out of scope (each
-  device would be its own MLS leaf); recovery restores identity, not
-  group ratchets.
+- **Devices share one identity, not one ratchet** — several devices can
+  hold the same identity (link one from a signed-in device, or enrol a
+  passkey per device; Settings lists them and revokes any one). What they
+  do *not* share is MLS state: each device is not its own leaf, so a
+  second device joins the group afresh and sees no scrollback, and
+  identity recovery restores the identity, never the group ratchets.
+  Revocation is forward-only — it stops that passkey unlocking the
+  identity again, and cannot erase what a device already holds.
 - **Password vaults can be brute-forced by the server** — only for weak
   passwords, and only offline against the encrypted bundle (Argon2id,
   19 MiB/t=2). Passkey vaults have no such surface. The sign-in params

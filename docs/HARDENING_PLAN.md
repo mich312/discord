@@ -957,7 +957,17 @@ install starts there instead of pinning dark. Two details were load-bearing:
   stored and keeps it. Settings gained a *use system* button, without which
   the tri-state would be one-way.
 
-### 5.4 Documentation honesty
+### 5.4 Documentation honesty — done
+
+All five are addressed. Four are in `docs/THREAT_MODEL.md` (WebRTC IP
+exposure, now with an opt-in relay-only mode and its three limits stated; the
+identity key as a master key, §6.3; a removed member keeping a kept-history
+key; push endpoints as a second subpoena hop). The fifth was the README's
+"One device per identity", which shipped device linking already contradicted
+and which forward-only device revocation contradicted twice over — it now
+says what is actually true: devices share an identity, not a ratchet.
+
+The original finding, for the record:
 
 The project's signature is naming its own costs, and it is currently behind its
 own standard in five places: WebRTC exposes every call peer's IP to every other
