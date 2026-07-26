@@ -474,6 +474,17 @@ think to look for — and the published hashes would then describe a binary
 nobody intended. `WASM_REQUIRE_OPT=1` makes it a hard failure; CI sets it.
 Locally it stays a warning, so a contributor without binaryen can still build.
 
+**Turning it on immediately caught the thing it was written for.** CI installed
+binaryen from apt, which on the runner is **version 108** — below the 116
+threshold — so the optimizer had been silently skipped on every CI build the
+guard was supposed to protect. Both CI and the Dockerfile now fetch a pinned
+binaryen release (119) instead of apt.
+
+The Dockerfile also now runs `build-wasm.sh` rather than calling `wasm-pack`
+directly. It was building the wasm a *different way* from CI, which would have
+made the published manifest describe a binary the image never contained —
+a wrong hash being considerably worse than no hash.
+
 **The worker now verifies the wasm before instantiating it.** `worker.js`
 carries the SHA-384 this build shipped (stamped by
 `client/scripts/inject-integrity.mjs`) and refuses to `init()` anything else —
