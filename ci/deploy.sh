@@ -2,17 +2,28 @@
 # Deploy the quorum stack. Runs ON THE SERVER — the GitHub Actions workflow
 # (.github/workflows/deploy.yml) pipes this in over SSH.
 #
-# Build-on-server: pull main, rebuild the relay+client image, health-check the
-# public site, and roll back to the previous commit if it doesn't come up.
+# Two modes, chosen by whether QUORUM_IMAGE is set:
 #
-# The image build is heavy (Rust release + wasm-pack + Node client). A FAILED
-# build leaves the currently-running container untouched, so a broken build
-# cannot take the site down — only a build that succeeds but runs unhealthy
-# triggers the rollback below.
+#   image mode (what CI does) — the image was built and pushed by the
+#   workflow, so deploying is `pull` + `up -d`. Rollback re-points the tag and
+#   restarts: seconds, and it cannot fail the way a build can.
+#
+#   build mode (fallback) — no QUORUM_IMAGE, so build on the server as before.
+#   Kept deliberately: a registry outage, a missing token, or a hand-run
+#   deploy must not leave the operator with no way to ship.
+#
+# Why image mode matters. Rollback used to be `git reset --hard` plus a full
+# Rust + wasm-pack + Node rebuild on the production box, so the recovery path
+# was itself a multi-minute build that could fail — the worst possible
+# property for a recovery path, because you only ever run it when something is
+# already wrong.
 set -euo pipefail
 
 REPO_DIR="$HOME/discord"
 URL="https://quorum.mich312.com/"
+# Survives across deploys, so a rollback still knows what was last known good
+# even if the current containers are gone.
+STATE_FILE="$REPO_DIR/deploy/.last-good-image"
 cd "$REPO_DIR"
 
 # The exact overlay set the stack runs with: base + edge (external TLS proxy,
@@ -38,6 +49,61 @@ healthy() {
   done
   return 1
 }
+
+# What is serving right now. Preferred over the state file because it is the
+# ground truth; the file covers a first run or a host whose containers are gone.
+running_image() {
+  compose ps --format '{{.Image}}' quorum 2>/dev/null | head -1
+}
+
+if [ -n "${QUORUM_IMAGE:-}" ]; then
+  # ---------------------------------------------------------------- image --
+  PREV_IMAGE="$(running_image)"
+  if [ -z "$PREV_IMAGE" ] && [ -f "$STATE_FILE" ]; then
+    PREV_IMAGE="$(cat "$STATE_FILE")"
+  fi
+  echo "deploying image $QUORUM_IMAGE (currently ${PREV_IMAGE:-none})"
+
+  # The compose files still come from git, so keep the checkout in step —
+  # but nothing is *built* from it in this mode.
+  git fetch origin --quiet
+  git reset --hard origin/main
+
+  export QUORUM_IMAGE
+  compose pull quorum
+  compose up -d --no-build
+
+  echo "health-checking $URL ..."
+  if healthy; then
+    echo "✅ deploy OK: $QUORUM_IMAGE"
+    mkdir -p "$(dirname "$STATE_FILE")"
+    printf '%s\n' "$QUORUM_IMAGE" > "$STATE_FILE"
+    exit 0
+  fi
+
+  if [ -z "$PREV_IMAGE" ]; then
+    echo "❌ unhealthy, and there is no previous image to fall back to — needs a look"
+    exit 1
+  fi
+
+  echo "❌ unhealthy — rolling back to $PREV_IMAGE"
+  # No build, no compile, no fetch of source: the previous image is already on
+  # this host, so this is a restart.
+  QUORUM_IMAGE="$PREV_IMAGE" compose up -d --no-build
+  if healthy; then
+    echo "rolled back to $PREV_IMAGE"
+  else
+    echo "rollback ALSO unhealthy — needs a look"
+  fi
+  exit 1
+fi
+
+# ------------------------------------------------------------------ build --
+# The image build is heavy (Rust release + wasm-pack + Node client). A FAILED
+# build leaves the currently-running container untouched, so a broken build
+# cannot take the site down — only a build that succeeds but runs unhealthy
+# triggers the rollback below.
+echo "QUORUM_IMAGE not set — building on the server (slower, and rollback rebuilds too)"
 
 PREV=$(git rev-parse HEAD)
 git fetch origin --quiet

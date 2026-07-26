@@ -5,6 +5,12 @@
 # WebAuthn and getUserMedia require a secure context off localhost.
 services:
   quorum:
+    # Both, on purpose. `docker compose up --build` (local dev, and the
+    # build-on-server fallback) builds and tags this name; production sets
+    # QUORUM_IMAGE to a registry ref and brings the stack up WITHOUT --build,
+    # so a deploy is a pull and a restart rather than a multi-minute compile.
+    # That is what makes rollback fast: re-point this and `up -d`.
+    image: ${QUORUM_IMAGE:-quorum-local:dev}
     build: .
     ports:
       - "80:80"

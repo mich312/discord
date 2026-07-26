@@ -115,6 +115,49 @@ jobs:
         run: npm ci --ignore-scripts
         working-directory: client
 
+  # The deploy path cannot be exercised without a server, so at minimum it is
+  # checked for the mistakes that would only surface mid-deploy: a script that
+  # does not parse, and a compose stack that does not resolve.
+  deploy-path:
+    name: deploy path
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: deploy.sh parses
+        run: bash -n ci/deploy.sh
+
+      - name: deploy.sh is shellcheck-clean
+        run: shellcheck ci/deploy.sh
+
+      - name: the production overlay set resolves
+        # The same three files ci/deploy.sh brings up. A typo here is a failed
+        # deploy on the box rather than a failed check here.
+        env:
+          # The overlays fail closed on missing config — coturn refuses to
+          # resolve without a secret rather than starting open — so the check
+          # has to supply what a real deploy/.env would.
+          CADDY_DOMAIN: example.test
+          QUORUM_IMAGE: ghcr.io/example/quorum:test
+          TURN_SECRET: not-a-real-secret
+        run: |
+          docker compose \
+            -f docker-compose.yml \
+            -f deploy/docker-compose.edge.yml \
+            -f deploy/docker-compose.turn.yml config >/dev/null
+
+      - name: the image ref is overridable, and defaults to a local build
+        # deploy.sh switches on QUORUM_IMAGE; if compose stopped honouring it,
+        # every deploy would silently keep running the old build-on-server path.
+        run: |
+          set -euo pipefail
+          got=$(QUORUM_IMAGE=ghcr.io/example/quorum:pinned docker compose -f docker-compose.yml config \
+                | grep -E '^\s+image: ghcr.io/example/quorum:pinned$' | wc -l)
+          [ "$got" -eq 1 ] || { echo "QUORUM_IMAGE is not reaching the quorum service"; exit 1; }
+          docker compose -f docker-compose.yml config | grep -q 'quorum-local:dev' \
+            || { echo "the local-build default is gone"; exit 1; }
+
   client:
     name: client tests
     runs-on: ubuntu-latest

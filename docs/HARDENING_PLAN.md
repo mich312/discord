@@ -412,14 +412,41 @@ injection; WASM/worker load failure; reconnect resync losslessness
 (`reconnect_race.rs` only proves a subscription survives socket teardown); blob
 auth/DoS.
 
-### 2.4 Safe deploys
+### 2.4 Safe deploys — **done**
 
-`ci/deploy.sh:32` treats any 1xx–4xx as healthy — a 404 passes — and only
-fetches `/`, a static file that never touches Postgres. Rollback is
-`git reset --hard` plus a full Rust/WASM/node rebuild *on the production box*
-(`:53-54`), so the rollback path is itself a multi-minute build that can fail.
-`ssh-keyscan` on every run (`deploy.yml:35`) re-TOFUs the host key, defeating
-the `StrictHostKeyChecking=yes` on the next line.
+Three separate problems, all closed.
+
+**The health gate.** It accepted any 1xx–4xx — a 404 passed — and fetched `/`,
+a static file that never touches Postgres, so a relay with a dead database
+deployed clean. It now polls `/healthz` and accepts only a real 2xx.
+
+**The host key.** `ssh-keyscan` ran on every deploy, re-TOFUing the host and
+making the `StrictHostKeyChecking=yes` on the next line decorative. A pinned
+`DEPLOY_KNOWN_HOSTS` secret is used when set, with a loud warning when not.
+
+**Rollback.** This was the serious one: rollback was `git reset --hard` plus a
+full Rust + wasm-pack + Node rebuild *on the production box*, so the recovery
+path was itself a multi-minute build that could fail — the worst possible
+property for a path you only run when something is already wrong.
+
+The image is now built in CI and pushed to GHCR tagged by commit SHA; the
+server pulls and restarts. Rollback re-points `QUORUM_IMAGE` at the
+previously-running image (read from the running container, with a state file
+as fallback) and restarts — seconds, no compile, nothing fetched. Tagging by
+SHA rather than only `latest` is what gives the server something specific to
+roll back *to*.
+
+Build-on-server is kept as a fallback when `QUORUM_IMAGE` is unset. A registry
+outage, a missing token or a hand-run deploy must not leave the operator with
+no way to ship.
+
+**What is not verified:** there is no way to exercise a real deploy from here.
+The `deploy path` CI job covers what can be checked without a server —
+`deploy.sh` parses and is shellcheck-clean, the three-file production overlay
+set resolves, and `QUORUM_IMAGE` actually reaches the service (if compose
+stopped honouring it, every deploy would silently keep using the old
+build-on-server path). The first real deploy still needs watching, and the
+server needs pull access to the GHCR package.
 
 **Fix:** build the image in CI, push to a registry, deploy by digest, roll back
 by re-pointing the tag (seconds). Health-check an endpoint that round-trips the
