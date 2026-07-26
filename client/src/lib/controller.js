@@ -80,15 +80,6 @@ import {
 } from './history.js';
 import { VoiceManager } from './voice.js';
 import {
-  VAULT_PRF_SALT,
-  derivePrfSecret,
-  parseCreationOptions,
-  parseRequestOptions,
-  prfSecret,
-  serializeAssertion,
-  serializeRegistration,
-} from './webauthn.js';
-import {
   b64url,
   buildInviteUrl,
   decryptBlob,
@@ -97,6 +88,7 @@ import {
   generateInviteId,
 } from './invite.js';
 import { sealIdentity } from './link.js';
+import { AccountService } from './account.js';
 import {
   canRemoveNotice,
   mergeNotices,
@@ -153,17 +145,6 @@ export function freshTyping(entry, now = Date.now()) {
 // read either store, so this adds redundancy, not exposure.
 const IDENTITY_LS_KEY = 'e2ee-identity';
 
-/** Guidance when a browser won't produce the passkey PRF secret the vault is
-    encrypted under — common on Chromium (Edge/Chrome) on macOS, where Safari
-    does support it. */
-function noPrfMessage() {
-  return (
-    "this browser didn’t provide the passkey PRF extension we need to encrypt your vault. " +
-    'On a Mac, Safari supports it; otherwise secure this account with a password, or link ' +
-    'this device from one you’re already signed in on.'
-  );
-}
-
 export class Controller {
   constructor({ db, crypto, dispatch, relayUrl }) {
     this.db = db;
@@ -173,6 +154,16 @@ export class Controller {
     this.relay = null;
     this.servers = new Map(); // id -> record
     this.me = null;
+    // Vaults, passkeys and sign-in (plan §2.2). `request` is a function
+    // rather than the connection because the socket does not exist yet.
+    this.accounts = new AccountService({
+      request: (msg) => this.relay.request(msg),
+      crypto,
+      db,
+      dispatch,
+      httpBase: () => this.httpBase(),
+      identityBytes: () => this.identityBytes(),
+    });
   }
 
   // === boot paths =========================================================
@@ -1966,15 +1957,17 @@ export class Controller {
   }
 
   // === account vaults =====================================================
+  // The work lives in `AccountService` (plan §2.2). These stay as the
+  // controller's surface because the UI calls them, and because the two
+  // sign-in paths finish with something only the controller can do: adopting
+  // an identity and booting on it.
 
-  async checkVault() {
-    try {
-      const reply = await this.relay.request({ t: 'vault_status' });
-      const securedLocal = (await this.db.kvGet('securedLocal')) ?? true;
-      this.dispatch({ type: 'vault', kind: reply.kind ?? null, securedLocal });
-    } catch (e) {
-      console.warn(`vault status: ${e.message}`);
-    }
+  checkVault() {
+    return this.accounts.status();
+  }
+
+  markSecuredLocal() {
+    return this.accounts.markSecuredLocal();
   }
 
   identityBytes() {
@@ -1983,200 +1976,43 @@ export class Controller {
     return b64.dec(stored);
   }
 
-  async markSecuredLocal() {
-    await this.db.kvPut('securedLocal', true);
-    await this.checkVault();
+  secureWithPassword(password) {
+    return this.accounts.secureWithPassword(password);
   }
 
-  /** Password vault: Argon2id splits into an auth half (relay stores only
-      its hash) and a wrap half (encrypts the identity, never leaves). */
-  async secureWithPassword(password) {
-    if ((password ?? '').length < 8) throw new Error('password: 8 characters minimum');
-    const salt = crypto.getRandomValues(new Uint8Array(16));
-    const keys = new Uint8Array(await this.crypto('deriveLoginKeys', { password, salt }));
-    const authKey = keys.slice(0, 32);
-    const wrapKey = keys.slice(32);
-    const verifier = new Uint8Array(await crypto.subtle.digest('SHA-256', authKey));
-    const wrapped = await encryptBlob(wrapKey, this.identityBytes());
-    await this.relay.request({
-      t: 'vault_set',
-      kind: 'password',
-      salt: b64.enc(salt),
-      verifier: b64.enc(verifier),
-      wrapped: b64.enc(wrapped),
-      credential: null,
-    });
-    await this.markSecuredLocal();
+  secureWithPasskey() {
+    return this.accounts.secureWithPasskey();
   }
 
-  /** Passkey vault: register a WebAuthn credential, derive a wrap key via
-      the PRF extension, park the wrapped identity. Nothing brute-forceable
-      is stored anywhere. */
-  async secureWithPasskey() {
-    if (!navigator.credentials?.create) throw new Error('WebAuthn unavailable in this browser');
-    const start = await this.relay.request({ t: 'passkey_register_start' });
-    const created = await navigator.credentials.create({
-      publicKey: parseCreationOptions(JSON.parse(start.payload)),
-    });
-    const finish = await this.relay.request({
-      t: 'passkey_register_finish',
-      credential: JSON.stringify(serializeRegistration(created)),
-    });
-    // A constant salt (not a random one): PRF output is already unique per
-    // credential, and pinning the salt lets usernameless sign-in derive this
-    // same wrap key with no prior account lookup. Still stored on the vault so
-    // the handle-first path keeps reading it from /params unchanged.
-    const prfSalt = VAULT_PRF_SALT;
-    // Prefer the PRF value returned at creation; fall back to a fresh assertion
-    // for browsers that only evaluate PRF on a get().
-    const secret = prfSecret(created) ?? (await derivePrfSecret(created.rawId, prfSalt));
-    if (!secret) throw new Error(noPrfMessage());
-    const wrapped = await encryptBlob(secret, this.identityBytes());
-    await this.relay.request({
-      t: 'vault_set',
-      kind: 'passkey',
-      salt: b64.enc(prfSalt),
-      verifier: b64.enc(new Uint8Array(0)),
-      wrapped: b64.enc(wrapped),
-      credential: finish.payload,
-    });
-    await this.markSecuredLocal();
+  enrollDevicePasskey() {
+    return this.accounts.enrollDevicePasskey();
   }
 
-  /** Enroll an ADDITIONAL passkey for this device (e.g. Windows Hello) that
-      unlocks the same identity, without touching the primary vault or any
-      other device's passkey. Each device seals the identity under its own PRF
-      secret; the relay keys the wrap by credential id. Reachable once you're
-      already signed in here (typically right after linking a new device). */
-  async enrollDevicePasskey() {
-    if (!navigator.credentials?.create) throw new Error('WebAuthn unavailable in this browser');
-    const start = await this.relay.request({ t: 'passkey_register_start' });
-    const created = await navigator.credentials.create({
-      publicKey: parseCreationOptions(JSON.parse(start.payload)),
-    });
-    const finish = await this.relay.request({
-      t: 'passkey_register_finish',
-      credential: JSON.stringify(serializeRegistration(created)),
-    });
-    const secret = prfSecret(created) ?? (await derivePrfSecret(created.rawId, VAULT_PRF_SALT));
-    if (!secret) throw new Error(noPrfMessage());
-    const wrapped = await encryptBlob(secret, this.identityBytes());
-    await this.relay.request({
-      t: 'passkey_wrap_add',
-      cred_id: b64url.enc(created.rawId),
-      credential: finish.payload,
-      salt: b64.enc(VAULT_PRF_SALT),
-      wrapped: b64.enc(wrapped),
-    });
-    await this.markSecuredLocal();
+  accountKind(user) {
+    return this.accounts.accountKind(user);
   }
 
-  /** Pre-boot probe: how (if at all) a handle signs in on this relay, so
-      the gate can offer only the method that will actually work.
-      Returns 'passkey' | 'password', or null when there's no server vault
-      for that handle (identity was never secured for cross-device use). */
-  async accountKind(user) {
-    try {
-      const params = await this.accountFetch(`/account/${encodeURIComponent(user)}/params`);
-      return params.kind ?? null;
-    } catch (e) {
-      if (/no such account|no vault|404/i.test(e.message)) return null;
-      throw e;
-    }
+  accountFetch(path, body) {
+    return this.accounts.fetch(path, body);
   }
 
-  /** Pre-boot sign-in on a fresh device: fetch the vault, unwrap locally,
-      adopt the identity. Groups don't transfer — only who you are. */
-  async signInWithPassword(user, password) {
-    const params = await this.accountFetch(`/account/${encodeURIComponent(user)}/params`);
-    if (params.kind !== 'password') throw new Error(`this account uses ${params.kind} sign-in`);
-    const salt = b64.dec(params.salt);
-    const keys = new Uint8Array(await this.crypto('deriveLoginKeys', { password, salt }));
-    const reply = await this.accountFetch(`/account/${encodeURIComponent(user)}/login`, {
-      auth_key: b64.enc(keys.slice(0, 32)),
-    });
-    const identity = await decryptBlob(keys.slice(32), b64.dec(reply.wrapped)).catch(() => {
-      throw new Error('could not decrypt vault — corrupt data');
-    });
+  /** Unlocking a vault yields an identity; adopting it is the irreversible
+      half, and it stays here beside the rest of boot. */
+  async adoptIdentity(identity) {
     await this.restoreIdentity(identity);
     await this.completeOnboarding(true);
+  }
+
+  async signInWithPassword(user, password) {
+    await this.adoptIdentity(await this.accounts.unlockWithPassword(user, password));
   }
 
   async signInWithPasskey(user) {
-    if (!navigator.credentials?.get) throw new Error('this browser has no passkey support');
-    const params = await this.accountFetch(`/account/${encodeURIComponent(user)}/params`);
-    if (params.kind !== 'passkey') throw new Error(`this account uses ${params.kind} sign-in, not a passkey`);
-    const prfSalt = b64.dec(params.salt);
-    const challenge = await this.accountFetch(
-      `/account/${encodeURIComponent(user)}/passkey/challenge`,
-      {}
-    );
-    const assertion = await navigator.credentials.get({
-      publicKey: parseRequestOptions(challenge, prfSalt),
-    });
-    const secret = prfSecret(assertion);
-    if (!secret) throw new Error('authenticator returned no PRF secret');
-    const reply = await this.accountFetch(`/account/${encodeURIComponent(user)}/passkey/login`, {
-      assertion: serializeAssertion(assertion),
-    });
-    const identity = await decryptBlob(secret, b64.dec(reply.wrapped)).catch(() => {
-      throw new Error('could not decrypt vault — corrupt data');
-    });
-    await this.restoreIdentity(identity);
-    await this.completeOnboarding(true);
+    await this.adoptIdentity(await this.accounts.unlockWithPasskey(user));
   }
 
-  /** Usernameless sign-in: no handle. The authenticator offers its resident
-      passkeys, the relay resolves which account signed, and the vault comes
-      back keyed by nothing but the credential. Works only for passkeys sealed
-      under the constant PRF salt (i.e. registered by this version onward).
-
-      `mediation: 'conditional'` drives passkey autofill: the get() stays
-      pending (non-modal) until the user picks a passkey from the browser's
-      autocomplete, or `signal` aborts it. Omit both for the modal button. */
-  async signInWithDiscoverablePasskey({ mediation, signal } = {}) {
-    if (!navigator.credentials?.get) throw new Error('this browser has no passkey support');
-    const { session, options } = await this.accountFetch('/passkey/discover/challenge', {});
-    const assertion = await navigator.credentials.get({
-      publicKey: parseRequestOptions(options, VAULT_PRF_SALT),
-      mediation,
-      signal,
-    });
-    const secret = prfSecret(assertion);
-    if (!secret) throw new Error('this passkey has no PRF secret — sign in with your handle instead');
-    const reply = await this.accountFetch('/passkey/discover/login', {
-      session,
-      assertion: serializeAssertion(assertion),
-    });
-    // Here the credential already matched and its signature verified, so a
-    // decrypt failure isn't corruption — it's a passkey sealed under the old
-    // per-account salt (registered before one-tap sign-in). The handle-first
-    // path reads that salt from the server and still works; re-securing then
-    // migrates the passkey to the constant salt.
-    const identity = await decryptBlob(secret, b64.dec(reply.wrapped)).catch(() => {
-      // The passkey proved who you are, but this device can't reproduce the
-      // key that sealed the vault (an older per-account salt, or a PRF that
-      // differs across devices — e.g. this passkey on Windows). The graceful
-      // path is to link from a device you're already signed in on.
-      const e = new Error("this device can't unlock your vault with that passkey");
-      e.linkFallback = true;
-      throw e;
-    });
-    await this.restoreIdentity(identity);
-    await this.completeOnboarding(true);
-  }
-
-  async accountFetch(path, body) {
-    const res = await fetch(`${this.httpBase()}${path}`, {
-      method: body === undefined ? 'GET' : 'POST',
-      headers: body === undefined ? {} : { 'content-type': 'application/json' },
-      body: body === undefined ? undefined : JSON.stringify(body),
-    });
-    if (!res.ok) {
-      const text = await res.text();
-      throw new Error(res.status === 404 ? 'no such account' : text || `HTTP ${res.status}`);
-    }
-    return res.json();
+  async signInWithDiscoverablePasskey(opts) {
+    await this.adoptIdentity(await this.accounts.unlockWithDiscoverablePasskey(opts));
   }
 
   // === attachments ========================================================
