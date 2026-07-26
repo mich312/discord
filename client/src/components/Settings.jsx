@@ -1,3 +1,4 @@
+import { useDialog } from '../lib/useDialog.js';
 import React, { useEffect, useState } from 'react';
 import Seal from './Seal.jsx';
 import { X, Bell, Sun, Moon, Key, ShieldCheck, Wave, Check } from './icons.jsx';
@@ -112,9 +113,16 @@ export default function Settings({
     ['autoGainControl', 'Auto gain', 'Even out your level so you are not too quiet or clipping.'],
   ];
 
+  const dialog = useDialog(onClose, { label: 'Settings' });
+
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div className="card modal settings" onClick={(e) => e.stopPropagation()}>
+      <div
+        className="card modal settings"
+        ref={dialog.ref}
+        {...dialog.props}
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="dialog-head">
           <span className="dialog-glyph"><ShieldCheck /></span>
           <h1>Settings</h1>

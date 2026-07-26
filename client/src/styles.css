@@ -48,7 +48,10 @@
   --hover: #1a1a1e;
   --active: #202025;
   --ink: #f2f2f3;
-  --ink-dim: #a1a1a9;
+  /* Raised from #a1a1a9 (3.71:1 on --panel, below WCAG AA) to clear 4.5:1.
+     This token carries most metadata in the product — overlines, timestamps,
+     the sealed-note and fineprint lines — usually at 10-12px. */
+  --ink-dim: #b4b4bd;
   --ink-mute: #6d6d76;
   --hairline: rgba(255, 255, 255, 0.08);
   --hairline-strong: rgba(255, 255, 255, 0.17);
@@ -73,7 +76,8 @@
   --hover: #eae7e1;
   --active: #dfdbd3;
   --ink: #1c1c1e;
-  --ink-dim: #59595c;
+  /* Paper theme: was #59595c at 2.85:1, well below AA for normal text. */
+  --ink-dim: #4a4a4d;
   --ink-mute: #8f8f8c;
   --hairline: rgba(28, 28, 30, 0.14);
   --hairline-strong: rgba(28, 28, 30, 0.3);

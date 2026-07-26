@@ -1,3 +1,4 @@
+import { useDialog } from '../lib/useDialog.js';
 import React, { useEffect, useState } from 'react';
 import { LinkGlyph, Key, ShieldCheck, Copy, Download, X, Check, Gear, LogOut } from './icons.jsx';
 
@@ -93,9 +94,16 @@ export default function Modal({
   };
   const head = heads[modal.type];
 
+  const dialog = useDialog(onClose, { label: head?.title ?? 'Dialog' });
+
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div className="card modal" onClick={(e) => e.stopPropagation()}>
+      <div
+        className="card modal"
+        ref={dialog.ref}
+        {...dialog.props}
+        onClick={(e) => e.stopPropagation()}
+      >
         {head && (
           <div className="dialog-head">
             <span className="dialog-glyph">{head.glyph}</span>

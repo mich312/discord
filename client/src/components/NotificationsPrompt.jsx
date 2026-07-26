@@ -1,3 +1,4 @@
+import { useDialog } from '../lib/useDialog.js';
 import React, { useEffect, useState } from 'react';
 import { Bell, Check, X } from './icons.jsx';
 
@@ -33,10 +34,14 @@ export default function NotificationsPrompt({ onEnable, onClose }) {
     }
   }
 
+  const dialog = useDialog(onClose, { label: 'Enable notifications' });
+
   return (
     <div className="modal-backdrop" onClick={onClose}>
       <div
         className="card modal notif-prompt"
+        ref={dialog.ref}
+        {...dialog.props}
         onClick={(e) => e.stopPropagation()}
         data-testid="notif-prompt"
       >
