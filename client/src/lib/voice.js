@@ -1162,7 +1162,13 @@ export class VoiceManager {
           const politeLoser = this.me > sender;
           if (!politeLoser) break; // their offer loses; ours is in flight
           // setRemoteDescription(offer) implicitly rolls back our pending
-          // local offer; our track change re-offers once this settles.
+          // local offer — so whatever that offer carried (a camera track, a
+          // screen share) is no longer being negotiated. Mark it needed
+          // again, or the loser's track is silently dropped forever: the
+          // peer renders a tile for it, having seen the announcement, and
+          // no media ever arrives. `renegotiate` cleared this flag on its
+          // way to setLocalDescription, so nothing else re-sets it.
+          peer.renegotiateNeeded = true;
         }
         await peer.pc.setRemoteDescription({ type: 'offer', sdp: content.sdp });
         // The sender may have left (dropPeer closed this leg) while the
@@ -1180,6 +1186,20 @@ export class VoiceManager {
           type: 'answer',
           sdp: answer.sdp,
         });
+        // Answering settles the pc. onsignalingstatechange normally drives
+        // the postponed re-offer, but it can fire while `makingOffer` is
+        // still set (the losing renegotiate is unwinding), and that guard
+        // makes it skip — with no later state change to try again. So kick
+        // it here too; renegotiate is idempotent when nothing is pending.
+        if (
+          peer.renegotiateNeeded &&
+          peer.pc.signalingState === 'stable' &&
+          this.peers.get(sender) === peer &&
+          this.active
+        ) {
+          peer.renegotiateNeeded = false;
+          this.renegotiate(server, sender, peer).catch(() => {});
+        }
         break;
       }
       case 'answer': {

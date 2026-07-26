@@ -36,5 +36,13 @@ export function withViewTransition(update) {
     (FLIP) instead of cross-dissolving. Prefixed so it never starts with a
     digit; non-ident chars collapse to '-'. */
 export function memberVtName(handle) {
-  return `vt-m-${String(handle).replace(/[^a-zA-Z0-9]+/g, '-')}`;
+  // Collapsing every non-ident run to '-' made "a.b.c" and "a-b-c" the same
+  // name, and a duplicate view-transition-name aborts the WHOLE transition,
+  // not just that element. Append a short hash of the original so distinct
+  // handles stay distinct.
+  const raw = String(handle);
+  let h = 0;
+  for (let i = 0; i < raw.length; i++) h = (Math.imul(31, h) + raw.charCodeAt(i)) | 0;
+  const tag = (h >>> 0).toString(36);
+  return `vt-m-${raw.replace(/[^a-zA-Z0-9]+/g, '-')}-${tag}`;
 }

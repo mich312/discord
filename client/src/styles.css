@@ -3188,3 +3188,27 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
   .gate-form { padding: 20px 16px calc(20px + env(safe-area-inset-bottom, 0px)); }
   .gate-form .card { width: 100%; padding: 4px; }
 }
+
+/* Terminal startup failure (IndexedDB unavailable, worker/wasm dead). Plain
+   and self-contained: it renders before any app chrome exists. */
+.boot-fatal {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  align-items: center;
+  justify-content: center;
+  min-height: 100dvh;
+  padding: 24px;
+  text-align: center;
+  background: var(--well);
+  color: var(--ink);
+}
+.boot-fatal h1 {
+  font-size: var(--text-lg);
+  font-weight: 600;
+}
+.boot-fatal p {
+  max-width: 46ch;
+  color: var(--ink-dim);
+  line-height: 1.5;
+}

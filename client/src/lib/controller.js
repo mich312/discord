@@ -1185,9 +1185,16 @@ export class Controller {
   async markSeen(serverId, channel, atLeastTs = 0) {
     const record = this.servers.get(serverId);
     if (!record || !channel) return;
-    // Message ts is the *sender's* clock; take the max with our own so a
-    // fast sender clock can't leave an already-read message counted unread.
-    record.seen = { ...(record.seen ?? {}), [channel]: Math.max(Date.now(), atLeastTs) };
+    // Message ts is the *sender's* clock. Taking max(now, atLeastTs) alone
+    // handled a FAST sender clock but broke the slow one: stamping `now`
+    // meant every later message from a device minutes behind us arrived
+    // already "seen" and never counted unread. Anchor on the newest message
+    // this channel actually holds, falling back to now for an empty room.
+    const newest = (await this.db.msgsFor(record.id, channel))
+      .filter((m) => !m.system)
+      .reduce((max, m) => Math.max(max, Number(m.ts) || 0), 0);
+    const anchor = newest || Date.now();
+    record.seen = { ...(record.seen ?? {}), [channel]: Math.max(anchor, atLeastTs) };
     await this.db.serverPut(record);
   }
 

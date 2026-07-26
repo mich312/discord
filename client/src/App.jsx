@@ -60,6 +60,10 @@ function reducer(state, action) {
   switch (action.type) {
     case 'phase':
       return { ...state, phase: action.phase };
+    // Terminal startup failure. Distinct from a toast because there is no
+    // app behind it to return to — the alternative was an endless splash.
+    case 'fatal':
+      return { ...state, phase: 'fatal', fatal: action.text };
     case 'booted': {
       // Land on the first circle's overview page (channel: null), not in a
       // room — the landing zone is the front door.
@@ -252,10 +256,20 @@ export default function App() {
     const invite = parseInviteUrl(location);
     if (invite) controller.setPendingInvite(invite);
     controllerRef.current = controller;
-    openDb().then((db) => {
-      controller.db = db;
-      controller.boot().catch((e) => dispatch({ type: 'toast', text: e.message }));
-    });
+    openDb()
+      .then((db) => {
+        controller.db = db;
+        controller.boot().catch((e) => dispatch({ type: 'toast', text: e.message }));
+      })
+      // Private browsing and locked-down profiles reject openDb outright.
+      // This had no catch, so the rejection went unhandled and the app sat
+      // on the boot splash forever with nothing on screen to explain it.
+      .catch((e) =>
+        dispatch({
+          type: 'fatal',
+          text: `this browser will not let quorum store data (${e.message}). Private browsing usually causes this — try a normal window.`,
+        })
+      );
   }, []);
 
   // Sending side of device-linking: a signed-in device opened with a link URL
@@ -501,6 +515,14 @@ export default function App() {
     );
   }
 
+  if (state.phase === 'fatal') {
+    return (
+      <div className="boot-fatal">
+        <h1>quorum can't start</h1>
+        <p>{state.fatal}</p>
+      </div>
+    );
+  }
   if (state.phase === 'loading') {
     return <BootLoader />;
   }

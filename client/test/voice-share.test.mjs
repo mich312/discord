@@ -279,3 +279,38 @@ function window_stateless_sharing(vm) {
   vm.onState = prev;
   return captured.sharing;
 }
+
+test('the glare loser re-offers, so its rolled-back track is not lost forever', async () => {
+  // The bug this pins down: setRemoteDescription implicitly rolls back the
+  // loser's pending offer, discarding whatever it carried. The loser had
+  // already ANNOUNCED the share, so the winner renders a tile that never
+  // receives media — permanently, until someone leaves the call.
+  setupGlobals();
+  const sent = [];
+  const zoe = makeManager('zoe', sent); // larger name loses glare
+  await zoe.join('srv', 'lounge');
+  await zoe.handleEnvelope('srv', 'alice', { k: 'voice', ch: 'lounge', action: 'join' });
+  const peer = zoe.peers.get('alice');
+
+  // zoe's own renegotiation is in flight and has cleared renegotiateNeeded,
+  // exactly as renegotiate() leaves it just before setLocalDescription.
+  peer.pc.signalingState = 'have-local-offer';
+  peer.renegotiateNeeded = false;
+  sent.length = 0;
+
+  await zoe.handleEnvelope('srv', 'alice', {
+    k: 'rtc',
+    ch: 'lounge',
+    to: 'zoe',
+    type: 'offer',
+    sdp: 'x',
+  });
+
+  const answered = sent.some((c) => c.k === 'rtc' && c.type === 'answer');
+  assert.ok(answered, 'zoe still answers the winning offer');
+  const reOffered = sent.some((c) => c.k === 'rtc' && c.type === 'offer');
+  assert.ok(
+    reOffered || peer.renegotiateNeeded,
+    'and either re-offers immediately or is queued to re-offer once stable'
+  );
+});
