@@ -19,7 +19,7 @@ analysis; this is the current state.
 | Phase | Done | Open |
 |---|---|---|
 | **2** | CI gate, supply chain, deploy health gate + pinned host keys | §2.2 extract `applyEnvelope`/`AccountService`; §2.3 coverage for the named risky paths; §2.4 image-based deploy with fast rollback; §2.6 reproducible builds + integrity manifest for worker and wasm |
-| **3** | Per-group send locks (global hub mutex gone); hourly history sweep; recorded schema version with a rollback guard; bounded fan-out queues; opt-in blob TTL | Message-log GC (design in §3.4); disk quotas; publish the ceiling |
+| **3** | Per-group send locks (global hub mutex gone); hourly history sweep; recorded schema version with a rollback guard; bounded fan-out queues; opt-in blob TTL; published capacity limits | Message-log GC (design in §3.4); disk quotas; measured throughput |
 | **4** | `/healthz`; connect/disconnect/subscribe logging; `deploy/RUNBOOK.md`; actionable WebAuthn config failure; token-gated Prometheus metrics | Latency histograms; OpenTelemetry tracing; alert rules |
 | **5** | Dialog semantics + focus management on all overlays; WCAG AA contrast; iOS storage-eviction fix; drawer `aria-expanded`/`aria-controls` + labelled landmarks; 44px touch targets; `prefers-color-scheme` with a system-following default; rail unread badges; local message search; PWA offline shell | update prompt; mention badges; kept-history room indicator; voice participant cap |
 | **7** | `SECURITY.md`; `docs/THREAT_MODEL.md` | cargo-fuzz targets on protocol parsing; epoch state-machine simulation harness |
@@ -511,6 +511,16 @@ unimplemented here rather than half-verified, because it is the one change in
 this plan whose failure mode is permanent, unrecoverable data loss.
 
 Still open alongside it: disk quotas and alerting.
+
+### 3.7 Publish the ceiling — **done**
+
+`docs/CAPACITY.md` records every hard limit with the constant behind it, the
+structural limits that have no constant (the voice mesh, group size), and —
+separately and explicitly — the list of things that have **never been
+measured**. Throughput, concurrent connections and fan-out latency are in that
+second list. An unmeasured number stated confidently is worse than no number,
+and the latency histograms that would answer the third are still open in
+Phase 4.
 
 ### 3.5 Schema versioning and upgrades — **done**
 

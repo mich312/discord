@@ -17,6 +17,12 @@ The full design rationale lives in **[docs/BUILD_PLAN.md](docs/BUILD_PLAN.md)**;
 phases 1–7 of it are implemented. The plan's honest-assessment and
 threat-model sections still apply verbatim.
 
+Also worth reading before you run one for other people:
+**[docs/THREAT_MODEL.md](docs/THREAT_MODEL.md)** (what the encryption does and
+does not protect), **[docs/CAPACITY.md](docs/CAPACITY.md)** (the limits, and
+which of them have never been measured), and
+**[deploy/RUNBOOK.md](deploy/RUNBOOK.md)** (what to do when it breaks).
+
 ## What works
 
 - **Text channels** inside E2EE servers — channel structure and server
