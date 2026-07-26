@@ -80,6 +80,10 @@ pub struct Metrics {
     /// Expired kept-history rows removed by the hourly sweep. Zero forever
     /// means the sweep is not running.
     pub history_swept: Counter,
+    /// Subscribers cut loose for falling too far behind their outbound
+    /// queue. Lossless — they reconnect and catch up from the log — but it
+    /// looks to the user exactly like a lost message, so it must be visible.
+    pub subscribers_dropped: Counter,
 }
 
 impl Default for Metrics {
@@ -99,6 +103,7 @@ impl Default for Metrics {
             blob_bytes: Counter::default(),
             blob_tickets_refused: Counter::default(),
             history_swept: Counter::default(),
+            subscribers_dropped: Counter::default(),
         }
     }
 }
@@ -251,6 +256,14 @@ impl Metrics {
             "quorum_blob_tickets_refused_total",
             "Blob PUTs without a valid single-use ticket.",
             self.blob_tickets_refused.get(),
+        );
+        counter(
+            &mut out,
+            "quorum_subscribers_dropped_total",
+            "Subscribers disconnected for exceeding their outbound queue. Recoverable \
+             (they resubscribe from their last seq) but indistinguishable from a lost \
+             message to the person it happens to.",
+            self.subscribers_dropped.get(),
         );
         counter(
             &mut out,

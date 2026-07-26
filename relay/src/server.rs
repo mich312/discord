@@ -158,12 +158,73 @@ impl IceConfig {
     }
 }
 
+/// How many messages may be waiting for one connection before the relay
+/// stops queueing for it. A client that is merely on a slow link drains far
+/// below this; one sitting at the cap is not reading at all.
+///
+/// The number is a memory bound, not a latency one: a stalled subscriber
+/// used to grow its queue without limit, so a single suspended laptop in a
+/// busy circle was an unbounded allocation on the server.
+pub const MAX_QUEUE: usize = 512;
+
+/// A connection's outbound queue, plus how much is sitting in it.
+///
+/// The channel itself stays **unbounded on purpose**. The two callers are
+/// not alike: catch-up backfill pushes a whole backlog while the hub lock is
+/// held, where a bounded channel would either truncate the backlog silently
+/// or block every other circle behind one slow socket. So the bound is
+/// applied where it is safe — `offer`, used only for fan-out — and the depth
+/// is tracked explicitly rather than inferred.
+#[derive(Clone, Debug)]
+pub struct Outbound {
+    tx: mpsc::UnboundedSender<ServerMsg>,
+    depth: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl Outbound {
+    fn new() -> (Self, mpsc::UnboundedReceiver<ServerMsg>, Arc<std::sync::atomic::AtomicUsize>) {
+        let (tx, rx) = mpsc::unbounded_channel();
+        let depth = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        (Self { tx, depth: depth.clone() }, rx, depth)
+    }
+
+    /// Queue unconditionally. For this connection's own replies and its
+    /// catch-up backfill — dropping either loses data the client asked for
+    /// and has no way to notice.
+    fn send(&self, msg: ServerMsg) -> bool {
+        if self.tx.send(msg).is_ok() {
+            self.depth.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Queue if there is room. Returns false when the connection is gone or
+    /// too far behind, and the caller drops it.
+    ///
+    /// Dropping a slow subscriber is **lossless**: the relay is an ordered
+    /// log, so the client reconnects and resubscribes from its last seq and
+    /// receives everything it missed. That is the whole reason a bound is
+    /// safe here and nowhere else.
+    fn offer(&self, msg: ServerMsg) -> bool {
+        if self.depth.load(std::sync::atomic::Ordering::Relaxed) >= MAX_QUEUE {
+            return false;
+        }
+        self.send(msg)
+    }
+
+    fn same_channel(&self, other: &Self) -> bool {
+        self.tx.same_channel(&other.tx)
+    }
+}
+
 #[derive(Default)]
 pub struct Hub {
     /// group -> (user -> outbound channel)
-    subscribers: HashMap<String, HashMap<String, mpsc::UnboundedSender<ServerMsg>>>,
+    subscribers: HashMap<String, HashMap<String, Outbound>>,
     /// user -> outbound channel (for Welcome delivery)
-    online: HashMap<String, mpsc::UnboundedSender<ServerMsg>>,
+    online: HashMap<String, Outbound>,
     /// group -> send lock. Ordering only has to hold WITHIN a group, so
     /// serializing per group rather than globally lets unrelated circles
     /// append concurrently. See the Send arm.
@@ -426,7 +487,7 @@ fn verify_sig(pubkey: &[u8], message: &[u8], sig: &[u8]) -> bool {
 pub async fn handle_socket(mut socket: WebSocket, app: Arc<App>) {
     let Some(user) = authenticate(&mut socket, &app).await else { return };
 
-    let (tx, mut rx) = mpsc::unbounded_channel::<ServerMsg>();
+    let (tx, mut rx, depth) = Outbound::new();
     {
         // Register as online AND drain Welcomes queued while offline under a
         // single hold of the hub lock. This serializes against the Welcome
@@ -469,6 +530,10 @@ pub async fn handle_socket(mut socket: WebSocket, app: Arc<App>) {
             tokio::select! {
                 msg = rx.recv() => {
                     let Some(msg) = msg else { break };
+                    // Decrement as it leaves the queue, whether or not it
+                    // serializes: a message we drop here still freed its slot,
+                    // and leaking depth would strand the connection at the cap.
+                    depth.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
                     let Ok(text) = serde_json::to_string(&msg) else { continue };
                     if ws_tx.send(Message::Text(text.into())).await.is_err() {
                         break;
@@ -501,7 +566,7 @@ pub async fn handle_socket(mut socket: WebSocket, app: Arc<App>) {
         };
         let reply = handle_request(&app, &user, &tx, msg).await;
         if let Some(reply) = reply {
-            if tx.send(reply).is_err() {
+            if !tx.send(reply) {
                 break;
             }
         }
@@ -533,7 +598,7 @@ fn err(rid: u64, e: impl std::fmt::Display) -> Option<ServerMsg> {
 async fn handle_request(
     app: &Arc<App>,
     user: &str,
-    tx: &mpsc::UnboundedSender<ServerMsg>,
+    tx: &Outbound,
     msg: ClientMsg,
 ) -> Option<ServerMsg> {
     match msg {
@@ -800,7 +865,11 @@ async fn handle_request(
                         if peer == user {
                             return true;
                         }
-                        ch.send(out.clone()).is_ok()
+                        let kept = ch.offer(out.clone());
+                        if !kept {
+                            app.metrics.subscribers_dropped.inc();
+                        }
+                        kept
                     });
                 }
                 seq
@@ -873,7 +942,7 @@ async fn handle_request(
             // connect+drain (see handle_socket) — which would otherwise let a
             // Welcome be neither delivered nor drained.
             let hub = app.hub.lock().await;
-            let delivered = hub.online.get(&to).is_some_and(|ch| ch.send(out.clone()).is_ok());
+            let delivered = hub.online.get(&to).is_some_and(|ch| ch.offer(out.clone()));
             if delivered {
                 app.metrics.welcomes_delivered.inc();
             } else {
@@ -980,7 +1049,11 @@ async fn handle_request(
                     if peer == user {
                         return true;
                     }
-                    ch.send(out.clone()).is_ok()
+                    let kept = ch.offer(out.clone());
+                    if !kept {
+                        app.metrics.subscribers_dropped.inc();
+                    }
+                    kept
                 });
             }
             // Call nudge: an ephemeral reaches only live subscribers, so a
@@ -1203,6 +1276,75 @@ async fn require_admin(app: &App, group: &str, user: &str) -> Result<(), StoreEr
         Some(role) if role == ROLE_ADMIN => Ok(()),
         Some(_) => Err(StoreError::Backend(format!("admin of {group} required"))),
         None => Err(StoreError::Backend(format!("not a member of {group}"))),
+    }
+}
+
+#[cfg(test)]
+mod outbound_tests {
+    use super::{Outbound, MAX_QUEUE};
+    use crate::proto::ServerMsg;
+
+    fn msg(seq: u64) -> ServerMsg {
+        ServerMsg::Ok { rid: seq, seq: Some(seq) }
+    }
+
+    #[test]
+    fn fan_out_stops_at_the_cap() {
+        // The bug this closes: a suspended laptop in a busy circle grew its
+        // outbound queue without limit, on the server's heap.
+        let (tx, _rx, _depth) = Outbound::new();
+        for i in 0..MAX_QUEUE {
+            assert!(tx.offer(msg(i as u64)), "queue should accept up to the cap");
+        }
+        assert!(!tx.offer(msg(9999)), "past the cap the subscriber is refused, not queued");
+    }
+
+    #[test]
+    fn backfill_is_never_refused() {
+        // Catch-up must not be truncated: the client asked for it, it has no
+        // way to notice a gap, and dropping it is silent data loss.
+        let (tx, _rx, _depth) = Outbound::new();
+        for i in 0..(MAX_QUEUE * 2) {
+            assert!(tx.send(msg(i as u64)), "send() has no cap by design");
+        }
+    }
+
+    #[tokio::test]
+    async fn draining_makes_room_again() {
+        // The depth has to fall as the writer consumes, or one burst strands
+        // a healthy connection at the cap forever.
+        let (tx, mut rx, depth) = Outbound::new();
+        for i in 0..MAX_QUEUE {
+            assert!(tx.offer(msg(i as u64)));
+        }
+        assert!(!tx.offer(msg(1)));
+
+        // Mirror what the writer task does on each recv.
+        rx.recv().await.unwrap();
+        depth.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+
+        assert!(tx.offer(msg(2)), "one slot freed is one slot available");
+    }
+
+    #[test]
+    fn a_closed_connection_is_refused_by_both_paths() {
+        let (tx, rx, _depth) = Outbound::new();
+        drop(rx);
+        assert!(!tx.send(msg(1)));
+        assert!(!tx.offer(msg(2)));
+    }
+
+    #[test]
+    fn clones_share_one_queue() {
+        // The hub holds a clone per subscription; two subscriptions of the
+        // same connection must not each get their own budget.
+        let (tx, _rx, _depth) = Outbound::new();
+        let clone = tx.clone();
+        for i in 0..MAX_QUEUE {
+            assert!(tx.offer(msg(i as u64)));
+        }
+        assert!(!clone.offer(msg(1)), "the cap is per connection, not per subscription");
+        assert!(tx.same_channel(&clone));
     }
 }
 

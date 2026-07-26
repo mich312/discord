@@ -19,8 +19,8 @@ analysis; this is the current state.
 | Phase | Done | Open |
 |---|---|---|
 | **2** | CI gate, supply chain, deploy health gate + pinned host keys | §2.2 extract `applyEnvelope`/`AccountService`; §2.3 coverage for the named risky paths; §2.4 image-based deploy with fast rollback; §2.6 reproducible builds + integrity manifest for worker and wasm |
-| **3** | Per-group send locks (global hub mutex gone); hourly history sweep; recorded schema version with a rollback guard | Bounded outbound queues; blob and message GC; publish the ceiling |
-| **4** | `/healthz`; connect/disconnect/subscribe logging; `deploy/RUNBOOK.md`; actionable WebAuthn config failure | Prometheus metrics; OpenTelemetry tracing; alerting |
+| **3** | Per-group send locks (global hub mutex gone); hourly history sweep; recorded schema version with a rollback guard; bounded fan-out queues | Blob and message GC; publish the ceiling |
+| **4** | `/healthz`; connect/disconnect/subscribe logging; `deploy/RUNBOOK.md`; actionable WebAuthn config failure; token-gated Prometheus metrics | Latency histograms; OpenTelemetry tracing; alert rules |
 | **5** | Dialog semantics + focus management on all overlays; WCAG AA contrast; iOS storage-eviction fix; drawer `aria-expanded`/`aria-controls` + labelled landmarks; 44px touch targets; `prefers-color-scheme` with a system-following default; rail unread badges; local message search; PWA offline shell | update prompt; mention badges; kept-history room indicator; voice participant cap |
 | **7** | `SECURITY.md`; `docs/THREAT_MODEL.md` | cargo-fuzz targets on protocol parsing; epoch state-machine simulation harness |
 
@@ -439,11 +439,29 @@ beyond it) and move rate-limit state to shared storage. Until then, publish the
 real ceiling — hundreds of concurrent sockets on a small VPS — rather than
 leaving it implied.
 
-### 3.3 Backpressure
+### 3.3 Backpressure — **done**
 
-Outbound queues are unbounded (`server.rs:357`); a stalled client buffers in RAM
-until the 30-second ping fails. Bound the channels and disconnect slow consumers
-with a metric.
+Outbound queues were unbounded; a stalled client buffered in the relay's RAM
+until the 30-second ping failed. One suspended laptop in a busy circle was an
+unbounded server-side allocation.
+
+The bound is applied where it is safe rather than everywhere, because the two
+users of the queue are not alike:
+
+- **Fan-out** (`Outbound::offer`) refuses past `MAX_QUEUE` and the subscriber
+  is dropped. This is *lossless*: the relay is an ordered log, so the client
+  reconnects, resubscribes from its last seq, and receives everything it
+  missed. That property is the entire justification for the bound.
+- **Catch-up backfill and a connection's own replies** (`Outbound::send`) have
+  no cap. A bounded channel here would either truncate a backlog silently —
+  the client asked for it and cannot see the gap — or block on network
+  backpressure while the hub lock is held, putting every other circle behind
+  one slow socket and undoing §3.1.
+
+The channel therefore stays unbounded and the *depth* is tracked explicitly,
+decremented by the writer as each message leaves. `quorum_subscribers_dropped_total`
+counts the cuts: they are recoverable, but to the person it happens to they
+are indistinguishable from a lost message, so they must be visible.
 
 ### 3.4 Reclaim disk
 
