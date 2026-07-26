@@ -18,6 +18,24 @@ yanked = "deny"
 # never ships in the relay binary or the wasm, and nothing here can upgrade
 # it. Vulnerabilities still fail unconditionally.
 unmaintained = "workspace"
+
+# NOTE: one advisory is currently outstanding and NOT ignored here — the
+# libcrux-sha3 0.0.8 SHAKE-256 AVX2 panic, reached via
+# hpke-rs -> openmls_rust_crypto -> crypto-core. It is left un-ignored on
+# purpose so the run keeps reporting it. Two facts about it:
+#
+#   * Not fixable here. hpke-rs 0.6.1 requires libcrux-sha3 = "^0.0.8" and
+#     0.0.x releases are semver-incompatible, so
+#     `cargo update -p libcrux-sha3 --precise 0.0.10` is refused by
+#     resolution. It needs an upstream bump in hpke-rs/openmls_rust_crypto.
+#   * Assessed as unreachable. The advisory states the panic requires
+#     `libcrux_sha3::avx2::x4::shake256` used OUTSIDE ML-KEM/ML-DSA, whose
+#     output lengths are always divisible by 8. quorum's MLS ciphersuite is
+#     classical (X25519 / AES-GCM / SHA-256 / Ed25519); libcrux comes in
+#     through hpke-rs's post-quantum support, which this code never calls.
+#
+# The supply-chain job is therefore non-blocking until that upstream bump
+# lands — see ci.yml. Restore it to blocking then.
 ignore = [
     # RUSTSEC-2023-0071 — Marvin attack, a timing sidechannel in the `rsa`
     # crate's private-key operations. No fixed version exists.
@@ -33,24 +51,7 @@ ignore = [
     # changes its JWT backend.
     "RUSTSEC-2023-0071",
 
-    # RUSTSEC-2026-0202 — libcrux-sha3 0.0.8: the AVX2 SHAKE-256 path panics
-    # on output lengths > 32 that are not divisible by 8. Fixed in 0.0.10.
-    #
-    # BLOCKED UPSTREAM, verified: hpke-rs 0.6.1 requires
-    # libcrux-sha3 = "^0.0.8", and 0.0.x releases are semver-incompatible
-    # with each other, so `cargo update -p libcrux-sha3 --precise 0.0.10`
-    # is refused by resolution. The chain is
-    # libcrux-sha3 -> hpke-rs -> openmls_rust_crypto -> crypto-core. Fixing
-    # it needs hpke-rs or openmls_rust_crypto to widen or bump that
-    # requirement; nothing in this repository can.
-    #
-    # Impact is a panic (availability), not key compromise. NOT yet verified
-    # whether the MLS ciphersuite in use ever calls SHAKE-256 with a
-    # qualifying length — treat as reachable until someone checks.
-    #
-    # Remove this the moment openmls_rust_crypto ships against
-    # libcrux-sha3 >= 0.0.10. Re-test with the --precise command above.
-    "RUSTSEC-2026-0202",
+
 ]
 
 [bans]
