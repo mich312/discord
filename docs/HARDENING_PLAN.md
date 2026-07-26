@@ -458,14 +458,42 @@ store. Pin `DEPLOY_KNOWN_HOSTS` as a secret.
 release, Docker base images pinned by digest, and Renovate for updates. For a
 security product this is table stakes and currently absent.
 
-### 2.6 Extend integrity coverage to the worker and WASM
+### 2.6 Extend integrity coverage to the worker and WASM — **mostly done**
 
-`scripts/inject-sri.mjs` stamps SRI onto `index.html`'s `/assets/` tags and
-honestly documents that `worker.js`, `sw.js`, and the WASM have no tag to carry
-it. Close the gap with an integrity manifest the worker checks before
-instantiating, plus reproducible builds and published hashes — the only real
-answer to operator-served code. Note `build-wasm.sh:12-18` silently ships an
-unoptimized artifact when wasm-opt is missing; make that a hard failure in CI.
+**The unoptimized-wasm trap is closed.** `build-wasm.sh` shipped an
+unoptimized artifact with only a warning when wasm-opt was missing, so a
+release could silently differ from every local build for a reason nobody would
+think to look for — and the published hashes would then describe a binary
+nobody intended. `WASM_REQUIRE_OPT=1` makes it a hard failure; CI sets it.
+Locally it stays a warning, so a contributor without binaryen can still build.
+
+**The worker now verifies the wasm before instantiating it.** `worker.js`
+carries the SHA-384 this build shipped (stamped by
+`client/scripts/inject-integrity.mjs`) and refuses to `init()` anything else —
+a throw, not a console line, because running a crypto core that is not the one
+this build was tested with is worse than not running at all. In dev the
+placeholder is left literal and the check is skipped: the artifact changes on
+every rebuild, and a dev worker that would not boot is worse than no check.
+
+**Hashes are published.** `dist/integrity.json` lists every executable
+artifact — the asset bundles, `worker.js`, `sw.js`, `index.html`, and the
+crypto core — and CI prints it to the run summary and uploads it. That is what
+lets someone who does not trust the deployment fetch the files, hash them, and
+compare. `sw.js` is in the list even though nothing can enforce its hash at
+load time: the manifest exists for third-party verification, and the service
+worker is code.
+
+**What this does NOT buy, stated plainly:** it is no defence against a hostile
+operator, who serves `worker.js` and the manifest too and would change both.
+What it catches is the wasm being wrong *on its own* — a partial deploy, a
+stale or poisoned cache, a CDN out of step with the page.
+
+**Still open: reproducible builds.** The verification story now exists; the
+thing to verify *against* does not. Byte-for-byte reproducibility needs a
+pinned toolchain, a deterministic `wasm-pack`/`wasm-opt` invocation and
+`SOURCE_DATE_EPOCH` handling, and it has not been demonstrated. Until it is,
+`docs/THREAT_MODEL.md` §6.2 stands unchanged: operator-served code remains the
+single largest gap.
 
 ---
 

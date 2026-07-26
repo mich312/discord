@@ -107,8 +107,11 @@ the README and `SECURITY.md`.
 1. **Metadata is visible to the relay.** Who, when, how often, group sizes,
    call participation, push provider.
 2. **Web code delivery.** The operator serves the client and can target one
-   user. CSP and SRI narrow it; only reproducible builds and a packaged
-   client would close it.
+   user. CSP, SRI, the worker's wasm integrity check and the published
+   `integrity.json` narrow it — they catch the crypto core being wrong on its
+   own, and give an outside party something specific to verify. None of them
+   defends against the operator, who serves the checks too. Only reproducible
+   builds and a packaged client would close it.
 3. **Kept history trades forward secrecy**, per channel, opt-in.
 4. **Invite-link controls are server-enforced** and so bypassable by a
    malicious relay. Membership is not.

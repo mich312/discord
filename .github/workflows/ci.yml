@@ -207,13 +207,35 @@ jobs:
         run: sudo apt-get update && sudo apt-get install -y binaryen
 
       - name: build wasm
+        # Hard-fail rather than quietly shipping an unoptimized artifact: a
+        # release that silently differs from every local build is a difference
+        # nobody thinks to look for.
+        env:
+          WASM_REQUIRE_OPT: '1'
         run: ./crypto-core/build-wasm.sh
 
       - run: npm ci
         working-directory: client
 
-      # Also exercises scripts/inject-sri.mjs, which exits non-zero if the
-      # build layout changes such that no asset tags get stamped.
+      # Also exercises scripts/inject-sri.mjs (non-zero if no asset tags get
+      # stamped) and scripts/inject-integrity.mjs (non-zero if the wasm is
+      # missing, ambiguous, or the worker's placeholder has been renamed).
       - name: vite build + SRI
         run: npm run build
         working-directory: client
+
+      # Publish the hashes. This is what makes a deployment checkable by
+      # someone who does not trust the server: fetch the files, hash them,
+      # compare against this log. It is the verification half of §2.6 —
+      # byte-for-byte reproducible builds are the other half and are NOT done.
+      - name: publish the integrity manifest
+        run: |
+          echo "### Build integrity" >> "$GITHUB_STEP_SUMMARY"
+          echo '```json' >> "$GITHUB_STEP_SUMMARY"
+          cat client/dist/integrity.json >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: integrity-manifest
+          path: client/dist/integrity.json
