@@ -32,22 +32,18 @@ async fn main() -> anyhow::Result<()> {
         // Parsed once, at startup, so a typo is a warning in the boot log
         // rather than an hourly one nobody reads. 0 or unparseable means off,
         // which keeps a mistyped value from being read as "delete everything".
-        let blob_ttl = match std::env::var("BLOB_TTL_DAYS") {
-            Ok(v) => match v.trim().parse::<u64>() {
-                Ok(days) if days > 0 => {
-                    tracing::info!("attachments will be deleted after {days} days");
-                    Some(std::time::Duration::from_secs(days * 86_400))
-                }
-                _ => {
-                    tracing::warn!(
-                        "BLOB_TTL_DAYS={v:?} is not a positive whole number of days; \
-                         attachments will be kept forever"
-                    );
-                    None
-                }
-            },
-            Err(_) => None,
-        };
+        let raw_ttl = std::env::var("BLOB_TTL_DAYS").ok();
+        let blob_ttl = relay::blobs::blob_ttl_from(raw_ttl.as_deref());
+        match (&raw_ttl, blob_ttl) {
+            (Some(_), Some(d)) => {
+                tracing::info!("attachments will be deleted after {} days", d.as_secs() / 86_400);
+            }
+            (Some(v), None) => tracing::warn!(
+                "BLOB_TTL_DAYS={v:?} is not a positive whole number of days; \
+                 attachments will be kept forever"
+            ),
+            _ => {}
+        }
         tokio::spawn(async move {
             let mut tick = tokio::time::interval(std::time::Duration::from_secs(3600));
             loop {

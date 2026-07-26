@@ -115,3 +115,80 @@ test('unreadable storage leaves it off rather than throwing', () => {
   assert.equal(saveRelayOnly(true, fakeStorage({}, { fail: true })), false);
   assert.equal(loadRelayOnly(undefined), false);
 });
+
+/* --------------------------------------- the cap as behaviour, not a rule -- */
+
+import { VoiceManager } from '../src/lib/voice.js';
+
+class FakeTrack {
+  constructor(kind) {
+    this.kind = kind;
+    this.readyState = 'live';
+    this.enabled = true;
+  }
+  addEventListener() {}
+  stop() {
+    this.readyState = 'ended';
+  }
+}
+
+/** A navigator whose getUserMedia records whether it was ever called. */
+function stubMedia() {
+  const calls = { count: 0 };
+  globalThis.RTCPeerConnection = class {};
+  Object.defineProperty(globalThis, 'navigator', {
+    configurable: true,
+    value: {
+      mediaDevices: {
+        getUserMedia: async () => {
+          calls.count += 1;
+          const tracks = [new FakeTrack('audio')];
+          return {
+            getTracks: () => tracks,
+            getAudioTracks: () => tracks,
+            getVideoTracks: () => [],
+          };
+        },
+      },
+    },
+  });
+  return calls;
+}
+
+function manager(name = 'alice') {
+  return new VoiceManager({ me: name, send: async () => {}, onState: () => {} });
+}
+
+test('joining a full call is refused before the microphone is opened', async () => {
+  // The ordering is the point. Refusing a call is bad; refusing it having
+  // just turned on someone's mic is worse, and the mic indicator lighting up
+  // for a call you never joined is the kind of thing people remember.
+  const mic = stubMedia();
+  const vm = manager();
+  for (let i = 0; i < MESH_LIMIT; i += 1) vm.track('srv', 'lounge', `p${i}`, true, false);
+
+  await assert.rejects(() => vm.join('srv', 'lounge'), /full/i);
+  assert.equal(mic.count, 0, 'getUserMedia must not have been called');
+  assert.equal(vm.active, null, 'and no call is left half-started');
+});
+
+test('joining a call with room still works', async () => {
+  // The guard must not break the ordinary path — a cap that refuses everyone
+  // would pass a test that only checks refusals.
+  const mic = stubMedia();
+  const vm = manager();
+  for (let i = 0; i < MESH_LIMIT - 1; i += 1) vm.track('srv', 'lounge', `p${i}`, true, false);
+
+  await vm.join('srv', 'lounge');
+  assert.equal(mic.count, 1, 'the mic opens exactly once');
+  assert.equal(vm.active?.channel, 'lounge');
+  await vm.leave();
+});
+
+test('an empty room is joinable', async () => {
+  const mic = stubMedia();
+  const vm = manager();
+  await vm.join('srv', 'lounge');
+  assert.equal(mic.count, 1);
+  await vm.leave();
+});

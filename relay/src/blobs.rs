@@ -58,6 +58,20 @@ impl UploadTickets {
     }
 }
 
+/// Parse `BLOB_TTL_DAYS` into a retention window. `None` means keep
+/// everything, which is the default and the behaviour every existing
+/// deployment already has.
+///
+/// Anything that is not a positive whole number of days — empty, zero,
+/// negative, `"forever"`, a typo — yields `None`. This direction is not
+/// arbitrary: the failure mode of guessing wrong here is deleting
+/// attachments nobody asked to delete, so an unparseable value must mean
+/// *off*, never *sweep*.
+pub fn blob_ttl_from(value: Option<&str>) -> Option<Duration> {
+    let days: u64 = value?.trim().parse().ok()?;
+    (days > 0).then(|| Duration::from_secs(days * 86_400))
+}
+
 pub struct BlobStore {
     dir: PathBuf,
 }
@@ -236,6 +250,29 @@ mod sweep_tests {
 
         assert_eq!(store.sweep_older_than(Duration::from_secs(1), later(365)).await.unwrap(), 0);
         assert!(nested.is_dir());
+    }
+
+    #[test]
+    fn a_ttl_is_off_unless_it_is_a_positive_whole_number_of_days() {
+        // This decides whether a deletion job runs at all. Guessing wrong
+        // deletes attachments nobody asked to delete, so everything that is
+        // not clearly a positive count of days must mean OFF.
+        assert_eq!(blob_ttl_from(None), None, "unset keeps everything");
+        assert_eq!(blob_ttl_from(Some("")), None);
+        assert_eq!(blob_ttl_from(Some("   ")), None);
+        assert_eq!(blob_ttl_from(Some("0")), None, "zero is off, not delete-everything");
+        assert_eq!(blob_ttl_from(Some("-5")), None);
+        assert_eq!(blob_ttl_from(Some("forever")), None);
+        assert_eq!(blob_ttl_from(Some("30d")), None, "a unit suffix is a typo, not 30");
+        assert_eq!(blob_ttl_from(Some("7.5")), None, "fractional days are a typo too");
+    }
+
+    #[test]
+    fn a_valid_ttl_parses_to_that_many_days() {
+        assert_eq!(blob_ttl_from(Some("1")), Some(Duration::from_secs(86_400)));
+        assert_eq!(blob_ttl_from(Some("180")), Some(Duration::from_secs(180 * 86_400)));
+        // Surrounding whitespace is ordinary in a .env file.
+        assert_eq!(blob_ttl_from(Some(" 30 ")), Some(Duration::from_secs(30 * 86_400)));
     }
 
     #[tokio::test]

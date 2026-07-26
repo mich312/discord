@@ -27,7 +27,23 @@ async fn spawn_relay_with_admins(admins: &[&str]) -> SocketAddr {
     spawn_relay_configured(true, admins).await
 }
 
+/// Like `spawn_relay`, but hands back the `App` too so a test can read the
+/// metrics the request path actually incremented. Asserting on
+/// `Metrics::render()` alone proves the formatter works, not that anything is
+/// wired to it.
+async fn spawn_relay_with_app() -> (SocketAddr, std::sync::Arc<App>) {
+    let (addr, app) = spawn_relay_parts(true, &[]).await;
+    (addr, app)
+}
+
 async fn spawn_relay_configured(open_registration: bool, admins: &[&str]) -> SocketAddr {
+    spawn_relay_parts(open_registration, admins).await.0
+}
+
+async fn spawn_relay_parts(
+    open_registration: bool,
+    admins: &[&str],
+) -> (SocketAddr, std::sync::Arc<App>) {
     let blobs = relay::blobs::BlobStore::new(
         tempfile::tempdir().map(|d| d.keep()).unwrap(),
     )
@@ -41,10 +57,11 @@ async fn spawn_relay_configured(open_registration: bool, admins: &[&str]) -> Soc
     );
     let listener = tokio::net::TcpListener::bind("127.0.0.1:0").await.unwrap();
     let addr = listener.local_addr().unwrap();
+    let served = app.clone();
     tokio::spawn(async move {
-        axum::serve(listener, relay::router(app)).await.unwrap();
+        axum::serve(listener, relay::router(served)).await.unwrap();
     });
-    addr
+    (addr, app)
 }
 
 struct TestClient {
@@ -840,4 +857,130 @@ async fn backup_blob_roundtrips_per_user() {
     assert_eq!(reply["payload"], B64.encode(b"alice-circles"));
     let reply = bob.request(json!({"t": "backup_get"})).await;
     assert!(reply.get("payload").is_none() || reply["payload"].is_null(), "backups are per-user");
+}
+
+/// The metrics unit tests cover `render()` — that the formatter emits valid
+/// exposition. They cannot catch instrumentation attached to the wrong branch,
+/// which is the actual risk: a counter that never moves reads as "healthy" and
+/// the alert rules in `deploy/alerts.yml` are built on these exact names.
+/// So this drives the real request path and asserts the real counters moved.
+#[tokio::test]
+async fn the_request_path_actually_moves_the_counters() {
+    let (addr, app) = spawn_relay_with_app().await;
+    let m = &app.metrics;
+
+    assert_eq!(m.ws_connections.get(), 0);
+    assert_eq!(m.messages_appended.get(), 0);
+    assert_eq!(m.registrations.get(), 0);
+
+    let mut alice =
+        TestClient::connect(addr, ChatClient::new("alice").unwrap(), "alice").await.unwrap();
+    assert_eq!(m.ws_connections.get(), 1, "a completed handshake counts a connection");
+    assert_eq!(m.registrations.get(), 1, "a first-time handle counts a registration");
+
+    alice.mls.create_group("g1").unwrap();
+    alice.request(json!({"t": "create_group", "group": "g1"})).await;
+    alice.send_group("g1", "one").await;
+    alice.send_group("g1", "two").await;
+    assert_eq!(m.messages_appended.get(), 2, "each accepted append is counted once");
+
+    // Latency is observed on the success path only — a rejected send must not
+    // land in the histogram, or the p95 alert reports on failures.
+    let rendered = m.render(relay::metrics::Snapshot::default());
+    assert!(
+        rendered.contains("quorum_append_duration_seconds_count 2"),
+        "one latency sample per accepted append:\n{rendered}"
+    );
+
+    // A reconnect with the same identity is a connection but NOT a new
+    // registration — the handle is already pinned.
+    let _alice2 =
+        TestClient::connect(addr, ChatClient::new("alice2").unwrap(), "alice2").await.unwrap();
+    assert_eq!(m.ws_connections.get(), 2);
+    assert_eq!(m.registrations.get(), 2);
+}
+
+/// Sending to a group you are not in must be counted as a rejection, not
+/// silently dropped — `not_a_member` is the label an operator watches when
+/// someone reports "my messages vanish".
+#[tokio::test]
+async fn a_refused_send_is_counted_and_never_reaches_the_histogram() {
+    let (addr, app) = spawn_relay_with_app().await;
+    let m = &app.metrics;
+
+    let mut alice =
+        TestClient::connect(addr, ChatClient::new("alice").unwrap(), "alice").await.unwrap();
+    alice.mls.create_group("g1").unwrap();
+    alice.request(json!({"t": "create_group", "group": "g1"})).await;
+
+    let mut mallory =
+        TestClient::connect(addr, ChatClient::new("mallory").unwrap(), "mallory").await.unwrap();
+    let reply = mallory
+        .request(json!({"t": "send", "group": "g1", "epoch": 0, "payload": B64.encode("nope")}))
+        .await;
+    assert_eq!(reply["t"], "error", "a non-member send must be refused");
+
+    assert_eq!(m.send_rejections.not_a_member.get(), 1);
+    assert_eq!(m.messages_appended.get(), 0, "nothing was appended");
+    let rendered = m.render(relay::metrics::Snapshot::default());
+    assert!(
+        rendered.contains("quorum_append_duration_seconds_count 0"),
+        "a refused send must not be timed:\n{rendered}"
+    );
+}
+
+/// The outbound queue's depth is decremented by the writer task as each
+/// message leaves. The unit test in `server.rs` mirrors that by hand, which
+/// proves the mirror — not the writer. If the real writer stopped
+/// decrementing, every connection would strand at MAX_QUEUE and this is the
+/// only test that would notice.
+#[tokio::test]
+async fn a_connection_keeps_receiving_past_the_queue_bound() {
+    let (addr, app) = spawn_relay_with_app().await;
+
+    let mut bob = TestClient::connect(addr, ChatClient::new("bob").unwrap(), "bob").await.unwrap();
+    bob.publish_kps(1).await;
+    let mut alice =
+        TestClient::connect(addr, ChatClient::new("alice").unwrap(), "alice").await.unwrap();
+    alice.mls.create_group("g1").unwrap();
+    alice.request(json!({"t": "create_group", "group": "g1"})).await;
+    let kp = alice.request(json!({"t": "fetch_kp", "user": "bob"})).await;
+    let kp_bytes = B64.decode(kp["payload"].as_str().unwrap()).unwrap();
+    let kp_pubkey = B64.decode(kp["pubkey"].as_str().unwrap()).unwrap();
+    let add = alice.mls.add_member("g1", &kp_bytes, "bob", &kp_pubkey).unwrap();
+    alice.mls.merge_staged_commit("g1").unwrap();
+    let epoch = alice.mls.epoch("g1").unwrap();
+    let reply = alice
+        .request(json!({"t": "send", "group": "g1", "epoch": epoch, "payload": B64.encode(&add.commit)}))
+        .await;
+    let commit_seq = reply["seq"].as_u64().unwrap();
+    alice.request(json!({"t": "allow", "group": "g1", "user": "bob"})).await;
+    alice
+        .request(json!({
+            "t": "welcome", "to": "bob", "group": "g1",
+            "after": commit_seq, "payload": B64.encode(&add.welcome),
+        }))
+        .await;
+    let welcome = bob.recv_until(|m| m["t"] == "welcome").await;
+    let payload = B64.decode(welcome["payload"].as_str().unwrap()).unwrap();
+    bob.mls.join_from_welcome(&payload).unwrap();
+    let after = welcome["after"].as_u64().unwrap();
+    bob.request(json!({"t": "subscribe", "group": "g1", "after": after})).await;
+
+    // Comfortably more than MAX_QUEUE, drained as they arrive.
+    let total = relay::server::MAX_QUEUE + 50;
+    for i in 0..total {
+        alice.send_group("g1", &format!("m{i}")).await;
+        let msg = bob.recv_until(|m| m["t"] == "msg").await;
+        let payload = B64.decode(msg["payload"].as_str().unwrap()).unwrap();
+        bob.mls.process_incoming(&payload).unwrap();
+    }
+
+    assert_eq!(
+        app.metrics.subscribers_dropped.get(),
+        0,
+        "a subscriber that keeps up must never be cut — if this fires, the writer \
+         stopped decrementing the queue depth"
+    );
+    assert_eq!(app.metrics.messages_appended.get() as usize, total + 1, "commit + {total} messages");
 }

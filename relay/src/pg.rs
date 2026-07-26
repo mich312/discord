@@ -15,6 +15,27 @@ use sqlx::{postgres::PgPoolOptions, PgPool, Row};
 /// CREATE TABLE IF NOT EXISTS batch in `migrate` handles those either way.
 pub const SCHEMA_VERSION: i32 = 1;
 
+/// Should this binary refuse to run against a database at version `found`?
+///
+/// Extracted from `migrate` so the comparison itself is testable without a
+/// Postgres. It is a one-line rule with an outsized blast radius: get it
+/// backwards and either every upgrade refuses to boot, or the rollback
+/// corruption this exists to prevent happens silently.
+///
+/// `None` (no row yet) is a *fresh or pre-versioning* database, which is
+/// exactly the case that must be allowed — every relay built before this
+/// landed has no row, and refusing them would brick the upgrade that
+/// introduces versioning.
+pub fn schema_refusal(found: Option<i32>) -> Option<String> {
+    match found {
+        Some(v) if v > SCHEMA_VERSION => Some(format!(
+            "database is at schema version {v}, but this relay understands {SCHEMA_VERSION}. \
+             It was written by a newer build — upgrade the relay rather than rolling it back."
+        )),
+        _ => None,
+    }
+}
+
 pub struct PgStore {
     pool: PgPool,
 }
@@ -192,12 +213,8 @@ impl PgStore {
                 .fetch_optional(&self.pool)
                 .await
                 .map_err(backend)?;
-        if found.is_some_and(|v| v > SCHEMA_VERSION) {
-            return Err(StoreError::Backend(format!(
-                "database is at schema version {}, but this relay understands {SCHEMA_VERSION}. \
-                 It was written by a newer build — upgrade the relay rather than rolling it back.",
-                found.unwrap_or_default()
-            )));
+        if let Some(why) = schema_refusal(found) {
+            return Err(StoreError::Backend(why));
         }
         sqlx::query(
             "INSERT INTO schema_version (id, version) VALUES (1, $1)
@@ -969,5 +986,43 @@ impl Store for PgStore {
             Err(StoreError::InviteInvalid) => Ok(false),
             Err(e) => Err(e),
         }
+    }
+}
+
+#[cfg(test)]
+mod schema_tests {
+    use super::*;
+
+    #[test]
+    fn a_database_from_a_newer_relay_is_refused() {
+        // The whole point: rolling the binary back past a destructive
+        // migration must fail loudly rather than operate on a shape it does
+        // not understand.
+        let why = schema_refusal(Some(SCHEMA_VERSION + 1)).expect("must refuse");
+        assert!(why.contains(&(SCHEMA_VERSION + 1).to_string()), "{why}");
+        assert!(why.contains(&SCHEMA_VERSION.to_string()), "{why}");
+        assert!(why.contains("upgrade the relay"), "the message must say what to do: {why}");
+    }
+
+    #[test]
+    fn the_current_version_runs() {
+        assert_eq!(schema_refusal(Some(SCHEMA_VERSION)), None, "equal is not newer");
+    }
+
+    #[test]
+    fn an_older_database_is_brought_forward_rather_than_refused() {
+        // Older is the ordinary upgrade path; the CREATE TABLE IF NOT EXISTS
+        // batch handles it. Refusing here would block every upgrade.
+        assert_eq!(schema_refusal(Some(SCHEMA_VERSION - 1)), None);
+        assert_eq!(schema_refusal(Some(0)), None);
+        assert_eq!(schema_refusal(Some(i32::MIN)), None);
+    }
+
+    #[test]
+    fn a_database_with_no_version_row_is_allowed() {
+        // Every relay built before versioning landed has no row. Refusing
+        // them would brick the very upgrade that introduces versioning —
+        // this is the case most likely to be got wrong.
+        assert_eq!(schema_refusal(None), None);
     }
 }
