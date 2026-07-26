@@ -190,6 +190,7 @@ relay).
 | `RUST_LOG` | unset | standard `tracing` filter, e.g. `relay=debug`. The relay logs connect/disconnect at info and subscribe at debug |
 | `RP_ID` / `RP_ORIGIN` | `localhost` / `http://localhost:9601` | WebAuthn relying party — must match the origin users load the client from |
 | `RELAY_ADMINS` | unset | comma-separated handles treated as global admins: they can manage any group's ACL/roles and list all users/groups — metadata only, they cannot read messages |
+| `METRICS_TOKEN` | unset | unset = `/metrics` returns 404 and no metrics are served at all. Set it to enable a Prometheus scrape at `/metrics`, authenticated with `Authorization: Bearer <token>`. Treat it as a secret: the metrics are pure metadata — online counts, circle counts, message rates — which is exactly what the relay is otherwise the only party to see |
 
 Membership roles: whoever creates a group is its admin; admins add
 members, manage invites, and promote/demote via the roster. This gates

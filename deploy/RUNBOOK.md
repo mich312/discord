@@ -20,7 +20,25 @@ docker compose logs -f --tail=100 quorum
 
 # Turn up detail (connect/disconnect are info; subscribe is debug)
 RUST_LOG=relay=debug docker compose up -d quorum
+
+# Numbers, if you set METRICS_TOKEN in .env
+curl -sH "Authorization: Bearer $METRICS_TOKEN" localhost/metrics
 ```
+
+`/metrics` is **off unless `METRICS_TOKEN` is set** — it returns 404, not 401,
+so an unconfigured relay does not advertise it. Everything it serves is
+metadata (who is online, how many circles, how fast they are talking), which
+is the one thing a relay operator can see and nobody else should. If you point
+Prometheus at it, put the token in the scrape config and keep the endpoint off
+the public internet.
+
+The three counters worth an alert:
+
+| Metric | Why |
+|---|---|
+| `quorum_ws_auth_failures_total{reason="unregistered"}` | climbing on its own is someone enumerating handles |
+| `quorum_push_total{outcome="failed"}` | all-failing is a lost VAPID key — see *Push notifications stopped* |
+| `quorum_history_swept_total` | flat at zero forever means the retention sweep is not running |
 
 State that must survive lives in exactly three places, and one of them is
 not where you would look:
