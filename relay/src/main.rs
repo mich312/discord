@@ -29,6 +29,25 @@ async fn main() -> anyhow::Result<()> {
     // and the query is a single indexed DELETE.
     {
         let app = app.clone();
+        // Parsed once, at startup, so a typo is a warning in the boot log
+        // rather than an hourly one nobody reads. 0 or unparseable means off,
+        // which keeps a mistyped value from being read as "delete everything".
+        let blob_ttl = match std::env::var("BLOB_TTL_DAYS") {
+            Ok(v) => match v.trim().parse::<u64>() {
+                Ok(days) if days > 0 => {
+                    tracing::info!("attachments will be deleted after {days} days");
+                    Some(std::time::Duration::from_secs(days * 86_400))
+                }
+                _ => {
+                    tracing::warn!(
+                        "BLOB_TTL_DAYS={v:?} is not a positive whole number of days; \
+                         attachments will be kept forever"
+                    );
+                    None
+                }
+            },
+            Err(_) => None,
+        };
         tokio::spawn(async move {
             let mut tick = tokio::time::interval(std::time::Duration::from_secs(3600));
             loop {
@@ -44,6 +63,22 @@ async fn main() -> anyhow::Result<()> {
                         tracing::info!("retention sweep removed {n} expired history entries");
                     }
                     Err(e) => tracing::warn!("retention sweep failed: {e}"),
+                }
+
+                // Attachment blobs, if the operator opted in. Off by default:
+                // deleting someone's attachments is not a behaviour anyone
+                // should acquire by upgrading. Age-based, because the relay
+                // cannot know which blobs are still referenced — the id lives
+                // inside the encrypted message that points at it.
+                if let Some(ttl) = blob_ttl {
+                    match app.blobs.sweep_older_than(ttl, std::time::SystemTime::now()).await {
+                        Ok(0) => {}
+                        Ok(n) => {
+                            app.metrics.blobs_swept.add(n);
+                            tracing::info!("blob sweep removed {n} attachments past BLOB_TTL_DAYS");
+                        }
+                        Err(e) => tracing::warn!("blob sweep failed: {e}"),
+                    }
                 }
             }
         });

@@ -80,6 +80,9 @@ pub struct Metrics {
     /// Expired kept-history rows removed by the hourly sweep. Zero forever
     /// means the sweep is not running.
     pub history_swept: Counter,
+    /// Attachments deleted by the blob sweep. Only moves when BLOB_TTL_DAYS
+    /// is set.
+    pub blobs_swept: Counter,
     /// Subscribers cut loose for falling too far behind their outbound
     /// queue. Lossless — they reconnect and catch up from the log — but it
     /// looks to the user exactly like a lost message, so it must be visible.
@@ -103,6 +106,7 @@ impl Default for Metrics {
             blob_bytes: Counter::default(),
             blob_tickets_refused: Counter::default(),
             history_swept: Counter::default(),
+            blobs_swept: Counter::default(),
             subscribers_dropped: Counter::default(),
         }
     }
@@ -264,6 +268,13 @@ impl Metrics {
              (they resubscribe from their last seq) but indistinguishable from a lost \
              message to the person it happens to.",
             self.subscribers_dropped.get(),
+        );
+        counter(
+            &mut out,
+            "quorum_blobs_swept_total",
+            "Attachments deleted for exceeding BLOB_TTL_DAYS. Flat at zero when the \
+             setting is unset, which is the default.",
+            self.blobs_swept.get(),
         );
         counter(
             &mut out,

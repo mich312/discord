@@ -19,7 +19,7 @@ analysis; this is the current state.
 | Phase | Done | Open |
 |---|---|---|
 | **2** | CI gate, supply chain, deploy health gate + pinned host keys | §2.2 extract `applyEnvelope`/`AccountService`; §2.3 coverage for the named risky paths; §2.4 image-based deploy with fast rollback; §2.6 reproducible builds + integrity manifest for worker and wasm |
-| **3** | Per-group send locks (global hub mutex gone); hourly history sweep; recorded schema version with a rollback guard; bounded fan-out queues | Blob and message GC; publish the ceiling |
+| **3** | Per-group send locks (global hub mutex gone); hourly history sweep; recorded schema version with a rollback guard; bounded fan-out queues; opt-in blob TTL | Message-log GC (design in §3.4); disk quotas; publish the ceiling |
 | **4** | `/healthz`; connect/disconnect/subscribe logging; `deploy/RUNBOOK.md`; actionable WebAuthn config failure; token-gated Prometheus metrics | Latency histograms; OpenTelemetry tracing; alert rules |
 | **5** | Dialog semantics + focus management on all overlays; WCAG AA contrast; iOS storage-eviction fix; drawer `aria-expanded`/`aria-controls` + labelled landmarks; 44px touch targets; `prefers-color-scheme` with a system-following default; rail unread badges; local message search; PWA offline shell | update prompt; mention badges; kept-history room indicator; voice participant cap |
 | **7** | `SECURITY.md`; `docs/THREAT_MODEL.md` | cargo-fuzz targets on protocol parsing; epoch state-machine simulation harness |
@@ -463,16 +463,54 @@ decremented by the writer as each message leaves. `quorum_subscribers_dropped_to
 counts the cuts: they are recoverable, but to the person it happens to they
 are indistinguishable from a lost message, so they must be visible.
 
-### 3.4 Reclaim disk
+### 3.4 Reclaim disk — history and blobs done, messages open
 
-Nothing garbage-collects. `messages` rows are deleted only when a whole group is
-deleted (`pg.rs:288-294`). Blobs are never deleted — `BlobStore` has no `delete`
-(`blobs.rs:30-48`). History expiry is **lazy only**, triggered inside
-`history_after` (`store.rs:413`, `pg.rs:443`), so an abandoned channel's expired
-ciphertext lives forever, quietly contradicting the auto-delete promise.
+Nothing garbage-collected. History expiry was **lazy only**, triggered inside
+`history_after`, so an abandoned channel's expired ciphertext lived forever,
+quietly contradicting the auto-delete promise. Blobs were never deleted at all.
 
-**Fix:** a periodic sweeper for expired history, a message retention policy, a
-blob GC keyed on referenced ids, plus disk quotas and alerting.
+**History: done.** An hourly sweeper deletes expired entries everywhere, not
+just in rooms someone still opens.
+
+**Blobs: done, and not the way this plan originally specified.** The original
+fix said "a blob GC keyed on referenced ids". *That cannot be built here.* A
+blob id lives inside the encrypted message that refers to it, so the relay
+genuinely does not know which blobs are still wanted; reference counting would
+require reading plaintext, which is the one thing the design forbids. Age is
+the only honest policy available.
+
+So `BLOB_TTL_DAYS` deletes attachments older than N days, **off by default** —
+silently deleting a user's attachments is not a behaviour anyone should
+acquire by upgrading. Its cost is real and stated rather than hidden: an old
+attachment can 404 while the message referring to it is still readable, so the
+TTL must be set above the longest kept-history retention in use. The sweep
+filters on `path_for`, i.e. only names that are valid blob ids — which is what
+keeps `vapid.key` out of it. That file shares the directory and its loss
+silently kills every push subscription on the deployment, so this is not a
+detail: it is the failure mode the runbook opens with.
+
+**Messages: still open, and the design constraint is the point.** The
+`messages` table is the MLS log and is never pruned. Naive age-based pruning
+would be **unsafe**: an application message is content, but a *commit* is the
+epoch chain, and a device that has not processed a commit cannot advance to
+any later epoch. Deleting one strands that device permanently.
+
+A safe implementation therefore has to:
+
+1. Persist the `commit` flag (currently passed to `append_message` for the
+   epoch CAS but not stored), via an additive column.
+2. Backfill it as `true` for pre-existing rows — conservative, because a row
+   whose kind is unknown must never be deleted.
+3. Prune only non-commit rows past a TTL, and never a commit under any
+   circumstance.
+
+The client side already permits this: its cursor is
+`lastSeq = Math.max(lastSeq, seq)`, a high-water mark rather than a
+contiguity check, so gaps in `seq` do not strand a subscriber. Left
+unimplemented here rather than half-verified, because it is the one change in
+this plan whose failure mode is permanent, unrecoverable data loss.
+
+Still open alongside it: disk quotas and alerting.
 
 ### 3.5 Schema versioning and upgrades — **done**
 

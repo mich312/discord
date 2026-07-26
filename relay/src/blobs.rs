@@ -96,6 +96,58 @@ impl BlobStore {
             Err(e) => Err(e.to_string()),
         }
     }
+
+    /// Delete blobs last modified more than `max_age` ago. Returns how many
+    /// went. Only called when `BLOB_TTL_DAYS` is set — the default is still
+    /// to keep everything, because silently deleting a user's attachments is
+    /// not a default anyone should get by upgrading.
+    ///
+    /// **Age, not reference counting.** The relay cannot do better: a blob id
+    /// lives inside the encrypted message that refers to it, so the server
+    /// genuinely does not know which blobs are still wanted. Reference-based
+    /// GC would require reading plaintext, which is the one thing this design
+    /// forbids. Age is the only honest policy available, and its cost — an
+    /// old attachment 404s while its message is still readable — is real and
+    /// documented rather than hidden.
+    ///
+    /// The filter is `path_for`: only names that are *valid blob ids* are
+    /// considered. That is what keeps `vapid.key` — which shares this
+    /// directory and whose loss silently kills every push subscription on the
+    /// deployment — out of the sweep, since a dot is not in the id alphabet.
+    ///
+    /// `now` is injected so the age rule can be tested without backdating
+    /// file timestamps.
+    pub async fn sweep_older_than(
+        &self,
+        max_age: Duration,
+        now: std::time::SystemTime,
+    ) -> std::io::Result<u64> {
+        let mut removed = 0;
+        let mut entries = tokio::fs::read_dir(&self.dir).await?;
+        while let Some(entry) = entries.next_entry().await? {
+            let name = entry.file_name();
+            let Some(name) = name.to_str() else { continue };
+            // Anything that is not a well-formed blob id is not ours to delete.
+            if self.path_for(name).is_none() {
+                continue;
+            }
+            let Ok(meta) = entry.metadata().await else { continue };
+            if !meta.is_file() {
+                continue;
+            }
+            // A clock that moved backwards yields an Err here; treat that as
+            // "not old enough" rather than deleting on a bad timestamp.
+            let old = meta
+                .modified()
+                .ok()
+                .and_then(|m| now.duration_since(m).ok())
+                .is_some_and(|age| age > max_age);
+            if old && tokio::fs::remove_file(entry.path()).await.is_ok() {
+                removed += 1;
+            }
+        }
+        Ok(removed)
+    }
 }
 
 #[cfg(test)]
@@ -126,5 +178,70 @@ mod ticket_tests {
             tickets.mint(&format!("id{i}"));
         }
         assert!(tickets.issued.lock().unwrap().len() <= MAX_OUTSTANDING_TICKETS);
+    }
+}
+
+#[cfg(test)]
+mod sweep_tests {
+    use super::*;
+    use std::time::SystemTime;
+
+    const WEEK: Duration = Duration::from_secs(60 * 60 * 24 * 7);
+
+    fn later(days: u64) -> SystemTime {
+        SystemTime::now() + Duration::from_secs(60 * 60 * 24 * days)
+    }
+
+    #[tokio::test]
+    async fn a_blob_past_its_age_is_deleted() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = BlobStore::new(dir.path()).unwrap();
+        store.put("old-blob", b"stale").await.unwrap();
+
+        assert_eq!(store.sweep_older_than(WEEK, later(30)).await.unwrap(), 1);
+        assert!(store.get("old-blob").await.unwrap().is_none());
+    }
+
+    #[tokio::test]
+    async fn a_blob_inside_its_age_is_kept() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = BlobStore::new(dir.path()).unwrap();
+        store.put("new-blob", b"fresh").await.unwrap();
+
+        assert_eq!(store.sweep_older_than(WEEK, SystemTime::now()).await.unwrap(), 0);
+        assert_eq!(store.get("new-blob").await.unwrap().unwrap(), b"fresh");
+    }
+
+    #[tokio::test]
+    async fn the_vapid_key_is_never_swept() {
+        // It shares this directory, and losing it silently kills every push
+        // subscription on the deployment - the loudest failure in the runbook.
+        // A dot is not in the blob-id alphabet, which is what protects it.
+        let dir = tempfile::tempdir().unwrap();
+        let store = BlobStore::new(dir.path()).unwrap();
+        let key = dir.path().join("vapid.key");
+        std::fs::write(&key, b"secret").unwrap();
+
+        let removed = store.sweep_older_than(Duration::from_secs(1), later(365)).await.unwrap();
+        assert_eq!(removed, 0, "nothing that is not a valid blob id may be deleted");
+        assert!(key.exists(), "the VAPID key must survive any sweep");
+    }
+
+    #[tokio::test]
+    async fn subdirectories_are_left_alone() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = BlobStore::new(dir.path()).unwrap();
+        let nested = dir.path().join("nested");
+        std::fs::create_dir(&nested).unwrap();
+
+        assert_eq!(store.sweep_older_than(Duration::from_secs(1), later(365)).await.unwrap(), 0);
+        assert!(nested.is_dir());
+    }
+
+    #[tokio::test]
+    async fn an_empty_store_sweeps_cleanly() {
+        let dir = tempfile::tempdir().unwrap();
+        let store = BlobStore::new(dir.path()).unwrap();
+        assert_eq!(store.sweep_older_than(WEEK, later(365)).await.unwrap(), 0);
     }
 }

@@ -150,17 +150,26 @@ Three things grow, and only one of them currently shrinks:
   can change.
 - **Messages** — the MLS log. **Never pruned.** Every ciphertext ever sent
   is still there. There is no retention job yet; this is a known gap.
-- **Attachment blobs** — **never deleted**, including for messages that have
-  long expired. Also a known gap.
+- **Attachment blobs** — kept forever *unless* you set `BLOB_TTL_DAYS`.
 
-Immediate relief, in order of preference: raise the volume size; then, if you
-must, delete blobs older than your longest retention, accepting that those
-attachments will 404 for everyone.
+Immediate relief, in order of preference: raise the volume size; then set
+`BLOB_TTL_DAYS` and restart, accepting that attachments past that age will
+404 for everyone.
 
 ```sh
-# LAST RESORT. Attachments are not recoverable once deleted.
-docker compose exec quorum find /data -name '*' -type f -mtime +90 -delete
+# In .env, then: docker compose up -d quorum
+BLOB_TTL_DAYS=180
 ```
+
+The sweep runs hourly and only touches files whose names are valid blob ids,
+so `vapid.key` — which lives in the same volume — is never at risk. Set the
+value **above your longest kept-history retention**: an attachment deleted
+while its message is still readable shows up as a permanently broken
+download, not as an expired one.
+
+Do **not** hand-delete from `/data` with `find`. The relay's sweep knows which
+filenames are blobs; `find /data -type f -delete` does not, and the VAPID key
+is in there.
 
 Prevention: alert at 75% rather than discovering this at 100%, because a full
 disk takes Postgres with it.
