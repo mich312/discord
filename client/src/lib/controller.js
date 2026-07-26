@@ -2380,8 +2380,13 @@ export class Controller {
     const key = generateFragmentKey();
     const encrypted = await encryptBlob(key, data);
     const blobId = b64url.enc(crypto.getRandomValues(new Uint8Array(18)));
+    // The PUT route is unauthenticated by design (it carries opaque bytes
+    // and no session), so authorize this one upload over the authenticated
+    // socket first. Without it, anyone could write to the relay's disk.
+    const { ticket } = await this.relay.request({ t: 'blob_ticket', id: blobId });
     const res = await fetch(`${this.httpBase()}/blobs/${blobId}`, {
       method: 'PUT',
+      headers: { 'x-upload-ticket': ticket },
       body: encrypted,
     });
     if (!res.ok) throw new Error(`upload failed: ${await res.text()}`);

@@ -65,6 +65,11 @@ pub enum ClientMsg {
         payload: String,
         #[serde(default)] commit: bool,
     },
+    /// Mint a single-use, short-lived ticket authorizing ONE upload to
+    /// `/blobs/{id}`. Blob writes have no other authentication — the id is
+    /// a capability for *reading*, which says nothing about who may write —
+    /// so without this any stranger could fill the relay's disk.
+    BlobTicket { rid: u64, id: String },
     /// Deliver a Welcome directly to `to` (stored if offline). `group` and
     /// `after` tell the joiner where their log begins.
     Welcome { rid: u64, to: String, group: String, after: u64, payload: String },
@@ -197,6 +202,8 @@ pub enum ServerMsg {
     Welcome { from: String, group: String, after: u64, payload: String },
     Invite { rid: u64, group: String, payload: String },
     PushInfo { rid: u64, pubkey: String },
+    /// Bearer token for one PUT to the id it was minted for.
+    BlobTicket { rid: u64, ticket: String },
     /// JSON passthrough: an array of RTCIceServer objects for the client to
     /// feed straight into `RTCPeerConnection({ iceServers })`.
     IceInfo { rid: u64, servers: String },

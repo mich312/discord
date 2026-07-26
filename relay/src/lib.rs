@@ -9,7 +9,7 @@ pub mod store;
 
 use axum::body::Bytes;
 use axum::extract::{ConnectInfo, DefaultBodyLimit, Path, Request, State, WebSocketUpgrade};
-use axum::http::{header, HeaderName, HeaderValue, Method, StatusCode};
+use axum::http::{header, HeaderMap, HeaderName, HeaderValue, Method, StatusCode};
 use axum::middleware::{self, Next};
 use axum::response::{IntoResponse, Response};
 use axum::routing::any;
@@ -147,11 +147,22 @@ async fn limit_ws(State(app): State<Arc<App>>, req: Request, next: Next) -> Resp
     next.run(req).await
 }
 
+/// Header carrying the upload ticket minted over the authenticated socket.
+pub const UPLOAD_TICKET_HEADER: &str = "x-upload-ticket";
+
 async fn put_blob(
     Path(id): Path<String>,
     State(app): State<Arc<App>>,
+    headers: HeaderMap,
     body: Bytes,
 ) -> impl IntoResponse {
+    // A blob id is a read capability; it says nothing about who may write.
+    // Without a ticket this route let anyone on the internet write 25 MiB
+    // per request until the data volume — shared with Postgres — filled up.
+    let ticket = headers.get(UPLOAD_TICKET_HEADER).and_then(|v| v.to_str().ok()).unwrap_or("");
+    if !app.blob_tickets.redeem(ticket, &id) {
+        return (StatusCode::FORBIDDEN, "missing or invalid upload ticket".to_string());
+    }
     match app.blobs.put(&id, &body).await {
         Ok(()) => (StatusCode::CREATED, String::new()),
         Err(e) => (StatusCode::BAD_REQUEST, e),

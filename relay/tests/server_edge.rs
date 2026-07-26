@@ -293,10 +293,35 @@ async fn blob_http_put_get_and_error_paths() {
     let (status, _) = http(&app, Request::get("/blobs/cap123").body(Body::empty()).unwrap()).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 
-    // PUT stores; GET returns the exact bytes.
+    // Writes now need a ticket minted over the authenticated socket: a bare
+    // PUT is how anyone on the internet used to fill the relay's disk.
     let (status, _) = http(
         &app,
         Request::put("/blobs/cap123").body(Body::from(&b"ciphertext"[..])).unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "an unticketed write must be refused");
+
+    // A ticket for a DIFFERENT id must not authorize this one.
+    let other = app.blob_tickets.mint("someone-elses-id");
+    let (status, _) = http(
+        &app,
+        Request::put("/blobs/cap123")
+            .header("x-upload-ticket", &other)
+            .body(Body::from(&b"ciphertext"[..]))
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    // PUT with the right ticket stores; GET returns the exact bytes.
+    let ticket = app.blob_tickets.mint("cap123");
+    let (status, _) = http(
+        &app,
+        Request::put("/blobs/cap123")
+            .header("x-upload-ticket", &ticket)
+            .body(Body::from(&b"ciphertext"[..]))
+            .unwrap(),
     )
     .await;
     assert_eq!(status, StatusCode::CREATED);
@@ -304,18 +329,27 @@ async fn blob_http_put_get_and_error_paths() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body, b"ciphertext");
 
-    // A blob id is a write-once capability: re-PUT is rejected.
+    // A blob id is a write-once capability: re-PUT is rejected even with a
+    // fresh ticket.
+    let ticket = app.blob_tickets.mint("cap123");
     let (status, _) = http(
         &app,
-        Request::put("/blobs/cap123").body(Body::from(&b"overwrite"[..])).unwrap(),
+        Request::put("/blobs/cap123")
+            .header("x-upload-ticket", &ticket)
+            .body(Body::from(&b"overwrite"[..]))
+            .unwrap(),
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
 
     // An id with characters outside the token alphabet is refused (no path tricks).
+    let ticket = app.blob_tickets.mint("bad.id");
     let (status, _) = http(
         &app,
-        Request::put("/blobs/bad.id").body(Body::from(&b"x"[..])).unwrap(),
+        Request::put("/blobs/bad.id")
+            .header("x-upload-ticket", &ticket)
+            .body(Body::from(&b"x"[..]))
+            .unwrap(),
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);

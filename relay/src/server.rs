@@ -4,7 +4,7 @@
 //! users for direct Welcome delivery.
 
 use crate::account::AccountService;
-use crate::blobs::BlobStore;
+use crate::blobs::{BlobStore, UploadTickets};
 use crate::proto::{ClientMsg, GroupEntry, MemberEntry, ServerMsg, AUTH_CONTEXT};
 use crate::push::PushService;
 use crate::ratelimit::RateLimiter;
@@ -25,6 +25,8 @@ pub struct App {
     pub store: Box<dyn Store>,
     pub hub: Mutex<Hub>,
     pub blobs: BlobStore,
+    /// Single-use authorizations for the otherwise-unauthenticated blob PUT.
+    pub blob_tickets: UploadTickets,
     pub push: PushService,
     pub accounts: AccountService,
     /// When false (the production default), an unknown handle can only be
@@ -198,6 +200,7 @@ impl App {
             store,
             hub: Mutex::new(Hub::default()),
             blobs,
+            blob_tickets: UploadTickets::default(),
             push,
             accounts: AccountService::from_env(),
             open_registration,
@@ -729,6 +732,10 @@ async fn handle_request(
                 });
             }
             Some(ServerMsg::Ok { rid, seq: Some(seq) })
+        }
+
+        ClientMsg::BlobTicket { rid, id } => {
+            Some(ServerMsg::BlobTicket { rid, ticket: app.blob_tickets.mint(&id) })
         }
 
         ClientMsg::Welcome { rid, to, group, after, payload } => {
