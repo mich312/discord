@@ -733,3 +733,51 @@ test('removing someone revokes the circle’s invite links instead of refreshing
   );
   clearTimeout(c.backupTimer);
 });
+
+// --- §1.2: the receive path persists in a crash-safe order ---------------
+// Ratchet → message → cursor meant a crash mid-sequence advanced the ratchet
+// past a message whose seq was never recorded; the replay then failed to
+// decrypt and was dropped silently. Cursor before ratchet inverts which side
+// a crash lands on, and a stale ratchet is recoverable where a lost message
+// is not.
+
+test('a received message is durable before the ratchet snapshot is', async () => {
+  const writes = [];
+  const { c } = makeController();
+  const baseDb = c.db;
+  c.db = {
+    ...baseDb,
+    msgAdd: async (m) => {
+      writes.push('message');
+      return baseDb.msgAdd(m);
+    },
+    serverPut: async (r) => {
+      writes.push('cursor');
+      return baseDb.serverPut(r);
+    },
+    kvPut: async (k, v) => {
+      writes.push(`kv:${k}`);
+      return baseDb.kvPut(k, v);
+    },
+  };
+  c.crypto = async (cmd) => {
+    if (cmd === 'receive') {
+      return {
+        event: { kind: 'message', sender: 'bob', text: 'hello', epoch: 1 },
+        state: new Uint8Array([1, 2, 3]),
+      };
+    }
+    return {};
+  };
+  c.servers.set('srv', record());
+
+  await c.onGroupMessage({ group: 'srv', seq: 7, epoch: 1, sender: 'bob', payload: 'AAAA' });
+
+  const ratchetAt = writes.indexOf('kv:mlsState');
+  const messageAt = writes.indexOf('message');
+  const cursorAt = writes.indexOf('cursor');
+  assert.ok(ratchetAt !== -1, 'the ratchet was persisted');
+  assert.ok(messageAt !== -1 && messageAt < ratchetAt, 'the message lands before the ratchet');
+  assert.ok(cursorAt !== -1 && cursorAt < ratchetAt, 'and so does the cursor');
+  clearTimeout(c.backupTimer);
+});

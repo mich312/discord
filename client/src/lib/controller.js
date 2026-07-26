@@ -551,9 +551,21 @@ export class Controller {
     // that wedges the cursor would wedge the client forever.
     record.lastSeq = Math.max(record.lastSeq, msg.seq);
 
+    // The ratchet snapshot is deliberately NOT written here. These used to
+    // be three separate IndexedDB transactions in the order ratchet →
+    // message → cursor, so a crash in the middle left the ratchet advanced
+    // past a message whose seq was never recorded: the relay replayed it,
+    // decryption failed against the moved-on ratchet, and the message was
+    // dropped as "undecryptable" — silent, permanent loss.
+    //
+    // Writing the ratchet LAST inverts which side a crash lands on. A stale
+    // snapshot with the message and cursor already durable is recoverable:
+    // MLS tolerates the skipped generation, so the next message still
+    // decrypts. Order matters more than atomicity here.
+    let ratchet = null;
     try {
       const { event, state } = await this.crypto('receive', { bytes: b64.dec(msg.payload) });
-      await this.persistState(state);
+      ratchet = state;
       if (event.kind === 'message') {
         await this.onContent(record, event.sender, event.text);
       } else if (event.kind === 'membershipChange') {
@@ -564,6 +576,9 @@ export class Controller {
         if (!event.members.includes(this.me)) {
           this.toast(`you were removed from "${record.name}"`);
           await this.forgetServerLocal(record.id);
+          // Early return, but the ratchet still moved and covers every other
+          // group in this snapshot — persist before leaving.
+          await this.persistState(ratchet);
           return;
         }
         const before = new Set(record.members);
@@ -604,7 +619,9 @@ export class Controller {
       // Expected for own commits replayed by catch-up; log and move on.
       console.warn(`undecryptable blob seq ${msg.seq} in ${msg.group}: ${e.message}`);
     }
+    // Cursor first, ratchet second — see the note above.
     await this.db.serverPut(record);
+    await this.persistState(ratchet);
     this.dispatch({ type: 'servers', servers: this.snapshotServers() });
   }
 
