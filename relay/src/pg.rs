@@ -437,6 +437,15 @@ impl Store for PgStore {
         Ok(seq as u64)
     }
 
+    async fn sweep_expired_history(&self, now: u64) -> Result<u64, StoreError> {
+        let done = sqlx::query("DELETE FROM history WHERE expires_at IS NOT NULL AND expires_at < $1")
+            .bind(now as i64)
+            .execute(&self.pool)
+            .await
+            .map_err(backend)?;
+        Ok(done.rows_affected())
+    }
+
     async fn history_after(
         &self,
         group: &str,
