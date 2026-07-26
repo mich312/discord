@@ -9,6 +9,15 @@
 # Any advisory against anything we build is an error. Every exception must
 # carry a written reachability argument, not just an id.
 yanked = "deny"
+# Unmaintained notices are a maintenance signal, not a vulnerability, and
+# they arrive for crates we do not choose. "workspace" fails only when
+# something we depend on DIRECTLY is unmaintained — which is actionable —
+# and reports the rest without blocking. The current example is
+# RUSTSEC-2026-0173 (proc-macro-error2), a build-time proc macro five
+# levels down inside OpenMLS's tree via hax-lib -> libcrux -> hpke-rs; it
+# never ships in the relay binary or the wasm, and nothing here can upgrade
+# it. Vulnerabilities still fail unconditionally.
+unmaintained = "workspace"
 ignore = [
     # RUSTSEC-2023-0071 — Marvin attack, a timing sidechannel in the `rsa`
     # crate's private-key operations. No fixed version exists.
