@@ -17,6 +17,18 @@ The full design rationale lives in **[docs/BUILD_PLAN.md](docs/BUILD_PLAN.md)**;
 phases 1–7 of it are implemented. The plan's honest-assessment and
 threat-model sections still apply verbatim.
 
+Also worth reading before you run one for other people:
+**[docs/THREAT_MODEL.md](docs/THREAT_MODEL.md)** (what the encryption does and
+does not protect), **[docs/CAPACITY.md](docs/CAPACITY.md)** (the limits, and
+which of them have never been measured), and
+**[deploy/RUNBOOK.md](deploy/RUNBOOK.md)** (what to do when it breaks).
+
+And if you are *using* someone else's relay rather than running one:
+**[docs/VERIFYING.md](docs/VERIFYING.md)** shows how to rebuild the source and
+check it matches the code you were actually served. Web-delivered encryption
+means the operator ships the software that holds your keys; that check is the
+only thing that makes the claim falsifiable.
+
 ## What works
 
 - **Text channels** inside E2EE servers — channel structure and server
@@ -183,11 +195,15 @@ relay).
 | `BLOB_DIR` | `./blobs` | encrypted attachment storage on disk |
 | `VAPID_PRIVATE_KEY` | unset | base64url P-256 scalar; unset = ephemeral (push subscriptions die on restart) |
 | `OPEN_REGISTRATION` | unset | unset/`0` = invite-only: unknown handles register only with a usable invite id (the first user on an empty relay is exempt); `1`/`true` = anyone can register |
-| `TRUST_PROXY` | unset | `1` = key the rate limits on the first `X-Forwarded-For` hop instead of the socket peer — set it ONLY behind a proxy that overwrites the header (the `deploy/` Caddy setups do) |
+| `TRUST_PROXY` | unset | `1` = key the rate limits on the last `X-Forwarded-For` hop (the one your own proxy appended) instead of the socket peer — set it ONLY behind a proxy, since without one the header is client-controlled |
 | `TURN_URLS` / `TURN_SECRET` | unset | voice TURN via coturn's REST API — the relay mints a short-lived credential per user (no shared password to clients). `TURN_TTL` (default 3600) sets its lifetime |
 | `ICE_SERVERS` | public STUN | verbatim JSON array of RTCIceServer objects; an alternative to `TURN_*` (static creds). Unset = public STUN, which only traverses cone NATs |
+| `STUN_URLS` | unset | comma-separated STUN URLs, merged into the served ICE list. An alternative to the public-STUN default when you run your own |
+| `RUST_LOG` | unset | standard `tracing` filter, e.g. `relay=debug`. The relay logs connect/disconnect at info and subscribe at debug |
 | `RP_ID` / `RP_ORIGIN` | `localhost` / `http://localhost:9601` | WebAuthn relying party — must match the origin users load the client from |
 | `RELAY_ADMINS` | unset | comma-separated handles treated as global admins: they can manage any group's ACL/roles and list all users/groups — metadata only, they cannot read messages |
+| `BLOB_TTL_DAYS` | unset | unset/`0` = attachments are kept forever (the default). Set to a whole number of days to delete attachment blobs older than that. Age-based by necessity: the blob id lives inside the encrypted message referring to it, so the relay cannot know which blobs are still wanted. **Set it above your longest kept-history retention**, or an attachment can 404 while its message is still readable |
+| `METRICS_TOKEN` | unset | unset = `/metrics` returns 404 and no metrics are served at all. Set it to enable a Prometheus scrape at `/metrics`, authenticated with `Authorization: Bearer <token>`. Treat it as a secret: the metrics are pure metadata — online counts, circle counts, message rates — which is exactly what the relay is otherwise the only party to see |
 
 Membership roles: whoever creates a group is its admin; admins add
 members, manage invites, and promote/demote via the roster. This gates
@@ -241,9 +257,14 @@ joins, identity recovery, encrypted attachments, safety numbers, and
   Membership itself is cryptographically enforced and cannot be bypassed.
 - **Invite blobs go stale per epoch** — the link creator's client
   refreshes them; if they're offline long enough the link pauses.
-- **One device per identity** — cross-device sync is out of scope (each
-  device would be its own MLS leaf); recovery restores identity, not
-  group ratchets.
+- **Devices share one identity, not one ratchet** — several devices can
+  hold the same identity (link one from a signed-in device, or enrol a
+  passkey per device; Settings lists them and revokes any one). What they
+  do *not* share is MLS state: each device is not its own leaf, so a
+  second device joins the group afresh and sees no scrollback, and
+  identity recovery restores the identity, never the group ratchets.
+  Revocation is forward-only — it stops that passkey unlocking the
+  identity again, and cannot erase what a device already holds.
 - **Password vaults can be brute-forced by the server** — only for weak
   passwords, and only offline against the encrypted bundle (Argon2id,
   19 MiB/t=2). Passkey vaults have no such surface. The sign-in params

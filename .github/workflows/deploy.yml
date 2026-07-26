@@ -1,10 +1,19 @@
 name: deploy
 
 # Auto-deploy the quorum stack when main advances (a PR is merged). Can also be
-# run on demand from the Actions tab. The build runs on the server (ci/deploy.sh)
-# — this job just opens an SSH session and streams the script in. The heavy Rust
-# build means a run can take several minutes. Requires repo secrets
-# DEPLOY_SSH_KEY + DEPLOY_HOST.
+# run on demand from the Actions tab.
+#
+# The image is built HERE and pushed to GHCR, so the server only pulls and
+# restarts. That is what makes rollback fast: `ci/deploy.sh` re-points the tag
+# at the previously-running image and restarts, which is seconds and cannot
+# fail the way a compile can — and a recovery path you only run when something
+# is already wrong is the last place you want a multi-minute build.
+#
+# Requires repo secrets DEPLOY_SSH_KEY + DEPLOY_HOST (and ideally
+# DEPLOY_KNOWN_HOSTS). GHCR uses the built-in GITHUB_TOKEN; the server needs
+# read access to the package — make it public, or `docker login ghcr.io` there
+# once with a read:packages token. If the image job is skipped or the server
+# cannot pull, deploy.sh falls back to building on the server as before.
 on:
   push:
     branches: [main]
@@ -17,8 +26,54 @@ concurrency:
   group: deploy-quorum
   cancel-in-progress: false
 
+permissions:
+  contents: read
+  packages: write
+
 jobs:
+  # The test gate. Deploy cannot start until every job in ci.yml is green —
+  # previously main deployed straight to production with nothing run at all.
+  tests:
+    uses: ./.github/workflows/ci.yml
+
+  # Build once, here, and tag by commit. Tagging by SHA rather than only
+  # `latest` is what gives the server something specific to roll back TO.
+  image:
+    needs: tests
+    runs-on: ubuntu-latest
+    outputs:
+      ref: ${{ steps.meta.outputs.ref }}
+    steps:
+      - uses: actions/checkout@v4
+      - id: meta
+        # GHCR rejects an uppercase path, and github.repository preserves the
+        # owner's casing — so lowercase it once here and use it for both tags.
+        run: |
+          repo="${GITHUB_REPOSITORY,,}"
+          echo "ref=ghcr.io/${repo}:${GITHUB_SHA}" >> "$GITHUB_OUTPUT"
+          echo "latest=ghcr.io/${repo}:latest" >> "$GITHUB_OUTPUT"
+      - uses: docker/setup-buildx-action@v3
+      - uses: docker/login-action@v3
+        with:
+          registry: ghcr.io
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+      - uses: docker/build-push-action@v6
+        with:
+          context: .
+          push: true
+          build-args: |
+            SOURCE_COMMIT=${{ github.sha }}
+          tags: |
+            ${{ steps.meta.outputs.ref }}
+            ${{ steps.meta.outputs.latest }}
+          # The Rust release build dominates; without a cache every deploy
+          # pays for it from scratch.
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
   deploy:
+    needs: [tests, image]
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4      # only to get ci/deploy.sh onto the runner
@@ -27,11 +82,25 @@ jobs:
         env:
           DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
           DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
+          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
+          QUORUM_IMAGE: ${{ needs.image.outputs.ref }}
         run: |
           set -euo pipefail
           mkdir -p ~/.ssh && chmod 700 ~/.ssh
           printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
           chmod 600 ~/.ssh/deploy_key
-          ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          # Prefer a pinned host key. ssh-keyscan re-TOFUs the host on every
+          # run, which makes the StrictHostKeyChecking=yes below decorative:
+          # whatever answers first is trusted. Set the DEPLOY_KNOWN_HOSTS
+          # secret (output of `ssh-keyscan -H <host>`) to close that.
+          if [ -n "${DEPLOY_KNOWN_HOSTS:-}" ]; then
+            printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
+          else
+            echo "::warning::DEPLOY_KNOWN_HOSTS is not set — falling back to ssh-keyscan, which trusts whatever answers first"
+            ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null
+          fi
+          # The image ref is passed through the environment rather than baked
+          # into the script, so the same script still works when run by hand.
           ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
-            "root@${DEPLOY_HOST}" 'bash -s' < ci/deploy.sh
+            "root@${DEPLOY_HOST}" \
+            "QUORUM_IMAGE='${QUORUM_IMAGE}' bash -s" < ci/deploy.sh

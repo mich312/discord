@@ -11,17 +11,32 @@
 
 # --- stage 1: rust — relay binary + crypto core to WASM ---------------------
 FROM rust:1.94-bookworm AS rust-build
+# binaryen is pinned and fetched from its own release rather than apt:
+# Debian's package predates 116, and versions below that miscompile modules
+# from current rustc (table growth breaks at runtime).
+ARG BINARYEN_VERSION=119
 RUN rustup target add wasm32-unknown-unknown \
-    && curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh
+    && curl https://rustwasm.github.io/wasm-pack/installer/init.sh -sSf | sh \
+    && curl -fsSL "https://github.com/WebAssembly/binaryen/releases/download/version_${BINARYEN_VERSION}/binaryen-version_${BINARYEN_VERSION}-x86_64-linux.tar.gz" \
+       | tar -xz -C /tmp \
+    && install -m755 "/tmp/binaryen-version_${BINARYEN_VERSION}/bin/wasm-opt" /usr/local/bin/wasm-opt
 WORKDIR /src
 COPY Cargo.toml Cargo.lock ./
 COPY crypto-core crypto-core
 COPY relay relay
 RUN cargo build --release -p relay
-RUN cd crypto-core && wasm-pack build --target web --release
+# The same script CI runs, with the same hard failure. Building the wasm two
+# different ways here and in CI would make the published integrity manifest
+# describe a binary this image never contained.
+RUN WASM_REQUIRE_OPT=1 bash crypto-core/build-wasm.sh
 
 # --- stage 2: node — client bundle ------------------------------------------
 FROM node:22-bookworm AS client-build
+# Stamped into dist/integrity.json so the served manifest names the commit it
+# was built from. Unset in a local `docker build` — the field is then omitted
+# rather than guessed.
+ARG SOURCE_COMMIT=""
+ENV SOURCE_COMMIT=$SOURCE_COMMIT
 WORKDIR /src/client
 COPY client/package.json client/package-lock.json ./
 RUN npm ci

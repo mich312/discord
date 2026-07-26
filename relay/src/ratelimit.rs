@@ -27,8 +27,25 @@ impl RateLimiter {
         }
     }
 
+    /// Bucket key for an address. A single IPv6 allocation is routinely a
+    /// /64 — 2^64 addresses — so keying on the full address let one host
+    /// mint a fresh bucket per request and walk straight through every
+    /// limit. Collapse v6 to its /64; v4 is used whole.
+    fn bucket_key(ip: IpAddr) -> IpAddr {
+        match ip {
+            IpAddr::V6(v6) => {
+                let o = v6.octets();
+                let mut prefix = [0u8; 16];
+                prefix[..8].copy_from_slice(&o[..8]);
+                IpAddr::from(prefix)
+            }
+            v4 => v4,
+        }
+    }
+
     /// Take one token for `key`; false = over the limit right now.
     pub fn allow(&self, key: IpAddr) -> bool {
+        let key = Self::bucket_key(key);
         let now = Instant::now();
         let mut buckets = self.buckets.lock().unwrap();
         // Cheap unbounded-growth guard: full buckets are indistinguishable
@@ -52,15 +69,21 @@ impl RateLimiter {
 }
 
 /// The client address the limits key on. The socket peer address by
-/// default; with TRUST_PROXY=1 (the relay sits behind Caddy/nginx, which
-/// overwrites the header) the first hop in X-Forwarded-For. Never trust
-/// the header without a proxy in front — it is client-controlled.
+/// default; with TRUST_PROXY=1 (the relay sits behind Caddy/nginx) the LAST
+/// hop in X-Forwarded-For — the entry our own proxy appended. Never trust
+/// the header without a proxy in front: it is client-controlled, and a
+/// client that sends its own X-Forwarded-For prepends to, not replaces,
+/// what the proxy records.
 pub fn client_ip(trust_proxy: bool, headers: &HeaderMap, peer: Option<SocketAddr>) -> IpAddr {
     if trust_proxy {
         if let Some(ip) = headers
             .get("x-forwarded-for")
             .and_then(|v| v.to_str().ok())
-            .and_then(|v| v.split(',').next())
+            // The LAST hop is the one our own proxy appended. nginx's
+            // stock $proxy_add_x_forwarded_for APPENDS to whatever the
+            // client sent, so trusting the first hop let any client spoof
+            // its rate-limit identity by sending its own header.
+            .and_then(|v| v.split(',').next_back())
             .and_then(|v| v.trim().parse().ok())
         {
             return ip;
@@ -99,7 +122,56 @@ mod tests {
         headers.insert("x-forwarded-for", "203.0.113.9, 10.0.0.1".parse().unwrap());
         let peer = Some(SocketAddr::from(([192, 168, 1, 5], 4242)));
         assert_eq!(client_ip(false, &headers, peer), IpAddr::from([192, 168, 1, 5]));
-        assert_eq!(client_ip(true, &headers, peer), IpAddr::from([203, 0, 113, 9]));
+        // The LAST hop, not the first. This test used to assert the first,
+        // on the assumption that the fronting proxy overwrites the header.
+        // Some do; nginx's stock $proxy_add_x_forwarded_for APPENDS, and
+        // Caddy appends too — so under a very common config the leading hop
+        // is whatever the client sent, and trusting it let any client pick
+        // its own rate-limit identity. The last hop is the one our own proxy
+        // added, which is correct whether the proxy appends or overwrites.
+        assert_eq!(client_ip(true, &headers, peer), IpAddr::from([10, 0, 0, 1]));
         assert_eq!(client_ip(true, &HeaderMap::new(), peer), IpAddr::from([192, 168, 1, 5]));
+    }
+}
+
+#[cfg(test)]
+mod prefix_tests {
+    use super::*;
+
+    #[test]
+    fn ipv6_addresses_in_one_slash_64_share_a_bucket() {
+        // A /64 is a routine single allocation. Keying on the full address
+        // gave one host 2^64 buckets and so no limit at all.
+        let limiter = RateLimiter::per_minute(1);
+        let a: IpAddr = "2001:db8:1:2::1".parse().unwrap();
+        let b: IpAddr = "2001:db8:1:2:ffff:ffff:ffff:ffff".parse().unwrap();
+        assert!(limiter.allow(a), "first request in the /64 is allowed");
+        assert!(!limiter.allow(b), "a different address in the same /64 must not reset it");
+
+        // A genuinely different /64 is still its own bucket.
+        let other: IpAddr = "2001:db8:1:3::1".parse().unwrap();
+        assert!(limiter.allow(other));
+    }
+
+    #[test]
+    fn ipv4_addresses_are_bucketed_whole() {
+        let limiter = RateLimiter::per_minute(1);
+        assert!(limiter.allow("198.51.100.7".parse().unwrap()));
+        assert!(!limiter.allow("198.51.100.7".parse().unwrap()));
+        assert!(limiter.allow("198.51.100.8".parse().unwrap()), "a different v4 host is separate");
+    }
+
+    #[test]
+    fn the_trusted_forwarded_hop_is_the_last_one() {
+        // nginx's stock $proxy_add_x_forwarded_for appends, so the hop our
+        // own proxy added is the last. Trusting the first let a client
+        // choose its own rate-limit identity.
+        let mut headers = HeaderMap::new();
+        headers.insert("x-forwarded-for", "203.0.113.9, 198.51.100.4".parse().unwrap());
+        assert_eq!(
+            client_ip(true, &headers, None),
+            "198.51.100.4".parse::<IpAddr>().unwrap(),
+            "the spoofed leading hop must be ignored"
+        );
     }
 }

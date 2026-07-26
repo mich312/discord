@@ -4,8 +4,12 @@
 //! users for direct Welcome delivery.
 
 use crate::account::AccountService;
-use crate::blobs::BlobStore;
-use crate::proto::{ClientMsg, GroupEntry, MemberEntry, ServerMsg, AUTH_CONTEXT};
+use crate::blobs::{BlobStore, UploadTickets};
+use crate::metrics::{Metrics, Snapshot};
+use crate::proto::{
+    ClientMsg, GroupEntry, MemberEntry, PasskeyDeviceOut, ServerMsg, AUTH_CONTEXT,
+    PROTOCOL_VERSION,
+};
 use crate::push::PushService;
 use crate::ratelimit::RateLimiter;
 use crate::store::{
@@ -25,6 +29,8 @@ pub struct App {
     pub store: Box<dyn Store>,
     pub hub: Mutex<Hub>,
     pub blobs: BlobStore,
+    /// Single-use authorizations for the otherwise-unauthenticated blob PUT.
+    pub blob_tickets: UploadTickets,
     pub push: PushService,
     pub accounts: AccountService,
     /// When false (the production default), an unknown handle can only be
@@ -34,8 +40,9 @@ pub struct App {
     pub open_registration: bool,
     /// Per-client limits on the unauthenticated surface.
     pub limits: Limits,
-    /// TRUST_PROXY=1: key rate limits on X-Forwarded-For (first hop)
-    /// instead of the socket peer. Only sane behind Caddy/nginx.
+    /// TRUST_PROXY=1: key rate limits on X-Forwarded-For (the last hop —
+    /// the one our own proxy appended) instead of the socket peer. Only
+    /// sane behind a proxy; without one the header is client-controlled.
     pub trust_proxy: bool,
     /// Global admins (RELAY_ADMINS, comma-separated user ids): treated as
     /// admin of every group and allowed to list all users/groups. Metadata
@@ -44,6 +51,9 @@ pub struct App {
     /// Voice ICE configuration, rendered per client (TURN credentials are
     /// minted fresh and short-lived on each `ice_info`).
     pub ice: IceConfig,
+    /// Scrape counters. Always collected; only *served* when METRICS_TOKEN
+    /// is set (see `lib.rs`), because every number here is metadata.
+    pub metrics: Metrics,
 }
 
 pub struct Limits {
@@ -151,12 +161,104 @@ impl IceConfig {
     }
 }
 
+/// How many messages may be waiting for one connection before the relay
+/// stops queueing for it. A client that is merely on a slow link drains far
+/// below this; one sitting at the cap is not reading at all.
+///
+/// The number is a memory bound, not a latency one: a stalled subscriber
+/// used to grow its queue without limit, so a single suspended laptop in a
+/// busy circle was an unbounded allocation on the server.
+pub const MAX_QUEUE: usize = 512;
+
+/// Characters (not bytes) kept from a device label. Counted in `chars` so a
+/// truncation cannot split a UTF-8 sequence, and bounded because the value is
+/// client-supplied, stored per account, and rendered back into the screen the
+/// user revokes devices from.
+pub const MAX_DEVICE_LABEL: usize = 64;
+
+/// A connection's outbound queue, plus how much is sitting in it.
+///
+/// The channel itself stays **unbounded on purpose**. The two callers are
+/// not alike: catch-up backfill pushes a whole backlog while the hub lock is
+/// held, where a bounded channel would either truncate the backlog silently
+/// or block every other circle behind one slow socket. So the bound is
+/// applied where it is safe — `offer`, used only for fan-out — and the depth
+/// is tracked explicitly rather than inferred.
+#[derive(Clone, Debug)]
+pub struct Outbound {
+    tx: mpsc::UnboundedSender<ServerMsg>,
+    depth: Arc<std::sync::atomic::AtomicUsize>,
+}
+
+impl Outbound {
+    fn new() -> (Self, mpsc::UnboundedReceiver<ServerMsg>, Arc<std::sync::atomic::AtomicUsize>) {
+        let (tx, rx) = mpsc::unbounded_channel();
+        let depth = Arc::new(std::sync::atomic::AtomicUsize::new(0));
+        (Self { tx, depth: depth.clone() }, rx, depth)
+    }
+
+    /// Queue unconditionally. For this connection's own replies and its
+    /// catch-up backfill — dropping either loses data the client asked for
+    /// and has no way to notice.
+    fn send(&self, msg: ServerMsg) -> bool {
+        if self.tx.send(msg).is_ok() {
+            self.depth.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+            true
+        } else {
+            false
+        }
+    }
+
+    /// Queue if there is room. Returns false when the connection is gone or
+    /// too far behind, and the caller drops it.
+    ///
+    /// Dropping a slow subscriber is **lossless**: the relay is an ordered
+    /// log, so the client reconnects and resubscribes from its last seq and
+    /// receives everything it missed. That is the whole reason a bound is
+    /// safe here and nowhere else.
+    fn offer(&self, msg: ServerMsg) -> bool {
+        if self.depth.load(std::sync::atomic::Ordering::Relaxed) >= MAX_QUEUE {
+            return false;
+        }
+        self.send(msg)
+    }
+
+    fn same_channel(&self, other: &Self) -> bool {
+        self.tx.same_channel(&other.tx)
+    }
+}
+
 #[derive(Default)]
 pub struct Hub {
     /// group -> (user -> outbound channel)
-    subscribers: HashMap<String, HashMap<String, mpsc::UnboundedSender<ServerMsg>>>,
+    subscribers: HashMap<String, HashMap<String, Outbound>>,
     /// user -> outbound channel (for Welcome delivery)
-    online: HashMap<String, mpsc::UnboundedSender<ServerMsg>>,
+    online: HashMap<String, Outbound>,
+    /// group -> send lock. Ordering only has to hold WITHIN a group, so
+    /// serializing per group rather than globally lets unrelated circles
+    /// append concurrently. See the Send arm.
+    send_locks: HashMap<String, Arc<Mutex<()>>>,
+}
+
+impl Hub {
+    /// The send lock for `group`, created on first use. Held only long
+    /// enough to hand the Arc back — the caller awaits the lock itself
+    /// after releasing the hub.
+    fn send_lock(&mut self, group: &str) -> Arc<Mutex<()>> {
+        self.send_locks.entry(group.to_string()).or_default().clone()
+    }
+
+    /// Live counts for a scrape. Read from the hub rather than tracked
+    /// alongside it: a gauge kept in step by hand drifts on every early
+    /// return, and these are cheap.
+    pub fn snapshot(&self) -> Snapshot {
+        Snapshot {
+            clients_online: self.online.len() as u64,
+            // Only circles someone is actually listening to — an entry that
+            // has emptied out is not a subscribed group.
+            groups_subscribed: self.subscribers.values().filter(|s| !s.is_empty()).count() as u64,
+        }
+    }
 }
 
 impl App {
@@ -198,6 +300,7 @@ impl App {
             store,
             hub: Mutex::new(Hub::default()),
             blobs,
+            blob_tickets: UploadTickets::default(),
             push,
             accounts: AccountService::from_env(),
             open_registration,
@@ -206,6 +309,7 @@ impl App {
                 .is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true")),
             admins,
             ice: IceConfig::from_env(),
+            metrics: Metrics::default(),
         })
     }
 
@@ -219,11 +323,16 @@ impl App {
         let body = payload.to_string().into_bytes();
         for (endpoint, subscription) in subs {
             match self.push.send(&subscription, &body).await {
-                Ok(true) => {}
+                Ok(true) => self.metrics.push_sent.inc(),
                 Ok(false) => {
+                    // Gone: the subscription is dead, not the push system.
+                    // Counting it as a failure would page on ordinary churn.
                     let _ = self.store.delete_push_subscription(user, &endpoint).await;
                 }
-                Err(e) => tracing::warn!("push to {user} failed: {e}"),
+                Err(e) => {
+                    self.metrics.push_failed.inc();
+                    tracing::warn!("push to {user} failed: {e}");
+                }
             }
         }
     }
@@ -253,7 +362,14 @@ async fn next_text(socket: &mut WebSocket) -> Option<String> {
 async fn authenticate(socket: &mut WebSocket, app: &App) -> Option<String> {
     let hello = next_text(socket).await?;
     let (user, claimed_key, invite) = match serde_json::from_str::<ClientMsg>(&hello) {
-        Ok(ClientMsg::Hello { user, pubkey, invite }) => (user, pubkey, invite),
+        Ok(ClientMsg::Hello { user, pubkey, invite, v }) => {
+            if let Some(v) = v {
+                if v != PROTOCOL_VERSION {
+                    tracing::debug!(client_version = v, "protocol version skew");
+                }
+            }
+            (user, pubkey, invite)
+        }
         _ => {
             let _ = send_json(socket, &ServerMsg::Error { rid: None, message: "expected hello".into() }).await;
             return None;
@@ -291,15 +407,21 @@ async fn authenticate(socket: &mut WebSocket, app: &App) -> Option<String> {
     };
     let expected_key = pinned.clone().unwrap_or_else(|| claimed_key.clone());
 
+    // Bind the signature to the handle it authenticates, so an answer
+    // captured for one identity cannot be replayed as another.
     let mut signed = AUTH_CONTEXT.to_vec();
     signed.extend_from_slice(&nonce);
+    signed.extend_from_slice(&(user.len() as u32).to_be_bytes());
+    signed.extend_from_slice(user.as_bytes());
     if !verify_sig(&expected_key, &signed, &sig) {
+        app.metrics.auth_failures.bad_signature.inc();
         let _ = send_json(socket, &ServerMsg::Error { rid: None, message: "auth failed".into() }).await;
         return None;
     }
 
     if pinned.is_none() {
-        if !registration_allowed(app, invite.as_deref()).await {
+        if !registration_allowed(app, &user, invite.as_deref()).await {
+            app.metrics.auth_failures.unregistered.inc();
             let _ = send_json(
                 socket,
                 &ServerMsg::Error {
@@ -311,11 +433,12 @@ async fn authenticate(socket: &mut WebSocket, app: &App) -> Option<String> {
             return None;
         }
         match app.store.register_user(&user, &claimed_key).await {
-            Ok(RegisterOutcome::Registered) => {}
+            Ok(RegisterOutcome::Registered) => app.metrics.registrations.inc(),
             // Raced with another connection registering a different key:
             // re-verify against whatever actually got pinned.
             Ok(RegisterOutcome::Existing(k)) if k == claimed_key => {}
             _ => {
+                app.metrics.auth_failures.credential_taken.inc();
                 let _ = send_json(socket, &ServerMsg::Error { rid: None, message: "auth failed".into() }).await;
                 return None;
             }
@@ -331,7 +454,20 @@ async fn authenticate(socket: &mut WebSocket, app: &App) -> Option<String> {
 /// bootstrap user (empty relay) pass; everyone else needs an invite id
 /// that would currently redeem. The use itself is only spent when the
 /// joiner actually redeems after authenticating.
-pub async fn registration_allowed(app: &App, invite: Option<&str>) -> bool {
+/// May `user` register right now? For an invite-gated relay this CLAIMS the
+/// invite — it used to be a pure read, so one never-redeemed `max_uses: 1`
+/// link could register unlimited accounts. Claiming is idempotent per
+/// (invite, user), so the same joiner presenting the link again in
+/// `RedeemInvite` does not burn a second use.
+/// Can a fresh handle register with NO invite at all? A pure query, used by
+/// the onboarding UI to say "invite-only" up front. Deliberately separate
+/// from the gate below, which spends a use — asking must never consume.
+pub async fn registration_open_without_invite(app: &App) -> bool {
+    app.open_registration
+        || app.store.user_count().await.map(|n| n == 0).unwrap_or(false)
+}
+
+pub async fn registration_allowed(app: &App, user: &str, invite: Option<&str>) -> bool {
     if app.open_registration {
         return true;
     }
@@ -339,7 +475,11 @@ pub async fn registration_allowed(app: &App, invite: Option<&str>) -> bool {
         return true;
     }
     match invite {
-        Some(id) => app.store.invite_usable(id, now_unix()).await.unwrap_or(false),
+        Some(id) => app
+            .store
+            .claim_invite_for_registration(id, user, now_unix())
+            .await
+            .unwrap_or(false),
         None => false,
     }
 }
@@ -348,13 +488,15 @@ fn verify_sig(pubkey: &[u8], message: &[u8], sig: &[u8]) -> bool {
     let Ok(key_bytes) = <[u8; 32]>::try_from(pubkey) else { return false };
     let Ok(key) = VerifyingKey::from_bytes(&key_bytes) else { return false };
     let Ok(signature) = Signature::from_slice(sig) else { return false };
-    key.verify(message, &signature).is_ok()
+    // verify_strict rejects small-order / non-canonical keys, which the
+    // permissive verify accepts.
+    key.verify_strict(message, &signature).is_ok()
 }
 
 pub async fn handle_socket(mut socket: WebSocket, app: Arc<App>) {
     let Some(user) = authenticate(&mut socket, &app).await else { return };
 
-    let (tx, mut rx) = mpsc::unbounded_channel::<ServerMsg>();
+    let (tx, mut rx, depth) = Outbound::new();
     {
         // Register as online AND drain Welcomes queued while offline under a
         // single hold of the hub lock. This serializes against the Welcome
@@ -363,6 +505,13 @@ pub async fn handle_socket(mut socket: WebSocket, app: Arc<App>) {
         // stranding it until our next reconnect.
         let mut hub = app.hub.lock().await;
         hub.online.insert(user.clone(), tx.clone());
+        // Connect/disconnect is the single most useful line an operator has
+        // when someone reports "messages aren't arriving": it answers
+        // whether the client is even here. The handle is metadata the relay
+        // already holds, but it is still metadata, so this is INFO on a
+        // deployment's own logs rather than anything exported.
+        tracing::info!(user = %user, online = hub.online.len(), "client connected");
+        app.metrics.ws_connections.inc();
         if let Ok(welcomes) = app.store.take_welcomes(&user).await {
             for w in welcomes {
                 let _ = tx.send(ServerMsg::Welcome {
@@ -390,6 +539,10 @@ pub async fn handle_socket(mut socket: WebSocket, app: Arc<App>) {
             tokio::select! {
                 msg = rx.recv() => {
                     let Some(msg) = msg else { break };
+                    // Decrement as it leaves the queue, whether or not it
+                    // serializes: a message we drop here still freed its slot,
+                    // and leaking depth would strand the connection at the cap.
+                    depth.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
                     let Ok(text) = serde_json::to_string(&msg) else { continue };
                     if ws_tx.send(Message::Text(text.into())).await.is_err() {
                         break;
@@ -422,7 +575,7 @@ pub async fn handle_socket(mut socket: WebSocket, app: Arc<App>) {
         };
         let reply = handle_request(&app, &user, &tx, msg).await;
         if let Some(reply) = reply {
-            if tx.send(reply).is_err() {
+            if !tx.send(reply) {
                 break;
             }
         }
@@ -442,6 +595,7 @@ pub async fn handle_socket(mut socket: WebSocket, app: Arc<App>) {
     if hub.online.get(&user).is_some_and(|t| t.same_channel(&tx)) {
         hub.online.remove(&user);
     }
+    tracing::info!(user = %user, online = hub.online.len(), "client disconnected");
     drop(hub);
     writer.abort();
 }
@@ -453,7 +607,7 @@ fn err(rid: u64, e: impl std::fmt::Display) -> Option<ServerMsg> {
 async fn handle_request(
     app: &Arc<App>,
     user: &str,
-    tx: &mpsc::UnboundedSender<ServerMsg>,
+    tx: &Outbound,
     msg: ClientMsg,
 ) -> Option<ServerMsg> {
     match msg {
@@ -478,8 +632,28 @@ async fn handle_request(
         }
 
         ClientMsg::FetchKp { rid, user: target } => {
+            // Taking a KeyPackage CONSUMES it, so an unauthenticated caller
+            // could drain a user's supply and make them unaddable while
+            // offline. Only a registered user may fetch, and never their own.
+            if target == user {
+                return err(rid, "cannot fetch your own key package");
+            }
+            if app.store.get_user_pubkey(&target).await.unwrap_or(None).is_none() {
+                return err(rid, "no such user");
+            }
+            // Serve the pinned identity key with the KeyPackage so the adder
+            // can check that the two agree before admitting anyone.
+            let pinned = match app.store.get_user_pubkey(&target).await {
+                Ok(p) => p,
+                Err(e) => return err(rid, e),
+            };
             match app.store.take_key_package(&target).await {
-                Ok(kp) => Some(ServerMsg::Kp { rid, user: target, payload: kp.map(|b| B64.encode(b)) }),
+                Ok(kp) => Some(ServerMsg::Kp {
+                    rid,
+                    user: target,
+                    payload: kp.map(|b| B64.encode(b)),
+                    pubkey: pinned.map(|b| B64.encode(b)),
+                }),
                 Err(e) => err(rid, e),
             }
         }
@@ -488,7 +662,8 @@ async fn handle_request(
             match app.store.create_group(&group, user).await {
                 Ok(()) => {
                     let mut hub = app.hub.lock().await;
-                    hub.subscribers.entry(group).or_default().insert(user.to_string(), tx.clone());
+                    hub.subscribers.entry(group.clone()).or_default().insert(user.to_string(), tx.clone());
+            tracing::debug!(user = %user, %group, "subscribed");
                     Some(ServerMsg::Ok { rid, seq: None })
                 }
                 Err(e) => err(rid, e),
@@ -632,7 +807,8 @@ async fn handle_request(
                 Ok(b) => b,
                 Err(e) => return err(rid, e),
             };
-            hub.subscribers.entry(group).or_default().insert(user.to_string(), tx.clone());
+            hub.subscribers.entry(group.clone()).or_default().insert(user.to_string(), tx.clone());
+            tracing::debug!(user = %user, %group, "subscribed");
             let _ = tx.send(ServerMsg::Ok { rid, seq: None });
             for m in backlog {
                 let _ = tx.send(ServerMsg::Msg {
@@ -646,23 +822,51 @@ async fn handle_request(
             None
         }
 
-        ClientMsg::Send { rid, group, epoch, payload } => {
+        ClientMsg::Send { rid, group, epoch, payload, commit } => {
             if let Err(e) = require_member(app, &group, user).await {
+                app.metrics.send_rejections.not_a_member.inc();
                 return err(rid, e);
             }
             let payload = match decode_b64(&payload) {
                 Ok(b) => b,
-                Err(e) => return err(rid, e),
+                Err(e) => {
+                    app.metrics.send_rejections.malformed.inc();
+                    return err(rid, e);
+                }
             };
-            // Append and fan out under the hub lock: seq order == delivery
-            // order for every subscriber.
+            // Append and fan out under this GROUP's send lock, so seq order
+            // still equals delivery order for its subscribers.
+            //
+            // This used to hold the single global hub mutex across the
+            // database round-trip, which serialized every message in every
+            // circle behind one lock plus one write — the hard ceiling on
+            // throughput. Ordering only ever had to hold within a group.
+            //
+            // Lock order is always send-lock then hub, never the reverse, so
+            // the two cannot deadlock.
+            let send_lock = { app.hub.lock().await.send_lock(&group) };
+            // Started before the lock is awaited, on purpose: waiting behind
+            // a busy circle is latency the sender feels, and excluding it
+            // would hide exactly the contention this metric exists to find.
+            let started = std::time::Instant::now();
+            let _ordered = send_lock.lock().await;
             let seq = {
-                let mut hub = app.hub.lock().await;
-                let seq = match app.store.append_message(&group, epoch, user, payload.clone()).await
+                let seq = match app
+                    .store
+                    .append_message(&group, epoch, user, payload.clone(), commit)
+                    .await
                 {
-                    Ok(s) => s,
-                    Err(e) => return err(rid, e),
+                    Ok(s) => {
+                        app.metrics.messages_appended.inc();
+                        app.metrics.append_latency.observe_ms(started.elapsed().as_millis() as u64);
+                        s
+                    }
+                    Err(e) => {
+                        app.metrics.note_send_rejection(&e);
+                        return err(rid, e);
+                    }
                 };
+                let mut hub = app.hub.lock().await;
                 if let Some(subs) = hub.subscribers.get_mut(&group) {
                     let out = ServerMsg::Msg {
                         group: group.clone(),
@@ -675,7 +879,11 @@ async fn handle_request(
                         if peer == user {
                             return true;
                         }
-                        ch.send(out.clone()).is_ok()
+                        let kept = ch.offer(out.clone());
+                        if !kept {
+                            app.metrics.subscribers_dropped.inc();
+                        }
+                        kept
                     });
                 }
                 seq
@@ -717,8 +925,19 @@ async fn handle_request(
             Some(ServerMsg::Ok { rid, seq: Some(seq) })
         }
 
+        ClientMsg::BlobTicket { rid, id } => {
+            Some(ServerMsg::BlobTicket { rid, ticket: app.blob_tickets.mint(&id) })
+        }
+
         ClientMsg::Welcome { rid, to, group, after, payload } => {
             if let Err(e) = require_member(app, &group, user).await {
+                return err(rid, e);
+            }
+            // `to` was unconstrained, so a member could park stored Welcomes
+            // on — and push-spam — any handle at all. A Welcome is only
+            // meaningful for someone being admitted, i.e. already on the
+            // group's ACL via the add that precedes it.
+            if let Err(e) = require_member(app, &group, &to).await {
                 return err(rid, e);
             }
             let payload = match decode_b64(&payload) {
@@ -737,7 +956,12 @@ async fn handle_request(
             // connect+drain (see handle_socket) — which would otherwise let a
             // Welcome be neither delivered nor drained.
             let hub = app.hub.lock().await;
-            let delivered = hub.online.get(&to).is_some_and(|ch| ch.send(out.clone()).is_ok());
+            let delivered = hub.online.get(&to).is_some_and(|ch| ch.offer(out.clone()));
+            if delivered {
+                app.metrics.welcomes_delivered.inc();
+            } else {
+                app.metrics.welcomes_queued.inc();
+            }
             if !delivered {
                 let stored =
                     StoredWelcome { from: user.to_string(), group: group.clone(), after, payload };
@@ -807,7 +1031,7 @@ async fn handle_request(
         }
 
         ClientMsg::RedeemInvite { rid, invite } => {
-            match app.store.redeem_invite(&invite, now_unix()).await {
+            match app.store.redeem_invite(&invite, user, now_unix()).await {
                 Ok((group, payload)) => {
                     // The link is a bearer token: holding it grants relay-level
                     // membership. Whether the joiner can READ anything is
@@ -839,7 +1063,11 @@ async fn handle_request(
                     if peer == user {
                         return true;
                     }
-                    ch.send(out.clone()).is_ok()
+                    let kept = ch.offer(out.clone());
+                    if !kept {
+                        app.metrics.subscribers_dropped.inc();
+                    }
+                    kept
                 });
             }
             // Call nudge: an ephemeral reaches only live subscribers, so a
@@ -971,7 +1199,7 @@ async fn handle_request(
             }
         }
 
-        ClientMsg::PasskeyWrapAdd { rid, cred_id, credential, salt, wrapped } => {
+        ClientMsg::PasskeyWrapAdd { rid, cred_id, credential, salt, wrapped, label } => {
             let (Ok(salt), Ok(wrapped)) = (decode_b64(&salt), decode_b64(&wrapped)) else {
                 return err(rid, "invalid base64");
             };
@@ -980,9 +1208,47 @@ async fn handle_request(
                 credential,
                 salt,
                 wrapped,
+                // Bounded here rather than trusted: it is stored per account
+                // and rendered back into a security screen.
+                label: label.unwrap_or_default().chars().take(MAX_DEVICE_LABEL).collect(),
+                // Server clock, not the client's. This timestamp is what a
+                // user reads when choosing which device to revoke, so a
+                // device must not get to claim it is the older one.
+                created_at: now_unix() as i64,
             };
             match app.store.add_passkey_wrap(&cred_id, wrap).await {
                 Ok(()) => Some(ServerMsg::Ok { rid, seq: None }),
+                Err(e) => err(rid, e),
+            }
+        }
+
+        ClientMsg::PasskeyWrapList { rid } => match app.store.list_passkey_wraps(user).await {
+            Ok(devices) => Some(ServerMsg::PasskeyDevices {
+                rid,
+                devices: devices
+                    .into_iter()
+                    .map(|d| PasskeyDeviceOut {
+                        cred_id: d.cred_id,
+                        label: d.label,
+                        created_at: d.created_at,
+                    })
+                    .collect(),
+            }),
+            Err(e) => err(rid, e),
+        },
+
+        ClientMsg::PasskeyWrapDel { rid, cred_id } => {
+            // `user` here is the authenticated session, so the delete is
+            // scoped to the caller's own account by construction. A missing
+            // row and someone else's row are answered identically on
+            // purpose: distinguishing them would turn this into an oracle
+            // for whether a given credential id is enrolled elsewhere.
+            match app.store.delete_passkey_wrap(&cred_id, user).await {
+                Ok(true) => {
+                    tracing::info!(%user, %cred_id, "revoked a device passkey");
+                    Some(ServerMsg::Ok { rid, seq: None })
+                }
+                Ok(false) => err(rid, "no such device"),
                 Err(e) => err(rid, e),
             }
         }
@@ -1062,6 +1328,75 @@ async fn require_admin(app: &App, group: &str, user: &str) -> Result<(), StoreEr
         Some(role) if role == ROLE_ADMIN => Ok(()),
         Some(_) => Err(StoreError::Backend(format!("admin of {group} required"))),
         None => Err(StoreError::Backend(format!("not a member of {group}"))),
+    }
+}
+
+#[cfg(test)]
+mod outbound_tests {
+    use super::{Outbound, MAX_QUEUE};
+    use crate::proto::ServerMsg;
+
+    fn msg(seq: u64) -> ServerMsg {
+        ServerMsg::Ok { rid: seq, seq: Some(seq) }
+    }
+
+    #[test]
+    fn fan_out_stops_at_the_cap() {
+        // The bug this closes: a suspended laptop in a busy circle grew its
+        // outbound queue without limit, on the server's heap.
+        let (tx, _rx, _depth) = Outbound::new();
+        for i in 0..MAX_QUEUE {
+            assert!(tx.offer(msg(i as u64)), "queue should accept up to the cap");
+        }
+        assert!(!tx.offer(msg(9999)), "past the cap the subscriber is refused, not queued");
+    }
+
+    #[test]
+    fn backfill_is_never_refused() {
+        // Catch-up must not be truncated: the client asked for it, it has no
+        // way to notice a gap, and dropping it is silent data loss.
+        let (tx, _rx, _depth) = Outbound::new();
+        for i in 0..(MAX_QUEUE * 2) {
+            assert!(tx.send(msg(i as u64)), "send() has no cap by design");
+        }
+    }
+
+    #[tokio::test]
+    async fn draining_makes_room_again() {
+        // The depth has to fall as the writer consumes, or one burst strands
+        // a healthy connection at the cap forever.
+        let (tx, mut rx, depth) = Outbound::new();
+        for i in 0..MAX_QUEUE {
+            assert!(tx.offer(msg(i as u64)));
+        }
+        assert!(!tx.offer(msg(1)));
+
+        // Mirror what the writer task does on each recv.
+        rx.recv().await.unwrap();
+        depth.fetch_sub(1, std::sync::atomic::Ordering::Relaxed);
+
+        assert!(tx.offer(msg(2)), "one slot freed is one slot available");
+    }
+
+    #[test]
+    fn a_closed_connection_is_refused_by_both_paths() {
+        let (tx, rx, _depth) = Outbound::new();
+        drop(rx);
+        assert!(!tx.send(msg(1)));
+        assert!(!tx.offer(msg(2)));
+    }
+
+    #[test]
+    fn clones_share_one_queue() {
+        // The hub holds a clone per subscription; two subscriptions of the
+        // same connection must not each get their own budget.
+        let (tx, _rx, _depth) = Outbound::new();
+        let clone = tx.clone();
+        for i in 0..MAX_QUEUE {
+            assert!(tx.offer(msg(i as u64)));
+        }
+        assert!(!clone.offer(msg(1)), "the cap is per connection, not per subscription");
+        assert!(tx.same_channel(&clone));
     }
 }
 

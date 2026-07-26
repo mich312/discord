@@ -95,7 +95,7 @@ const ready = new Promise((resolve) => {
 
     if (msg.t === 'challenge') {
       const nonce = b64.dec(msg.nonce);
-      const context = new TextEncoder().encode('relay-auth-v1');
+      const context = new TextEncoder().encode('relay-auth-v2');
       const signed = new Uint8Array([...context, ...nonce]);
       const sig = await mls('sign', { bytes: signed });
       ws.send(JSON.stringify({ t: 'auth', sig: b64.enc(sig) }));

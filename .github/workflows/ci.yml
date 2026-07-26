@@ -1,0 +1,399 @@
+name: ci
+
+# The test gate. Runs on every PR and every push to main, and is called by
+# deploy.yml as a required prerequisite — nothing reaches production without
+# these jobs going green first.
+#
+# Deliberately NOT gated on `cargo fmt --check`: the Rust here is
+# hand-formatted and is not rustfmt-clean under any single config, so a
+# formatting gate would fail for reasons unrelated to correctness. Adopting a
+# formatter is a separate mechanical change.
+on:
+  push:
+    # Work in this repo happens on claude/* branches and reaches main via PR,
+    # so test those branches directly rather than waiting for a PR to open.
+    branches: [main, 'claude/**']
+  pull_request:
+  workflow_call:
+  workflow_dispatch:
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  rust:
+    name: rust tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    # The relay's Postgres contract tests are skipped unless TEST_DATABASE_URL
+    # is set (relay/tests/pg_store.rs:1-3). Providing it here means the
+    # PgStore/MemoryStore parity suite actually runs, which is where the
+    # known store divergences live.
+    services:
+      postgres:
+        image: postgres:16
+        env:
+          POSTGRES_PASSWORD: test
+          POSTGRES_DB: relay_test
+        ports: ['5432:5432']
+        options: >-
+          --health-cmd pg_isready
+          --health-interval 10s
+          --health-timeout 5s
+          --health-retries 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+
+      - uses: Swatinem/rust-cache@v2
+
+      - name: cargo test
+        env:
+          TEST_DATABASE_URL: postgres://postgres:test@127.0.0.1:5432/relay_test
+        run: cargo test --workspace --all-targets
+
+      # Advisory for now: clippy has never run against this codebase, so
+      # -D warnings would be red on day one for pre-existing lints. Flip
+      # `continue-on-error` off once the existing backlog is cleared.
+      - name: cargo clippy (advisory)
+        continue-on-error: true
+        run: cargo clippy --workspace --all-targets -- -D warnings
+
+  supply-chain:
+    name: supply chain
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    # This job is BLOCKING again. It was marked `continue-on-error` at the job
+    # level to tolerate the outstanding libcrux-sha3 advisories, and that was
+    # the wrong lever: job-level tolerance still lets a failing step SKIP every
+    # step after it. The result was that `npm audit` and the lockfile-sync
+    # check silently stopped running altogether while the run stayed green —
+    # one un-fixable Rust advisory quietly disabled the client's supply-chain
+    # checks too.
+    #
+    # The tolerance now sits on the single step that needs it, so everything
+    # downstream still runs and still gates.
+    steps:
+      - uses: actions/checkout@v4
+
+      # Known-vulnerable, yanked, unmaintained, or non-permissively-licensed
+      # dependencies in a crypto stack are a release-blocking fact, not a
+      # warning to triage later. Config in deny.toml.
+      # Advisories and sources block. Licences and duplicate-version bans are
+      # reported separately and do not block yet: the existing dependency
+      # tree has never been audited on either axis, so failing on them now
+      # would be red for reasons unrelated to the change under review. Same
+      # staging as clippy above.
+      # Tolerated at the STEP, not the job: the two outstanding libcrux-sha3
+      # advisories cannot be fixed from this repository (hpke-rs pins ^0.0.8)
+      # and the reasoning — including what is and is not established about
+      # reachability — is in deny.toml. Findings stay visible in the log on
+      # every run. Drop this line once the upstream bump lands.
+      - name: cargo-deny advisories and sources (tolerated, see deny.toml)
+        continue-on-error: true
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check advisories sources
+
+      - name: cargo-deny licences and bans (advisory)
+        continue-on-error: true
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check licenses bans
+
+      # Evidence for the two outstanding libcrux-sha3 advisories, printed on
+      # every run so the exception argument in deny.toml can be checked
+      # against the resolver rather than taken on trust. `-e features` is the
+      # point: it shows which feature actually pulls the crate in, which a
+      # plain lockfile read cannot — and misreading exactly that is how the
+      # earlier version of that argument went wrong. Never blocking; this
+      # step exists to inform a decision, not to gate one.
+      - name: why is libcrux-sha3 in the tree (evidence, advisory)
+        continue-on-error: true
+        run: |
+          cargo tree -i libcrux-sha3 -e features || true
+          echo '--- forward, from hpke-rs ---'
+          cargo tree -p hpke-rs -e features --depth 1 || true
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+
+      # The client has three runtime dependencies, so a high-severity
+      # advisory here is both rare and worth stopping for.
+      - name: npm audit
+        run: npm audit --audit-level=high
+        working-directory: client
+
+      # The lockfile must already satisfy package.json: `npm ci` fails if it
+      # does not, which catches a hand-edited manifest before it ships.
+      - name: lockfile is in sync
+        run: npm ci --ignore-scripts
+        working-directory: client
+
+  # The deploy path cannot be exercised without a server, so at minimum it is
+  # checked for the mistakes that would only surface mid-deploy: a script that
+  # does not parse, and a compose stack that does not resolve.
+  deploy-path:
+    name: deploy path
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: deploy.sh parses
+        run: bash -n ci/deploy.sh
+
+      - name: deploy.sh is shellcheck-clean
+        run: shellcheck ci/deploy.sh
+
+      - name: the production overlay set resolves
+        # The same three files ci/deploy.sh brings up. A typo here is a failed
+        # deploy on the box rather than a failed check here.
+        env:
+          # The overlays fail closed on missing config — coturn refuses to
+          # resolve without a secret rather than starting open — so the check
+          # has to supply what a real deploy/.env would.
+          CADDY_DOMAIN: example.test
+          QUORUM_IMAGE: ghcr.io/example/quorum:test
+          TURN_SECRET: not-a-real-secret
+        run: |
+          docker compose \
+            -f docker-compose.yml \
+            -f deploy/docker-compose.edge.yml \
+            -f deploy/docker-compose.turn.yml config >/dev/null
+
+      # Prometheus refuses to start on a malformed rule file, so a typo here
+      # takes monitoring down with it — and monitoring is exactly what nobody
+      # is watching when it breaks. `relay/tests/slo_rules.rs` covers the
+      # harder half (that the metric names are real); this covers the half
+      # that stops the file loading at all.
+      - name: the alerting and SLO rules are well-formed
+        run: |
+          python3 - <<'PY'
+          import sys, yaml
+          bad = 0
+          for f in ('deploy/alerts.yml', 'deploy/slo-rules.yml'):
+              for g in yaml.safe_load(open(f))['groups']:
+                  for r in g['rules']:
+                      what = r.get('alert') or r.get('record')
+                      if 'expr' not in r:
+                          print(f'{f}: {what} has no expr'); bad += 1
+                      if 'alert' in r:
+                          if not r.get('annotations', {}).get('summary'):
+                              print(f'{f}: alert {what} has no summary'); bad += 1
+                          if not r.get('labels', {}).get('severity'):
+                              print(f'{f}: alert {what} has no severity'); bad += 1
+          sys.exit(1 if bad else 0)
+          PY
+
+      - name: the image ref is overridable, and defaults to a local build
+        # deploy.sh switches on QUORUM_IMAGE; if compose stopped honouring it,
+        # every deploy would silently keep running the old build-on-server path.
+        run: |
+          set -euo pipefail
+          got=$(QUORUM_IMAGE=ghcr.io/example/quorum:pinned docker compose -f docker-compose.yml config \
+                | grep -E '^\s+image: ghcr.io/example/quorum:pinned$' | wc -l)
+          [ "$got" -eq 1 ] || { echo "QUORUM_IMAGE is not reaching the quorum service"; exit 1; }
+          docker compose -f docker-compose.yml config | grep -q 'quorum-local:dev' \
+            || { echo "the local-build default is gone"; exit 1; }
+
+  # Reproducible builds (plan §2.6's remaining half). §6.2 of the threat model
+  # names operator-served code as the largest gap in the design, and the only
+  # real answer is that anyone can rebuild the source and get the bytes being
+  # served. The integrity manifest gives them something to compare; this job
+  # establishes there is anything stable to compare against.
+  #
+  # It rebuilds from a clean tree on a DIFFERENT machine from the `build` job
+  # and compares against the manifest that job published. Cross-machine by
+  # construction: an earlier version built twice on one runner, which could
+  # only ever rule out clocks and randomness, not the environment.
+  #
+  # Deliberately different from `build` in three ways, so a match means more:
+  # this job sets --remap-path-prefix (build does not), installs wasm-pack
+  # from source rather than a prebuilt action, and starts with no cargo cache.
+  # If any of those changed the output, the artifacts would diverge here.
+  reproducible:
+    name: reproducible build
+    needs: build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+      - run: cargo install wasm-pack --locked || cargo install wasm-pack
+      - name: install binaryen
+        env:
+          BINARYEN_VERSION: '119'
+        run: |
+          set -euo pipefail
+          curl -fsSL "https://github.com/WebAssembly/binaryen/releases/download/version_${BINARYEN_VERSION}/binaryen-version_${BINARYEN_VERSION}-x86_64-linux.tar.gz" -o /tmp/b.tar.gz
+          tar -xzf /tmp/b.tar.gz -C /tmp
+          sudo install -m755 "/tmp/binaryen-version_${BINARYEN_VERSION}/bin/wasm-opt" /usr/local/bin/wasm-opt
+      - run: npm ci
+        working-directory: client
+
+      - name: fetch the manifest the build job published
+        uses: actions/download-artifact@v4
+        with:
+          name: integrity-manifest
+          path: /tmp/published
+
+      - name: rebuild independently and compare
+        env:
+          WASM_REQUIRE_OPT: '1'
+          # Must match the build job's, or the manifests differ for a reason
+          # that has nothing to do with reproducibility.
+          SOURCE_COMMIT: ${{ github.sha }}
+          # Paths would leak into the binary through panic messages and debug
+          # info. `build` does NOT set this, so a match proves they are not in
+          # the artifact at all — which is what lets a third party rebuild at
+          # their own path and still match.
+          RUSTFLAGS: '--remap-path-prefix=${{ github.workspace }}=/build'
+          CARGO_INCREMENTAL: '0'
+        run: |
+          set -euo pipefail
+          # From the commit, not the clock: anything that stamps a time stamps
+          # the same one on every rebuild of this commit.
+          SOURCE_DATE_EPOCH="$(git log -1 --pretty=%ct)"
+          export SOURCE_DATE_EPOCH
+
+          rm -rf crypto-core/pkg client/public/pkg client/dist
+          ./crypto-core/build-wasm.sh
+          ( cd client && npm run build )
+
+          if diff -u /tmp/published/integrity.json client/dist/integrity.json; then
+            echo "✅ an independent rebuild on another machine produced identical artifacts"
+            {
+              echo "### Reproducible build: verified"
+              echo "Rebuilt from a clean tree on a separate runner, with a different"
+              echo "wasm-pack install, no cargo cache and different RUSTFLAGS."
+              echo '```json'
+              cat client/dist/integrity.json
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+          else
+            echo "❌ NOT reproducible — an independent rebuild of this commit differs"
+            {
+              echo "### Reproducible build: FAILED"
+              echo 'An independent rebuild of this commit produced different artifacts:'
+              echo '```diff'
+              diff -u /tmp/published/integrity.json client/dist/integrity.json || true
+              echo '```'
+            } >> "$GITHUB_STEP_SUMMARY"
+            exit 1
+          fi
+
+  client:
+    name: client tests
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+
+      - run: npm ci
+        working-directory: client
+
+      - name: node --test
+        run: npm test
+        working-directory: client
+
+  build:
+    name: wasm + client build
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+
+      - name: install wasm-pack
+        run: curl -sSf https://rustwasm.github.io/wasm-pack/installer/init.sh | sh
+
+      # binaryen >= 116 — below that, build-wasm.sh silently ships an
+      # unoptimized artifact. Installing it here means CI exercises the
+      # optimized path the Docker image also builds.
+      # NOT apt: Ubuntu's binaryen is 108, and versions below 116 miscompile
+      # modules from current rustc (table growth breaks at runtime), so the
+      # optimizer was being skipped on every CI build. Pinned to a specific
+      # release so the artifact CI hashes is the artifact the Dockerfile
+      # builds — a published hash that does not match production is worse
+      # than none.
+      - name: install binaryen
+        env:
+          BINARYEN_VERSION: '119'
+        run: |
+          set -euo pipefail
+          url="https://github.com/WebAssembly/binaryen/releases/download/version_${BINARYEN_VERSION}/binaryen-version_${BINARYEN_VERSION}-x86_64-linux.tar.gz"
+          curl -fsSL "$url" -o /tmp/binaryen.tar.gz
+          tar -xzf /tmp/binaryen.tar.gz -C /tmp
+          sudo install -m755 "/tmp/binaryen-version_${BINARYEN_VERSION}/bin/wasm-opt" /usr/local/bin/wasm-opt
+          wasm-opt --version
+
+      - name: build wasm
+        # Hard-fail rather than quietly shipping an unoptimized artifact: a
+        # release that silently differs from every local build is a difference
+        # nobody thinks to look for.
+        env:
+          WASM_REQUIRE_OPT: '1'
+        run: ./crypto-core/build-wasm.sh
+
+      - run: npm ci
+        working-directory: client
+
+      # Also exercises scripts/inject-sri.mjs (non-zero if no asset tags get
+      # stamped) and scripts/inject-integrity.mjs (non-zero if the wasm is
+      # missing, ambiguous, or the worker's placeholder has been renamed).
+      - name: vite build + SRI
+        env:
+          # Stamps the manifest with the commit it describes, so a verifier
+          # knows which source to rebuild.
+          SOURCE_COMMIT: ${{ github.sha }}
+        run: npm run build
+        working-directory: client
+
+      # Publish the hashes. This is what makes a deployment checkable by
+      # someone who does not trust the server: fetch the files, hash them,
+      # compare against this log. It is the verification half of §2.6 —
+      # byte-for-byte reproducible builds are the other half and are NOT done.
+      - name: publish the integrity manifest
+        run: |
+          echo "### Build integrity" >> "$GITHUB_STEP_SUMMARY"
+          echo '```json' >> "$GITHUB_STEP_SUMMARY"
+          cat client/dist/integrity.json >> "$GITHUB_STEP_SUMMARY"
+          echo '```' >> "$GITHUB_STEP_SUMMARY"
+
+      - uses: actions/upload-artifact@v4
+        with:
+          name: integrity-manifest
+          path: client/dist/integrity.json

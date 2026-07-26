@@ -1,8 +1,9 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import Seal from './Seal.jsx';
 import { describeRetention, freshTyping } from '../lib/controller.js';
+import { meshFull, meshFullMessage } from '../lib/voice.js';
 import { nameHue } from '../lib/avatar.js';
-import { Lock, Paperclip, Clock, Wave, Gamepad, Check, Plus, Reply, Pencil, Trash, X } from './icons.jsx';
+import { AlertTriangle, Lock, Paperclip, Clock, Archive, Wave, Gamepad, Check, Plus, Reply, Pencil, Trash, X } from './icons.jsx';
 
 // The reaction palette: small on purpose. Reactions ride MLS like any
 // message and live on the stored message; kept-history skips them.
@@ -480,11 +481,28 @@ export default function Messages({
             {meta.topic}
           </span>
         )}
-        {meta.retention ? (
+        {/* The forward-secrecy trade, stated wherever it applies rather than
+            once in a system chip that scrolls out of view. `hid` present means
+            this room keeps an encrypted history that anyone added later can
+            read back — the README calls this a clearly-labeled trade, and it
+            is only clearly labeled if it is still on screen. */}
+        {meta.hid || meta.retention ? (
           <span className="sealed-note">
-            <span className="retention-note" title="auto-delete is on for this room">
-              <Clock size={11} /> auto-deletes {describeRetention(meta.retention)} after sending
-            </span>
+            {meta.hid ? (
+              <span
+                className="kept-note"
+                data-testid="kept-history-note"
+                title="This room keeps an encrypted history. Anyone added to the circle later can read it back, so messages here are not forward-secret."
+              >
+                <Archive size={11} /> history kept — new members can read back
+              </span>
+            ) : null}
+            {meta.hid && meta.retention ? <span className="note-sep">·</span> : null}
+            {meta.retention ? (
+              <span className="retention-note" title="auto-delete is on for this room">
+                <Clock size={11} /> auto-deletes {describeRetention(meta.retention)} after sending
+              </span>
+            ) : null}
           </span>
         ) : null}
         {inCallHere && onOpenStage ? (
@@ -496,11 +514,25 @@ export default function Messages({
           <button
             className={liveRoom.n ? 'button pane-call live' : 'button pane-call'}
             data-testid="pane-join-voice"
-            title={liveRoom.n ? `${liveRoom.n} in ${liveRoom.r} right now` : `start a call in ${liveRoom.r}`}
+            // Say "full" before the click rather than after. The join is
+            // refused either way, but a disabled button with a reason is not
+            // the same experience as a toast that looks like a failure.
+            disabled={meshFull(liveRoom.n)}
+            title={
+              meshFull(liveRoom.n)
+                ? meshFullMessage()
+                : liveRoom.n
+                  ? `${liveRoom.n} in ${liveRoom.r} right now`
+                  : `start a call in ${liveRoom.r}`
+            }
             onClick={() => onVoiceJoin(liveRoom.r)}
           >
             <Wave size={13} />
-            {liveRoom.n ? `join ${liveRoom.r} · ${liveRoom.n}` : `join ${liveRoom.r}`}
+            {meshFull(liveRoom.n)
+              ? `${liveRoom.r} is full · ${liveRoom.n}`
+              : liveRoom.n
+                ? `join ${liveRoom.r} · ${liveRoom.n}`
+                : `join ${liveRoom.r}`}
           </button>
         ) : null}
       </header>
@@ -648,6 +680,15 @@ export default function Messages({
           </div>
         ) : (
         <>
+        {server.outOfSync && (
+          <div className="composer-note fork-note" role="status" data-testid="fork-note">
+            <AlertTriangle size={13} />
+            <span>
+              this device is out of sync with <strong>{server.name}</strong> and cannot read new
+              messages. Ask a member for a fresh invite link and open it to rejoin.
+            </span>
+          </div>
+        )}
         {!editing && <TypingLine typing={server.typing} channel={channel} me={me} />}
         {editing ? (
           <div className="reply-bar editing" data-testid="edit-bar">

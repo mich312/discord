@@ -5,6 +5,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
+  isSameOriginSrc,
   GAMES_MAX,
   activitySrc,
   freshPresence,
@@ -166,4 +167,26 @@ test('rally claims are whitelisted and expire faster than presence', async () =>
   assert.equal(freshWant(old, NOW), null, 'replayed rally ages out from its claimed ts');
   const future = normalizeWant({ want: { id: 'g', name: 'G' }, ts: NOW + 9e9 }, NOW);
   assert.equal(future.ts, NOW, 'future rally clamps to now');
+});
+
+// --- iframe origin isolation ---------------------------------------------
+// The game registry travels inside MLS metadata and is authored by any
+// admin, so it is untrusted input. A frame sharing our origin while holding
+// `allow-same-origin` would reach the identity key in localStorage and the
+// MLS state in IndexedDB.
+
+test('a relative game path is same-origin', () => {
+  assert.equal(isSameOriginSrc('/games/hexgambit.html', 'https://quorum.example'), true);
+});
+
+test('an absolute URL back at our own origin is same-origin however it is spelled', () => {
+  assert.equal(isSameOriginSrc('https://quorum.example/evil.html', 'https://quorum.example'), true);
+});
+
+test('a genuinely third-party game is cross-origin', () => {
+  assert.equal(isSameOriginSrc('https://games.example/play', 'https://quorum.example'), false);
+});
+
+test('a port or scheme difference still counts as cross-origin', () => {
+  assert.equal(isSameOriginSrc('https://quorum.example:8443/x', 'https://quorum.example'), false);
 });

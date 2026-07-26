@@ -1,3 +1,4 @@
+import { useDialog } from '../lib/useDialog.js';
 import React, { useEffect, useState } from 'react';
 import Seal from './Seal.jsx';
 import { X, Bell, Sun, Moon, Key, ShieldCheck, Wave, Check } from './icons.jsx';
@@ -8,9 +9,18 @@ import { X, Bell, Sun, Moon, Key, ShieldCheck, Wave, Check } from './icons.jsx';
 export default function Settings({
   me,
   theme,
+  // 'paper' | 'carbon' | null, where null means the theme is following the
+  // operating system. `theme` above is the resolved one either way.
+  themePref = null,
   onTheme,
+  onSystemTheme,
   onEnableNotifications,
   voice,
+  // Device preference: route my media through TURN so peers never see my
+  // address. `turnAvailable` is whether the relay actually offers one.
+  relayOnly = false,
+  turnAvailable = false,
+  onRelayOnly,
   secured,
   onShowIdentity,
   onSecure,
@@ -112,9 +122,16 @@ export default function Settings({
     ['autoGainControl', 'Auto gain', 'Even out your level so you are not too quiet or clipping.'],
   ];
 
+  const dialog = useDialog(onClose, { label: 'Settings' });
+
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div className="card modal settings" onClick={(e) => e.stopPropagation()}>
+      <div
+        className="card modal settings"
+        ref={dialog.ref}
+        {...dialog.props}
+        onClick={(e) => e.stopPropagation()}
+      >
         <div className="dialog-head">
           <span className="dialog-glyph"><ShieldCheck /></span>
           <h1>Settings</h1>
@@ -181,8 +198,20 @@ export default function Settings({
             <span className="settings-row-glyph">{theme === 'paper' ? <Sun size={15} /> : <Moon size={15} />}</span>
             <div className="settings-row-body">
               <div>Theme</div>
-              <div className="fineprint muted">{theme === 'paper' ? 'paper (light)' : 'carbon (dark)'}</div>
+              {/* Say which of the two states you are in. Without this, a
+                  system-following install and a pinned one look identical,
+                  and there is no way to tell that the theme is about to
+                  change by itself at sunset. */}
+              <div className="fineprint muted">
+                {theme === 'paper' ? 'paper (light)' : 'carbon (dark)'}
+                {themePref === null ? ' · following your system' : ''}
+              </div>
             </div>
+            {themePref !== null && (
+              <button className="button ghost" data-testid="settings-theme-system" onClick={onSystemTheme}>
+                use system
+              </button>
+            )}
             <button className="button" data-testid="settings-theme" onClick={onTheme}>
               switch to {theme === 'paper' ? 'carbon' : 'paper'}
             </button>
@@ -254,6 +283,41 @@ export default function Settings({
             <p className="fineprint muted">
               On by default. Turn them off for raw capture — good hardware, or sharing music where
               the gate would clamp the quiet parts. Changes apply to a live call at once.
+            </p>
+          </div>
+
+          {/* The one privacy fact about calls that the app never stated:
+              media is peer-to-peer, so everyone in a call learns everyone
+              else's IP address. */}
+          <div className="settings-dsp">
+            <div className="settings-dsp-head">call privacy</div>
+            <label className="settings-toggle">
+              <input
+                type="checkbox"
+                checked={relayOnly}
+                onChange={() => onRelayOnly?.(!relayOnly)}
+                data-testid="settings-relay-only"
+              />
+              <span className="settings-toggle-body">
+                <span className="settings-toggle-label">hide my IP address from call peers</span>
+                <span className="fineprint muted">
+                  Calls are peer-to-peer, so by default everyone in a call can see your address.
+                  This routes your media through the relay’s TURN server instead. It hides{' '}
+                  <em>yours</em> — it does not hide theirs unless they turn this on too.
+                </span>
+              </span>
+            </label>
+            {relayOnly && !turnAvailable && (
+              // Said plainly rather than silently ignoring the setting: a
+              // privacy switch that quietly does nothing is worse than one
+              // that visibly does not work.
+              <p className="fineprint warn" data-testid="settings-relay-no-turn">
+                This relay has no TURN server configured, so calls will not connect while this is
+                on. Ask the operator to set <code>TURN_URLS</code>, or turn this off.
+              </p>
+            )}
+            <p className="fineprint muted">
+              Applies to calls you join from now on, not one you are already in.
             </p>
           </div>
 

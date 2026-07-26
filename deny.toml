@@ -1,0 +1,119 @@
+# cargo-deny: supply-chain gate for the Rust side.
+#
+# This is a security product with a cryptographic core, so a known-vulnerable
+# or unmaintained dependency is a release-blocking fact rather than a warning
+# to triage later. Run locally with `cargo deny check`; CI runs it on every
+# push and pull request.
+
+[advisories]
+# Any advisory against anything we build is an error. Every exception must
+# carry a written reachability argument, not just an id.
+yanked = "deny"
+# Unmaintained notices are a maintenance signal, not a vulnerability, and
+# they arrive for crates we do not choose. "workspace" fails only when
+# something we depend on DIRECTLY is unmaintained — which is actionable —
+# and reports the rest without blocking. The current example is
+# RUSTSEC-2026-0173 (proc-macro-error2), a build-time proc macro five
+# levels down inside OpenMLS's tree via hax-lib -> libcrux -> hpke-rs; it
+# never ships in the relay binary or the wasm, and nothing here can upgrade
+# it. Vulnerabilities still fail unconditionally.
+unmaintained = "workspace"
+
+# NOTE: TWO advisories are currently outstanding and NOT ignored here, both
+# against libcrux-sha3 0.0.8, reached via
+# hpke-rs -> openmls_rust_crypto -> crypto-core. They are left un-ignored on
+# purpose so every run keeps reporting them.
+#
+#   * RUSTSEC-2026-0208 — panic in AVX2 SHAKE-256. Requires
+#     `libcrux_sha3::avx2::x4::shake256` called OUTSIDE ML-KEM/ML-DSA with an
+#     output length > 32 not divisible by 8. Availability at worst.
+#   * RUSTSEC-2026-0207 — the portable SHAKE XOF `squeeze` drops bytes when
+#     an output is squeezed across multiple calls and any call asks for a
+#     length not divisible by RATE. This one is silently WRONG OUTPUT, not a
+#     panic, which makes it the more serious of the two by class: a crash is
+#     visible, a wrong digest is not.
+#
+# Neither is fixable from this repository. hpke-rs 0.6.1 requires
+# libcrux-sha3 = "^0.0.8" and 0.0.x releases are semver-incompatible, so
+# `cargo update -p libcrux-sha3 --precise 0.0.10` is refused by resolution.
+# It needs an upstream bump in hpke-rs / openmls_rust_crypto.
+#
+# CORRECTION, and it matters. An earlier version of this note asserted that
+# "libcrux comes in through hpke-rs's post-quantum support, which this code
+# never calls". That is not what the lockfile says: `libcrux-sha3` is a
+# DIRECT dependency of hpke-rs 0.6.1 itself, listed alongside hpke-rs-libcrux
+# rather than underneath it. The unreachability claim was therefore resting
+# on a dependency-graph reading that is simply wrong, and it is withdrawn.
+#
+# What can honestly be said today:
+#
+#   * quorum's MLS ciphersuite is classical — X25519 / AES-GCM / SHA-256 /
+#     Ed25519 — and HPKE for it uses HKDF-SHA256, not SHAKE. So there is a
+#     good prior that no SHAKE XOF is squeezed on our path.
+#   * That is a prior, not a finding. Confirming it means reading hpke-rs
+#     0.6.1's source to see what it calls libcrux-sha3 for, and crates.io is
+#     unreachable from the environment this was assessed in (blocked by the
+#     org egress policy), so it has NOT been confirmed.
+#
+# So the supply-chain job stays non-blocking, but for a weaker reason than
+# before: not "assessed unreachable" — "unresolved, with the assessment
+# still owed". The `cargo tree` evidence step in ci.yml prints the
+# feature-resolved inverse tree on every run so the next person picking this
+# up starts from data rather than from this comment. Restoring the job to
+# blocking needs either the upstream bump or that source review.
+ignore = [
+    # RUSTSEC-2023-0071 — Marvin attack, a timing sidechannel in the `rsa`
+    # crate's private-key operations. No fixed version exists.
+    #
+    # Not reachable here. `rsa` arrives transitively as
+    # web-push -> jwt-simple -> superboring -> rsa, and jwt-simple pulls it in
+    # to support RS* JWT algorithms. quorum's VAPID signing is P-256/ES256
+    # throughout (relay/src/push.rs: p256::SecretKey, parse_key, load_key);
+    # the relay never performs an RSA private-key operation, so there is no
+    # RSA timing to observe.
+    #
+    # Re-check this if push signing ever gains an RS256 path, or if web-push
+    # changes its JWT backend.
+    "RUSTSEC-2023-0071",
+
+
+]
+
+[bans]
+# Two copies of a crypto crate means two copies of its bug fixes, and the
+# one you audited may not be the one that runs. Warn rather than deny for
+# now: duplicates are inherited from the dependency tree and clearing them
+# is its own piece of work. Tighten to "deny" once triaged.
+multiple-versions = "warn"
+wildcards = "deny"
+
+[licenses]
+# Permissive only. Copyleft in a client that ships to browsers is a
+# distribution question nobody here has answered, so refuse by default
+# rather than discover it at release.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "Zlib",
+    "CC0-1.0",
+    "MPL-2.0",
+]
+confidence-threshold = 0.9
+# Anything outside the allow list above is reported but does not fail the
+# build yet — the existing tree has not been audited licence-by-licence, so
+# denying on day one would be red for reasons unrelated to any change under
+# review. Same staging as clippy in ci.yml. Tighten once triaged.
+unused-allowed-license = "allow"
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+# crates.io only. A git dependency in a crypto stack is an unpinned,
+# unreviewed input.
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

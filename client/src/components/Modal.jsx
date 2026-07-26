@@ -1,3 +1,4 @@
+import { useDialog } from '../lib/useDialog.js';
 import React, { useEffect, useState } from 'react';
 import { LinkGlyph, Key, ShieldCheck, Copy, Download, X, Check, Gear, LogOut } from './icons.jsx';
 
@@ -25,6 +26,8 @@ export default function Modal({
   onLogout,
   onLinkSend,
   onEnrollDevice,
+  onListDevices,
+  onRevokeDevice,
   unsecured,
   identityKey,
 }) {
@@ -40,6 +43,25 @@ export default function Modal({
   const [renameTo, setRenameTo] = useState(modal.type === 'channel' ? modal.channel ?? '' : '');
   const [serverName, setServerName] = useState(modal.type === 'circle' ? modal.name ?? '' : '');
   const [confirmDelete, setConfirmDelete] = useState(false);
+  // Enrolled devices. `null` = not loaded yet, so an empty account and a
+  // still-loading one do not render the same thing.
+  const [devices, setDevices] = useState(null);
+  const [confirmRevoke, setConfirmRevoke] = useState(null);
+
+  const showDevices = modal.type === 'secure' && !!onListDevices;
+  useEffect(() => {
+    if (!showDevices) return;
+    let live = true;
+    onListDevices()
+      .then((list) => live && setDevices(list))
+      // A relay that does not understand `passkey_wrap_list` is an older
+      // relay, not a broken account: fall back to showing nothing rather
+      // than an error the user cannot act on.
+      .catch(() => live && setDevices([]));
+    return () => {
+      live = false;
+    };
+  }, [showDevices, onListDevices]);
 
   // Escape closes, like every other overlay in the app.
   useEffect(() => {
@@ -93,9 +115,16 @@ export default function Modal({
   };
   const head = heads[modal.type];
 
+  const dialog = useDialog(onClose, { label: head?.title ?? 'Dialog' });
+
   return (
     <div className="modal-backdrop" onClick={onClose}>
-      <div className="card modal" onClick={(e) => e.stopPropagation()}>
+      <div
+        className="card modal"
+        ref={dialog.ref}
+        {...dialog.props}
+        onClick={(e) => e.stopPropagation()}
+      >
         {head && (
           <div className="dialog-head">
             <span className="dialog-glyph">{head.glyph}</span>
@@ -172,6 +201,56 @@ export default function Modal({
                 <p className="fineprint muted">
                   Registers a passkey for this device only — your other devices&rsquo; passkeys keep
                   working. Best right after signing in on a new machine.
+                </p>
+              </>
+            )}
+            {showDevices && devices !== null && devices.length > 0 && (
+              <>
+                <div className="divider">devices that can sign in</div>
+                <ul className="device-list" data-testid="device-list">
+                  {devices.map((d) => (
+                    <li key={d.credId} className="device-row">
+                      <span className="device-name">
+                        {d.label || 'unnamed device'}
+                        <span className="device-when mono">
+                          added {new Date(d.createdAt).toLocaleDateString()}
+                        </span>
+                      </span>
+                      {confirmRevoke === d.credId ? (
+                        <button
+                          className="ghost danger"
+                          disabled={busy}
+                          data-testid={`device-revoke-confirm-${d.credId}`}
+                          onClick={() =>
+                            attempt(async () => {
+                              await onRevokeDevice(d.credId);
+                              setDevices((list) => list.filter((x) => x.credId !== d.credId));
+                              setConfirmRevoke(null);
+                            })
+                          }
+                        >
+                          really revoke?
+                        </button>
+                      ) : (
+                        <button
+                          className="ghost"
+                          disabled={busy}
+                          data-testid={`device-revoke-${d.credId}`}
+                          onClick={() => setConfirmRevoke(d.credId)}
+                        >
+                          revoke
+                        </button>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+                {/* The limit stated where the button is, not in a help page.
+                    "Revoke" reads as "cut that device off", and for a device
+                    someone is holding, unlocked, it is not that. */}
+                <p className="fineprint muted">
+                  Revoking stops that passkey unlocking your account from now on. It cannot erase
+                  what is already stored on a device someone is holding — if one was lost while
+                  signed in, treat its messages as compromised.
                 </p>
               </>
             )}

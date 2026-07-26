@@ -1,0 +1,17 @@
+# The single source of truth for which compiler builds this project.
+#
+# Before this file existed, CI used a floating `stable` while the Dockerfile
+# pinned `rust:1.94-bookworm`. Two different compilers can emit different
+# wasm, which meant the integrity manifest CI publishes could describe a
+# binary the production image never contained — the same defect as building
+# the wasm two different ways, one level down.
+#
+# rustup honours this file for any cargo invocation inside the repo, so it
+# binds CI, the Docker build and a contributor's laptop alike: the base image's
+# own rustc version stops mattering, because rustup fetches this one.
+#
+# Bumping it is a deliberate act with a visible diff, and it changes every
+# published hash — which is exactly the property reproducible builds need.
+[toolchain]
+channel = "1.94.0"
+targets = ["wasm32-unknown-unknown"]

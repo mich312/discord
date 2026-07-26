@@ -42,12 +42,39 @@ impl AccountService {
         let rp_id = std::env::var("RP_ID").unwrap_or_else(|_| "localhost".into());
         let rp_origin = std::env::var("RP_ORIGIN")
             .unwrap_or_else(|_| format!("http://{rp_id}:9601"));
-        let origin = Url::parse(&rp_origin).expect("RP_ORIGIN must be a valid URL");
-        let webauthn = WebauthnBuilder::new(&rp_id, &origin)
-            .expect("invalid RP configuration")
-            .rp_name("quorum")
-            .build()
-            .expect("webauthn build");
+        // These three used to be bare `.expect()`s. Combined with
+        // `restart: unless-stopped`, a typo in either variable became an
+        // endless crash loop whose only output was a Rust panic message —
+        // which tells an operator nothing about which setting is wrong.
+        // The process still exits (the service genuinely cannot run without
+        // a valid relying party), but it now says why and what to change.
+        let fatal = |detail: &str| -> ! {
+            tracing::error!(
+                rp_id = %rp_id,
+                rp_origin = %rp_origin,
+                "{detail}\n\
+                 WebAuthn is misconfigured, so the relay cannot start.\n\
+                 RP_ID must be the DOMAIN the client is served from, with no \
+                 scheme, port, or path (e.g. chat.example.com).\n\
+                 RP_ORIGIN must be that domain's full origin, scheme included \
+                 (e.g. https://chat.example.com).\n\
+                 RP_ID must be RP_ORIGIN's host or a parent of it."
+            );
+            std::process::exit(78); // EX_CONFIG
+        };
+
+        if rp_id.contains("://") || rp_id.contains('/') || rp_id.contains(':') {
+            fatal("RP_ID looks like a URL, but it must be a bare domain.");
+        }
+        let Ok(origin) = Url::parse(&rp_origin) else {
+            fatal("RP_ORIGIN is not a valid URL.");
+        };
+        let Ok(builder) = WebauthnBuilder::new(&rp_id, &origin) else {
+            fatal("RP_ID is not valid for RP_ORIGIN — it must be that origin's host or a parent domain.");
+        };
+        let Ok(webauthn) = builder.rp_name("quorum").build() else {
+            fatal("The relying party could not be built from RP_ID and RP_ORIGIN.");
+        };
         Self {
             webauthn,
             reg_states: Mutex::new(HashMap::new()),

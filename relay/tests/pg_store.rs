@@ -67,9 +67,9 @@ async fn message_log_assigns_ordered_seqs() {
     s.create_group(&group, "alice").await.unwrap();
     assert!(s.create_group(&group, "alice").await.is_err(), "duplicate group must fail");
 
-    assert_eq!(s.append_message(&group, 1, "alice", b"m1".to_vec()).await.unwrap(), 1);
-    assert_eq!(s.append_message(&group, 1, "alice", b"m2".to_vec()).await.unwrap(), 2);
-    assert_eq!(s.append_message(&group, 2, "bob", b"m3".to_vec()).await.unwrap(), 3);
+    assert_eq!(s.append_message(&group, 1, "alice", b"m1".to_vec(), false).await.unwrap(), 1);
+    assert_eq!(s.append_message(&group, 1, "alice", b"m2".to_vec(), false).await.unwrap(), 2);
+    assert_eq!(s.append_message(&group, 2, "bob", b"m3".to_vec(), false).await.unwrap(), 3);
 
     let tail = s.messages_after(&group, 1).await.unwrap();
     assert_eq!(tail.len(), 2);
@@ -138,40 +138,46 @@ async fn invites_enforce_expiry_uses_and_atomic_counting() {
     let inv = unique("inv");
     s.create_invite(&inv, record(None, None)).await.unwrap();
     assert_eq!(s.invite_group(&inv).await.unwrap(), Some(group.clone()));
-    let (g, payload) = s.redeem_invite(&inv, 1000).await.unwrap();
+    let (g, payload) = s.redeem_invite(&inv, "claimant1", 1000).await.unwrap();
     assert_eq!((g.as_str(), payload.as_slice()), (group.as_str(), b"blob-v1".as_slice()));
     s.update_invite(&inv, b"blob-v2".to_vec()).await.unwrap();
-    let (_, payload) = s.redeem_invite(&inv, 1000).await.unwrap();
+    let (_, payload) = s.redeem_invite(&inv, "claimant2", 1000).await.unwrap();
     assert_eq!(payload, b"blob-v2");
 
     // Expiry.
     let expired = unique("inv");
     s.create_invite(&expired, record(None, Some(500))).await.unwrap();
-    assert!(s.redeem_invite(&expired, 1000).await.is_err());
-    assert!(s.invite_usable(&expired, 1000).await.unwrap() == false);
-    assert!(s.invite_usable(&expired, 400).await.unwrap(), "not yet expired at t=400");
-    assert!(s.redeem_invite(&expired, 400).await.is_ok(), "not yet expired at t=400");
+    assert!(s.redeem_invite(&expired, "claimant3", 1000).await.is_err());
+    // invite_usable is gone: a read-only variant of this check WAS the bug
+    // (§0.4), so expiry is asserted through the claiming path instead.
+    assert!(!s.claim_invite_for_registration(&expired, "probe-late", 1000).await.unwrap());
+    assert!(
+        s.claim_invite_for_registration(&expired, "probe-early", 400).await.unwrap(),
+        "not yet expired at t=400"
+    );
+    assert!(s.redeem_invite(&expired, "claimant4", 400).await.is_ok(), "not yet expired at t=400");
 
     // max_uses is atomic: two redemptions of a 1-use invite can't both win.
     let once = unique("inv");
     s.create_invite(&once, record(Some(1), None)).await.unwrap();
     // The registration gate's check does NOT consume a use.
-    assert!(s.invite_usable(&once, 100).await.unwrap());
-    assert!(s.invite_usable(&once, 100).await.unwrap(), "usability checks must not count uses");
-    let (a, b) = tokio::join!(s.redeem_invite(&once, 100), s.redeem_invite(&once, 100));
+    // NB: no claim here — `once` has max_uses 1 and the concurrency check
+    // below needs it unspent. Per-claimant idempotency is covered in
+    // memory_store.rs::invite_uses_are_counted_once_per_claimant.
+    let (a, b) = tokio::join!(s.redeem_invite(&once, "claimant5", 100), s.redeem_invite(&once, "claimant6", 100));
     assert_eq!(
         [a.is_ok(), b.is_ok()].iter().filter(|x| **x).count(),
         1,
         "exactly one concurrent redemption may succeed"
     );
 
-    // A spent 1-use invite is no longer usable.
-    assert!(!s.invite_usable(&once, 100).await.unwrap());
+    // A spent 1-use invite is no longer claimable by anyone new.
+    assert!(!s.claim_invite_for_registration(&once, "stranger", 100).await.unwrap());
 
     // Revoke.
     s.revoke_invite(&inv).await.unwrap();
-    assert!(s.redeem_invite(&inv, 1000).await.is_err());
-    assert!(!s.invite_usable(&inv, 1000).await.unwrap());
+    assert!(s.redeem_invite(&inv, "claimant7", 1000).await.is_err());
+    assert!(!s.claim_invite_for_registration(&inv, "stranger", 1000).await.unwrap());
     assert_eq!(s.invite_group(&inv).await.unwrap(), None);
 
     // Unknown group refused.

@@ -113,15 +113,37 @@ impl Client {
         Ok(self.inner.create_group(id)?)
     }
 
+    /// `expected_identity`/`expected_key` are mandatory: they bind the
+    /// relay-supplied KeyPackage to the handle and pinned key the caller
+    /// asked for. See `Client::add_member`.
     #[wasm_bindgen(js_name = addMember)]
-    pub fn add_member(&mut self, id: &str, key_package: &[u8]) -> Result<AddResult, JsError> {
-        let r = self.inner.add_member(id, key_package)?;
+    pub fn add_member(
+        &mut self,
+        id: &str,
+        key_package: &[u8],
+        expected_identity: &str,
+        expected_key: &[u8],
+    ) -> Result<AddResult, JsError> {
+        let r = self.inner.add_member(id, key_package, expected_identity, expected_key)?;
         Ok(AddResult { commit: r.commit, welcome: r.welcome })
     }
 
     #[wasm_bindgen(js_name = removeMember)]
     pub fn remove_member(&mut self, id: &str, name: &str) -> Result<Vec<u8>, JsError> {
         Ok(self.inner.remove_member(id, name)?)
+    }
+
+    /// Merge a staged commit once the relay has accepted it. Returns the new
+    /// epoch. See `ChatClient::merge_staged_commit`.
+    #[wasm_bindgen(js_name = mergeStagedCommit)]
+    pub fn merge_staged_commit(&mut self, id: &str) -> Result<u64, JsError> {
+        Ok(self.inner.merge_staged_commit(id)?)
+    }
+
+    /// Drop a staged commit the relay refused.
+    #[wasm_bindgen(js_name = discardStagedCommit)]
+    pub fn discard_staged_commit(&mut self, id: &str) -> Result<(), JsError> {
+        Ok(self.inner.discard_staged_commit(id)?)
     }
 
     /// Join from a Welcome; returns the joined group's id.

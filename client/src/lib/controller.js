@@ -80,15 +80,6 @@ import {
 } from './history.js';
 import { VoiceManager } from './voice.js';
 import {
-  VAULT_PRF_SALT,
-  derivePrfSecret,
-  parseCreationOptions,
-  parseRequestOptions,
-  prfSecret,
-  serializeAssertion,
-  serializeRegistration,
-} from './webauthn.js';
-import {
   b64url,
   buildInviteUrl,
   decryptBlob,
@@ -97,8 +88,8 @@ import {
   generateInviteId,
 } from './invite.js';
 import { sealIdentity } from './link.js';
+import { AccountService } from './account.js';
 import {
-  canRemoveNotice,
   mergeNotices,
   normalizeNotice,
   normalizeOverview,
@@ -106,7 +97,35 @@ import {
   upsertNotice,
 } from './overview.js';
 import { freshPresence, normalizeGameRef, normalizePresence, normalizeWant } from './games.js';
+import { MIN_QUERY, rankHits } from './search.js';
+import { ForkWatch, forkMessage } from './fork.js';
+import {
+  adminRequirement,
+  applyEnvelope,
+  DELETED_MAX,
+  callChatChannel,
+  clearChannelDeleted,
+  clearVoiceDeleted,
+  describeChanMeta,
+  describeRetention,
+  ensureChannel,
+  isCallChat,
+  markChannelDeleted,
+  markVoiceDeleted,
+  messageTs,
+  normalizeReply,
+  parseEnvelope,
+} from './envelope.js';
 
+// Re-exported so the components and tests that already import these from
+// here keep working; they now live beside the reducer that uses them.
+export { callChatChannel, describeRetention, isCallChat, messageTs } from './envelope.js';
+
+/** How many superseded kept-history keys a channel carries for reading.
+    Each removal adds one; the cap stops the metadata growing without bound
+    in a circle with heavy churn, at the cost of the oldest entries becoming
+    unreadable — which auto-delete would have reclaimed anyway. */
+const MAX_ARCHIVED_HISTORY_KEYS = 8;
 const KP_TOPUP = 2; // fresh KeyPackages published per connect
 const INVITE_TTL_SECONDS = 7 * 24 * 3600;
 // Typing signals: readers treat one as stale ~6s after it was sent, and a
@@ -115,18 +134,6 @@ const INVITE_TTL_SECONDS = 7 * 24 * 3600;
 // only in memory — a typing signal is never logged or persisted.
 const TYPING_TTL_MS = 6000;
 const TYPING_HEARTBEAT_MS = 3000;
-// A reply carries a *snapshot* of the answered line, not a pointer: E2EE
-// gives a joiner no scrollback to resolve one against, so the quote must be
-// self-contained. Bounded hard — it renders as text, never as markup.
-const REPLY_TEXT_MAX = 140;
-function normalizeReply(r) {
-  if (!r || typeof r !== 'object') return null;
-  const sender = String(r.sender ?? '').slice(0, 64).trim();
-  const ts = Number(r.ts);
-  if (!sender || !Number.isFinite(ts) || ts <= 0) return null;
-  const text = String(r.text ?? '').slice(0, REPLY_TEXT_MAX);
-  return { sender, ts, text };
-}
 /** True while `entry` (a {ts} typing signal) is still within its live
     window. Reader-side expiry, exactly like presence/rally freshness. */
 export function freshTyping(entry, now = Date.now()) {
@@ -138,17 +145,6 @@ export function freshTyping(entry, now = Date.now()) {
 // read either store, so this adds redundancy, not exposure.
 const IDENTITY_LS_KEY = 'e2ee-identity';
 
-/** Guidance when a browser won't produce the passkey PRF secret the vault is
-    encrypted under — common on Chromium (Edge/Chrome) on macOS, where Safari
-    does support it. */
-function noPrfMessage() {
-  return (
-    "this browser didn’t provide the passkey PRF extension we need to encrypt your vault. " +
-    'On a Mac, Safari supports it; otherwise secure this account with a password, or link ' +
-    'this device from one you’re already signed in on.'
-  );
-}
-
 export class Controller {
   constructor({ db, crypto, dispatch, relayUrl }) {
     this.db = db;
@@ -158,6 +154,22 @@ export class Controller {
     this.relay = null;
     this.servers = new Map(); // id -> record
     this.me = null;
+    // §1.1's fourth part: tell a permanently forked circle apart from the
+    // ordinary undecryptable blob. In memory on purpose — see fork.js.
+    this.forks = new ForkWatch();
+    /** Circles we have already warned about, so the notice appears once per
+        session rather than on every message from the other branch. */
+    this.forkWarned = new Set();
+    // Vaults, passkeys and sign-in (plan §2.2). `request` is a function
+    // rather than the connection because the socket does not exist yet.
+    this.accounts = new AccountService({
+      request: (msg) => this.relay.request(msg),
+      crypto,
+      db,
+      dispatch,
+      httpBase: () => this.httpBase(),
+      identityBytes: () => this.identityBytes(),
+    });
   }
 
   // === boot paths =========================================================
@@ -170,9 +182,18 @@ export class Controller {
       this.me = result.name;
       await this.persistState(result.state);
       for (const record of await this.db.serversAll()) {
+        // `serverPut` persists whatever is on the record, so a fork verdict
+        // written during the last session would come back with it. Drop it
+        // and re-earn it from live traffic: a stale "this circle is broken"
+        // surviving a successful rejoin is worse than taking a few messages
+        // to say it again. See fork.js.
+        delete record.outOfSync;
         this.servers.set(record.id, record);
       }
       this.dispatch({ type: 'booted', me: this.me, servers: this.snapshotServers() });
+      // Every boot, not just onboarding: a grant can be revoked, and a site
+      // refused once may qualify later once the user has engaged with it.
+      this.requestPersistentStorage();
       this.connectRelay();
       this.setupServiceWorker();
       return;
@@ -262,12 +283,7 @@ export class Controller {
   async completeOnboarding(securedLocal = true) {
     await this.db.kvPut('session', { name: this.me, createdAt: Date.now() });
     await this.db.kvPut('securedLocal', securedLocal);
-    // Ask the browser not to evict our keys; best-effort (plan §5.2).
-    try {
-      await navigator.storage?.persist?.();
-    } catch {
-      /* not fatal */
-    }
+    await this.requestPersistentStorage();
     this.dispatch({ type: 'booted', me: this.me, servers: this.snapshotServers() });
     this.connectRelay();
     this.setupServiceWorker();
@@ -510,6 +526,7 @@ export class Controller {
       seen: prior?.seen ?? {},
       hcursor: prior?.hcursor ?? {},
       verified: prior?.verified,
+      verifiedSn: prior?.verifiedSn,
       members,
       epoch,
       lastSeq: msg.after,
@@ -545,10 +562,52 @@ export class Controller {
     // that wedges the cursor would wedge the client forever.
     record.lastSeq = Math.max(record.lastSeq, msg.seq);
 
+    // The ratchet snapshot is deliberately NOT written here. These used to
+    // be three separate IndexedDB transactions in the order ratchet →
+    // message → cursor, so a crash in the middle left the ratchet advanced
+    // past a message whose seq was never recorded: the relay replayed it,
+    // decryption failed against the moved-on ratchet, and the message was
+    // dropped as "undecryptable" — silent, permanent loss.
+    //
+    // Writing the ratchet LAST inverts which side a crash lands on. A stale
+    // snapshot with the message and cursor already durable is recoverable:
+    // MLS tolerates the skipped generation, so the next message still
+    // decrypts. Order matters more than atomicity here.
+    let ratchet = null;
+    // Decryption and content handling get SEPARATE catches. They used to
+    // share one, so an IndexedDB quota error, a JSON edge case, or a bug in
+    // the reaction/edit handler all surfaced as "undecryptable blob seq N" —
+    // a line whose own comment says it is expected. That is why storage
+    // failures were invisible.
+    let event = null;
     try {
-      const { event, state } = await this.crypto('receive', { bytes: b64.dec(msg.payload) });
-      await this.persistState(state);
-      if (event.kind === 'message') {
+      const decrypted = await this.crypto('receive', { bytes: b64.dec(msg.payload) });
+      event = decrypted.event;
+      ratchet = decrypted.state;
+      // Proof the ratchet is still shared with this sender, which is what
+      // clears any fork suspicion against them.
+      this.forks.succeeded(msg.group, msg.sender);
+    } catch (e) {
+      // Genuinely expected: our own commits replayed by catch-up, and blobs
+      // from an epoch this device never held. `why` separates those from the
+      // one shape that means this device is on a branch of its own — see
+      // fork.js — so the log says which it was instead of lumping them
+      // together under a warning whose own comment calls it expected.
+      const why = this.forks.failed(msg.group, {
+        sender: msg.sender,
+        epoch: msg.epoch,
+        me: this.me,
+        groupEpoch: record.epoch,
+        restored: record.restored,
+      });
+      console.warn(`undecryptable blob seq ${msg.seq} in ${msg.group} (${why}): ${e.message}`);
+      this.noteFork(record);
+    }
+
+    try {
+      if (!event) {
+        // nothing to apply
+      } else if (event.kind === 'message') {
         await this.onContent(record, event.sender, event.text);
       } else if (event.kind === 'membershipChange') {
         // Were we the one dropped? A re-key that no longer lists us means we
@@ -558,6 +617,9 @@ export class Controller {
         if (!event.members.includes(this.me)) {
           this.toast(`you were removed from "${record.name}"`);
           await this.forgetServerLocal(record.id);
+          // Early return, but the ratchet still moved and covers every other
+          // group in this snapshot — persist before leaving.
+          await this.persistState(ratchet);
           return;
         }
         const before = new Set(record.members);
@@ -585,6 +647,9 @@ export class Controller {
             `members now: ${event.members.join(', ')} (epoch ${event.epoch})`
           );
         }
+        // A membership change is when a key can enter or re-enter the group,
+        // so re-check every badge against the key it was granted for.
+        await this.revalidateVerified(record);
         // Every epoch change kills parked GroupInfo blobs; refresh ours.
         await this.refreshInvites(record);
         this.refreshRoles(record.id);
@@ -592,364 +657,118 @@ export class Controller {
         this.voice.membershipChanged(record.id, event.members);
       }
     } catch (e) {
-      // Expected for own commits replayed by catch-up; log and move on.
-      console.warn(`undecryptable blob seq ${msg.seq} in ${msg.group}: ${e.message}`);
+      // A decrypted message we then failed to APPLY. Not expected, and not
+      // the same as an undecryptable blob: the likely causes are storage
+      // (quota, eviction) or a defect in a content handler. Surface it.
+      console.error(`failed to apply seq ${msg.seq} in ${msg.group}: ${e.message}`);
+      this.toast(`a message could not be saved: ${e.message}`);
     }
+    // Cursor first, ratchet second — see the note above.
     await this.db.serverPut(record);
+    await this.persistState(ratchet);
     this.dispatch({ type: 'servers', servers: this.snapshotServers() });
   }
 
+  /**
+   * One authenticated envelope, applied.
+   *
+   * Split in two on purpose (plan §2.2). `applyEnvelope` decides what the
+   * envelope *means* and returns effect descriptors; `runEffects` is the only
+   * part that touches the database, the voice manager or the UI. The rules
+   * that used to need a relay, a worker and a database to exercise are now
+   * reachable from a plain object — see `test/envelope.test.mjs`.
+   */
   async onContent(record, sender, raw) {
-    let content;
-    try {
-      content = JSON.parse(raw);
-    } catch {
-      content = { k: 'chat', ch: 'general', text: raw };
-    }
-    switch (content.k) {
-      case 'chat': {
-        this.ensureChannel(record, content.ch);
-        // A line landing is proof the sender stopped composing — clear their
-        // typing signal now instead of waiting for it to age out.
-        this.clearTyping(record.id, sender);
-        await this.storeMessage({
-          server: record.id,
-          channel: content.ch,
-          sender,
-          text: content.text,
-          ts: messageTs(content.ts),
-          ...(normalizeReply(content.reply) ? { reply: normalizeReply(content.reply) } : {}),
-        });
-        break;
-      }
-      case 'game': {
-        // Same channel handling as chat; the ref is whitelisted and the
-        // Join affordance resolves against the shelf, never this payload.
-        const game = normalizeGameRef(content.game);
-        if (!game) break;
-        this.ensureChannel(record, content.ch);
-        await this.storeMessage({
-          server: record.id,
-          channel: content.ch,
-          sender,
-          game,
-          ts: messageTs(content.ts),
-        });
-        break;
-      }
-      case 'pres': {
-        // Ephemeral by design: kept in a controller-side map, expired by
-        // readers, never written to the record store or the backup.
-        this.setLivePresence(record.id, sender, normalizePresence(content));
-        break;
-      }
-      case 'want': {
-        // A rally — same ephemeral discipline as presence: a controller-side
-        // map, reader-expired, never persisted to the record or the backup.
-        this.setLiveWant(record.id, sender, normalizeWant(content));
-        break;
-      }
-      case 'type': {
-        // A typing signal — same ephemeral discipline again. Only ever fanned
-        // out over the no-log path, but handled here too so the two receive
-        // routes stay symmetric.
-        this.setLiveTyping(record.id, sender, content.ch);
-        break;
-      }
-      case 'react': {
-        const emo = String(content.emo ?? '').slice(0, 8).trim();
-        const to = content.to ?? {};
-        const op = content.op === 'del' ? 'del' : 'add';
-        if (!emo || !to.sender || !Number.isFinite(Number(to.ts))) break;
-        await this.applyReaction(record.id, String(content.ch ?? ''), {
-          sender: String(to.sender),
-          ts: Number(to.ts),
-        }, emo, op, sender);
-        this.dispatch({ type: 'refreshMessages' });
-        break;
-      }
-      case 'edit': {
-        const ts = Number(content.to?.ts);
-        const text = String(content.text ?? '');
-        if (!Number.isFinite(ts) || !text) break;
-        // Keyed on (sender, ts): the patch lands only if a line with this
-        // authenticated sender and ts exists locally, so no one can edit
-        // anyone else's message and a joiner without the line simply no-ops.
-        await this.db.msgPatch(record.id, String(content.ch ?? ''), sender, ts, (m) =>
-          m.deleted ? m : { ...m, text, edited: true }
-        );
-        this.dispatch({ type: 'refreshMessages' });
-        break;
-      }
-      case 'del': {
-        const ts = Number(content.to?.ts);
-        if (!Number.isFinite(ts)) break;
-        // Same (sender, ts) self-scoping as edit. Strip the body to a
-        // tombstone; reactions go with it. The sealed history copy and any
-        // device that already received the line are untouched — a delete is
-        // not a redaction, and the UI says so.
-        await this.db.msgPatch(record.id, String(content.ch ?? ''), sender, ts, (m) => ({
-          sender: m.sender,
-          server: m.server,
-          channel: m.channel,
-          ts: m.ts,
-          deleted: true,
-        }));
-        this.dispatch({ type: 'refreshMessages' });
-        break;
-      }
-      case 'rsvp': {
-        const at = Number(content.at);
-        if (!Number.isFinite(at)) break;
-        const rsvps = { ...(record.rsvps ?? {}) };
-        if (content.going) rsvps[sender] = { at, ts: Date.now() };
-        else delete rsvps[sender];
-        record.rsvps = rsvps;
-        break;
-      }
-      case 'meta': {
-        record.name = content.name ?? record.name;
-        // A device catching up after a (re-)join or restore may be holding a
-        // stale shape: phantom channels a since-departed admin deleted, a game
-        // hub from before the shelf changed, notices long since unpinned. It
-        // resumed the log past those events and will never replay them, but the
-        // rebroadcaster has and is authoritative — so adopt its snapshot
-        // wholesale. The union path below can only ever grow the shape; this is
-        // the one place it must be allowed to shrink.
-        if (record.pendingMetaSync) {
-          record.pendingMetaSync = false;
-          Object.assign(record, reconcileMeta(content));
-          // The snapshot is authoritative about what exists now, so a channel
-          // or voice room it lists is not a tombstone — drop any stale one so
-          // it isn't wrongly blocked from re-appearing.
-          if (record.deletedChannels?.length) {
-            record.deletedChannels = record.deletedChannels.filter(
-              (c) => !record.channels.includes(c)
-            );
-          }
-          if (record.deletedVoice?.length) {
-            record.deletedVoice = record.deletedVoice.filter(
-              (c) => !(record.voiceChannels ?? []).includes(c)
-            );
-          }
-          this.backfillHistory(record).catch((e) => console.warn(`history: ${e.message}`));
+    const content = parseEnvelope(raw);
+
+    // The admin answer is resolved here rather than inside the reducer:
+    // `senderIsAdmin` can consult the relay's ACL, and an async reducer is
+    // not a reducer. Resolved only for the kinds that need it, so ordinary
+    // chat traffic does not pay for a check it never uses.
+    const need = adminRequirement(content);
+    const isAdmin = need ? await this.senderIsAdmin(record, sender, need) : null;
+
+    const { effects } = applyEnvelope(record, sender, content, {
+      isAdmin,
+      inCall: this.voice?.active
+        ? { server: this.voice.active.server, channel: this.voice.active.channel }
+        : null,
+    });
+    await this.runEffects(record, effects);
+  }
+
+  /** Carry out what `applyEnvelope` decided, in order. The order matters:
+      a rename must move the stored rows before the system message that
+      announces it, and the backup is rescheduled last. */
+  async runEffects(record, effects) {
+    for (const e of effects) {
+      switch (e.t) {
+        case 'storeMessage':
+          await this.storeMessage(e.message);
+          break;
+        case 'systemMessage':
+          await this.addSystemMessage(e.server, e.text, e.channel);
+          break;
+        case 'reaction':
+          await this.applyReaction(e.server, e.channel, e.target, e.emo, e.op, e.by);
+          break;
+        case 'editMessage':
+          await this.db.msgPatch(e.server, e.channel, e.sender, e.ts, (m) =>
+            m.deleted ? m : { ...m, text: e.text, edited: true }
+          );
+          break;
+        case 'deleteMessage':
+          // Strip the body to a tombstone; reactions go with it.
+          await this.db.msgPatch(e.server, e.channel, e.sender, e.ts, (m) => ({
+            sender: m.sender,
+            server: m.server,
+            channel: m.channel,
+            ts: m.ts,
+            deleted: true,
+          }));
+          break;
+        case 'renameMessages':
+          await this.db.msgsRename(e.server, e.from, e.to);
+          break;
+        case 'deleteMessages':
+          await this.db.msgsDelete(e.server, e.channel);
+          break;
+        case 'applyRetention':
+          await this.applyRetention(record, e.channel);
+          break;
+        case 'refreshMessages':
+          this.dispatch({ type: 'refreshMessages' });
+          break;
+        case 'refreshRoles':
+          this.refreshRoles(e.server);
+          break;
+        case 'clearTyping':
+          this.clearTyping(e.server, e.sender);
+          break;
+        case 'presence':
+          this.setLivePresence(e.server, e.sender, e.value);
+          break;
+        case 'want':
+          this.setLiveWant(e.server, e.sender, e.value);
+          break;
+        case 'typing':
+          this.setLiveTyping(e.server, e.sender, e.channel);
+          break;
+        case 'leaveVoice':
+          await this.voice.leave();
+          break;
+        case 'backfillHistory':
+          // Fire-and-forget by design: a history fetch must never hold up
+          // applying the rest of the log.
+          this.backfillHistory(record).catch((err) => console.warn(`history: ${err.message}`));
+          break;
+        case 'backup':
           this.scheduleBackup();
           break;
-        }
-        // Union gap-fill: adopt rooms this device is missing, but never a room
-        // it has seen deleted — otherwise a peer that missed the deletion
-        // would resurrect it on every meta rebroadcast (now one per connect).
-        for (const ch of content.channels ?? []) {
-          if (!record.channels.includes(ch) && !(record.deletedChannels ?? []).includes(ch)) {
-            record.channels.push(ch);
-          }
-        }
-        if (content.voiceChannels) {
-          const rooms = record.voiceChannels ?? ['lounge'];
-          for (const ch of content.voiceChannels) {
-            if (!rooms.includes(ch) && !(record.deletedVoice ?? []).includes(ch)) rooms.push(ch);
-          }
-          record.voiceChannels = rooms;
-        }
-        // Gap-fill the home base the same way: a joiner has none, and
-        // explicit edits arrive as their own `overview`/`notice` events.
-        // Adopting it re-parks the backup so it survives a vault restore.
-        if (content.overview !== undefined && record.overview == null) {
-          const adopted = normalizeOverview(content.overview);
-          if (adopted) {
-            record.overview = adopted;
-            this.scheduleBackup();
-          }
-        }
-        // Noticeboard union: ids this device already has win. Authors in a
-        // rebroadcast are vouched for by the rebroadcaster, like the rest
-        // of the metadata a joiner has no scrollback to verify.
-        if (Array.isArray(content.notices) && content.notices.length) {
-          const incoming = content.notices
-            .map((n) => normalizeNotice(n, n?.author))
-            .filter(Boolean);
-          const merged = mergeNotices(record.notices, incoming);
-          if (merged.length !== (record.notices ?? []).length) {
-            record.notices = merged;
-            this.scheduleBackup();
-          }
-        }
-        // Gap-fill RSVPs the same way (a joiner has none). Bounded and
-        // whitelisted: handle -> {at}. Existing local answers win.
-        if (content.rsvps && typeof content.rsvps === 'object') {
-          const mine = record.rsvps ?? {};
-          const merged = { ...mine };
-          for (const [handle, v] of Object.entries(content.rsvps).slice(0, 64)) {
-            const at = Number(v?.at);
-            if (!Number.isFinite(at) || merged[handle]) continue;
-            merged[String(handle).slice(0, 64)] = { at, ts: Number(v?.ts) || Date.now() };
-          }
-          record.rsvps = merged;
-        }
-        // Gap-fill channel settings (a joiner has none): explicit changes
-        // arrive as their own `chanset` events, so never clobber here.
-        if (content.chanMeta) {
-          const mine = record.chanMeta ?? {};
-          for (const [ch, meta] of Object.entries(content.chanMeta)) {
-            mine[ch] = { ...meta, ...(mine[ch] ?? {}) };
-          }
-          record.chanMeta = mine;
-          this.backfillHistory(record).catch((e) => console.warn(`history: ${e.message}`));
-        }
-        break;
-      }
-      case 'chanset': {
-        // A channel's settings changed: topic, auto-delete, or history
-        // (the history key itself rides in `meta.hkey` — inside MLS, so
-        // the relay never sees it). The sender's copy is authoritative.
-        // Same advisory admin gate as `chan`: ignore senders we know are
-        // not admins, fail open while roles are still syncing.
-        if (!(await this.senderIsAdmin(record, sender))) break;
-        if (!record.channels.includes(content.ch)) record.channels.push(content.ch);
-        record.chanMeta = { ...(record.chanMeta ?? {}), [content.ch]: content.meta ?? {} };
-        await this.addSystemMessage(
-          record.id,
-          `#${content.ch} settings changed by ${sender}${describeChanMeta(content.meta)}`,
-          content.ch
-        );
-        await this.applyRetention(record, content.ch);
-        this.backfillHistory(record).catch((e) => console.warn(`history: ${e.message}`));
-        this.scheduleBackup();
-        break;
-      }
-      case 'overview': {
-        // The home base's admin-edited half changed. Same advisory admin
-        // gate as `chanset`: MLS can't enforce roles, so ignore senders we
-        // know are not admins and fail open while roles are still syncing.
-        if (!(await this.senderIsAdmin(record, sender))) break;
-        record.overview = normalizeOverview(content.ov);
-        await this.addSystemMessage(record.id, `home base updated by ${sender}`);
-        this.scheduleBackup();
-        break;
-      }
-      case 'notice': {
-        // The noticeboard is the whole roster's — any member may pin. The
-        // author is the MLS-authenticated sender, never the payload.
-        if (content.op === 'add') {
-          const notice = normalizeNotice(content.n, sender);
-          if (notice) {
-            record.notices = upsertNotice(record.notices, notice);
-            this.scheduleBackup();
-          }
-        } else if (content.op === 'del') {
-          const target = (record.notices ?? []).find((n) => n.id === content.id);
-          if (target && canRemoveNotice(target, sender, record.roles)) {
-            record.notices = record.notices.filter((n) => n.id !== content.id);
-            this.scheduleBackup();
-          }
-        }
-        break;
-      }
-      case 'file': {
-        this.ensureChannel(record, content.ch);
-        await this.storeMessage({
-          server: record.id,
-          channel: content.ch,
-          sender,
-          file: content.file,
-          ts: messageTs(content.ts),
-        });
-        break;
-      }
-      case 'chan': {
-        // Only admins may create channels. Enforced client-side (the relay
-        // can't read content): ignore a chan from someone we know is not an
-        // admin. Fail open if the sender's role isn't known yet, so a legit
-        // creation racing role sync isn't dropped.
-        if (!(await this.senderIsAdmin(record, sender))) break;
-        this.clearChannelDeleted(record, content.ch);
-        if (!record.channels.includes(content.ch)) {
-          record.channels.push(content.ch);
-          await this.addSystemMessage(record.id, `#${content.ch} created by ${sender}`, content.ch);
-          this.scheduleBackup();
-        }
-        break;
-      }
-      case 'vchan': {
-        if (!(await this.senderIsAdmin(record, sender))) break;
-        this.clearVoiceDeleted(record, content.ch);
-        const rooms = record.voiceChannels ?? ['lounge'];
-        if (!rooms.includes(content.ch)) {
-          record.voiceChannels = [...rooms, content.ch];
-          await this.addSystemMessage(record.id, `voice room "${content.ch}" created by ${sender}`);
-        }
-        break;
-      }
-      case 'chan-ren': {
-        if (!(await this.senderIsAdmin(record, sender))) break;
-        if (record.channels.includes(content.ch) && !record.channels.includes(content.to)) {
-          record.channels = record.channels.map((c) => (c === content.ch ? content.to : c));
-          this.markChannelDeleted(record, content.ch);
-          this.clearChannelDeleted(record, content.to);
-          if (record.chanMeta?.[content.ch]) {
-            record.chanMeta = { ...record.chanMeta, [content.to]: record.chanMeta[content.ch] };
-            delete record.chanMeta[content.ch];
-          }
-          await this.db.msgsRename(record.id, content.ch, content.to);
-          await this.addSystemMessage(record.id, `#${content.ch} renamed to #${content.to}`, content.to);
-          this.dispatch({ type: 'refreshMessages' });
-          this.scheduleBackup();
-        }
-        break;
-      }
-      case 'chan-del': {
-        if (!(await this.senderIsAdmin(record, sender))) break;
-        if (record.channels.includes(content.ch) && record.channels.length > 1) {
-          record.channels = record.channels.filter((c) => c !== content.ch);
-          this.markChannelDeleted(record, content.ch);
-          if (record.chanMeta?.[content.ch]) {
-            record.chanMeta = { ...record.chanMeta };
-            delete record.chanMeta[content.ch];
-          }
-          await this.db.msgsDelete(record.id, content.ch);
-          await this.addSystemMessage(record.id, `#${content.ch} deleted by ${sender}`);
-          this.scheduleBackup();
-        }
-        break;
-      }
-      case 'vchan-ren': {
-        if (!(await this.senderIsAdmin(record, sender))) break;
-        const rooms = record.voiceChannels ?? ['lounge'];
-        if (rooms.includes(content.ch) && !rooms.includes(content.to)) {
-          record.voiceChannels = rooms.map((c) => (c === content.ch ? content.to : c));
-          this.markVoiceDeleted(record, content.ch);
-          this.clearVoiceDeleted(record, content.to);
-          if (this.voice?.active?.server === record.id && this.voice.active.channel === content.ch) {
-            await this.voice.leave();
-          }
-          await this.addSystemMessage(record.id, `voice room "${content.ch}" renamed to "${content.to}"`);
-          this.scheduleBackup();
-        }
-        break;
-      }
-      case 'vchan-del': {
-        if (!(await this.senderIsAdmin(record, sender))) break;
-        const rooms = record.voiceChannels ?? ['lounge'];
-        if (rooms.includes(content.ch)) {
-          record.voiceChannels = rooms.filter((c) => c !== content.ch);
-          this.markVoiceDeleted(record, content.ch);
-          if (this.voice?.active?.server === record.id && this.voice.active.channel === content.ch) {
-            await this.voice.leave();
-          }
-          await this.addSystemMessage(record.id, `voice room "${content.ch}" deleted by ${sender}`);
-          this.scheduleBackup();
-        }
-        break;
-      }
-      case 'role': {
-        // Roles live in the relay's ACL; this envelope just tells everyone
-        // to re-read them and leaves a trace in the channel.
-        await this.addSystemMessage(
-          record.id,
-          `${content.user} is now ${content.role === 'admin' ? 'an admin' : 'a regular member'} (changed by ${sender})`
-        );
-        this.refreshRoles(record.id);
-        break;
+        default:
+          // A descriptor with no interpreter is a bug in this file, not bad
+          // input — the reducer is the only thing that produces them.
+          console.warn(`unhandled effect: ${e.t}`);
       }
     }
   }
@@ -989,43 +808,36 @@ export class Controller {
   // or reordered message for a *deleted* channel must never bring it back.
   // Deleted names are tombstoned (bounded) so only an explicit admin `chan`
   // re-creation can revive them.
-  static DELETED_MAX = 200;
+  // Kept as a re-export rather than a second literal: the bound is enforced
+  // in envelope.js, and two copies of a number is how they drift apart.
+  static DELETED_MAX = DELETED_MAX;
 
   /** Surface an unknown channel for an incoming message, unless it is a call
       thread or a room we have seen deleted. */
+  // Thin delegates: the implementations moved to envelope.js so the reducer
+  // can use them without reaching into a Controller instance. The user-action
+  // methods further down still call them through `this`.
   ensureChannel(record, ch) {
-    if (isCallChat(ch) || record.channels.includes(ch)) return;
-    if ((record.deletedChannels ?? []).includes(ch)) return;
-    record.channels.push(ch);
+    ensureChannel(record, ch);
   }
 
-  /** Remember a removed channel so a stray message can't resurrect it. */
   markChannelDeleted(record, ch) {
-    record.deletedChannels = [...new Set([...(record.deletedChannels ?? []), ch])].slice(
-      -Controller.DELETED_MAX
-    );
+    markChannelDeleted(record, ch);
   }
 
-  /** A channel is legitimately (re-)created: it is no longer a tombstone. */
   clearChannelDeleted(record, ch) {
-    if (record.deletedChannels?.length) {
-      record.deletedChannels = record.deletedChannels.filter((c) => c !== ch);
-    }
+    clearChannelDeleted(record, ch);
   }
 
   /** Voice rooms get the same tombstone treatment as text channels, so the
       meta union (now rebroadcast on every connect to heal divergence) can't
       resurrect a room this device has seen deleted. */
   markVoiceDeleted(record, ch) {
-    record.deletedVoice = [...new Set([...(record.deletedVoice ?? []), ch])].slice(
-      -Controller.DELETED_MAX
-    );
+    markVoiceDeleted(record, ch);
   }
 
   clearVoiceDeleted(record, ch) {
-    if (record.deletedVoice?.length) {
-      record.deletedVoice = record.deletedVoice.filter((c) => c !== ch);
-    }
+    clearVoiceDeleted(record, ch);
   }
 
   /** The full metadata snapshot a joiner (or a peer that missed an event)
@@ -1173,9 +985,16 @@ export class Controller {
   async markSeen(serverId, channel, atLeastTs = 0) {
     const record = this.servers.get(serverId);
     if (!record || !channel) return;
-    // Message ts is the *sender's* clock; take the max with our own so a
-    // fast sender clock can't leave an already-read message counted unread.
-    record.seen = { ...(record.seen ?? {}), [channel]: Math.max(Date.now(), atLeastTs) };
+    // Message ts is the *sender's* clock. Taking max(now, atLeastTs) alone
+    // handled a FAST sender clock but broke the slow one: stamping `now`
+    // meant every later message from a device minutes behind us arrived
+    // already "seen" and never counted unread. Anchor on the newest message
+    // this channel actually holds, falling back to now for an empty room.
+    const newest = (await this.db.msgsFor(record.id, channel))
+      .filter((m) => !m.system)
+      .reduce((max, m) => Math.max(max, Number(m.ts) || 0), 0);
+    const anchor = newest || Date.now();
+    record.seen = { ...(record.seen ?? {}), [channel]: Math.max(anchor, atLeastTs) };
     await this.db.serverPut(record);
   }
 
@@ -1189,8 +1008,7 @@ export class Controller {
       const msgs = (await this.db.msgsFor(serverId, channel))
         .filter((m) => !m.system)
         .sort((a, b) => a.ts - b.ts);
-      const seen = record.seen?.[channel] ?? record.joinedAt ?? 0;
-      const unread = msgs.filter((m) => m.ts > seen && m.sender !== this.me).length;
+      const unread = countUnread(msgs, seenFloor(record, channel), this.me);
       const last = msgs.at(-1);
       out.push({
         channel,
@@ -1205,6 +1023,55 @@ export class Controller {
       });
     }
     return out;
+  }
+
+  /** Unread totals per circle, for the rail. Without this the rail is pure
+      identity: nothing on screen says a circle you are not looking at has
+      moved, so anyone in more than two circles has to click through them to
+      find out — which is what made the multi-circle model unusable.
+
+      One pass over every circle rather than one call per tile: the read is
+      device-local IndexedDB, but it is O(channels) transactions and the
+      callers refresh it on every arriving message. */
+  async circleUnreads() {
+    const out = {};
+    for (const record of this.servers.values()) {
+      let unread = 0;
+      for (const channel of record.channels) {
+        unread += countUnread(await this.db.msgsFor(record.id, channel), seenFloor(record, channel), this.me);
+      }
+      out[record.id] = unread;
+    }
+    return out;
+  }
+
+  /** Search every message this device holds, across every circle.
+      Necessarily device-local: the relay stores ciphertext and cannot index
+      it, so the answer is exactly what this device has decrypted and kept —
+      a phone that joined last week will not find last year. That limit is
+      stated in the UI rather than hidden.
+
+      A linear scan, deliberately: an inverted index would have to live in
+      the same IndexedDB as the plaintext it indexes, buying speed at the
+      cost of a second copy of every message to keep consistent and to purge
+      on retention and on leave. At the scale this app is for, the scan is
+      the cheaper correctness story. */
+  async searchMessages(query, opts = {}) {
+    if (String(query ?? '').trim().length < MIN_QUERY) return { hits: [], truncated: false };
+    const rows = [];
+    for (const record of this.servers.values()) {
+      for (const channel of record.channels) {
+        for (const message of await this.db.msgsFor(record.id, channel)) {
+          rows.push({ server: record.id, channel, message });
+        }
+      }
+    }
+    const { hits, truncated } = rankHits(rows, query, opts);
+    // The palette shows circle and room names, not ids.
+    return {
+      hits: hits.map((h) => ({ ...h, serverName: this.servers.get(h.server)?.name ?? h.server })),
+      truncated,
+    };
   }
 
   /** Local half of auto-delete: drop this device's copies past retention. */
@@ -1625,11 +1492,17 @@ export class Controller {
       for (const e of reply.entries) {
         maxSeq = Math.max(maxSeq, e.seq);
         let entry;
-        try {
-          entry = await openHistoryEntry(meta.hkey, e.payload);
-        } catch {
-          continue; // key rotated or blob damaged — skip, don't wedge
+        // Current key first, then keys superseded by a removal — entries
+        // parked before a rotation are still legitimately readable.
+        for (const key of [meta.hkey, ...(meta.hkeys ?? [])]) {
+          try {
+            entry = await openHistoryEntry(key, e.payload);
+            break;
+          } catch {
+            /* try the next key */
+          }
         }
+        if (!entry) continue; // no key opens it — damaged, or rotated past the cap
         // Whitelist fields: an entry is authored by whoever holds the room
         // key, so it must never override where it lands (server/channel)
         // or dress itself up as a system line.
@@ -1674,17 +1547,26 @@ export class Controller {
     if (!reply.payload) {
       throw new Error(`${user} has no published key packages (have they signed up?)`);
     }
-    const { commit, welcome, epoch, members, state } = await this.crypto('addMember', {
+    // The relay serves both halves, so make it commit to a consistent story:
+    // the KeyPackage's credential must name `user` and carry the signature
+    // key pinned for that handle. Without this the relay can hand back a
+    // KeyPackage it minted itself and join the group as "user". Refuse
+    // outright if the relay declines to state a key — an add is not urgent
+    // enough to do blind.
+    if (!reply.pubkey) {
+      throw new Error(
+        `the relay did not provide an identity key for ${user}; refusing to add them unverified`
+      );
+    }
+    const { commit, welcome, epoch, state } = await this.crypto('addMember', {
       group: serverId,
       keyPackage: b64.dec(reply.payload),
+      expectIdentity: user,
+      expectKey: b64.dec(reply.pubkey),
     });
     await this.persistState(state);
-    const sent = await this.relay.request({
-      t: 'send',
-      group: serverId,
-      epoch,
-      payload: b64.enc(commit),
-    });
+    const sent = await this.publishCommit(record, epoch, commit);
+    const { members } = await this.crypto('mergeStagedCommit', { group: serverId });
     record.lastSeq = Math.max(record.lastSeq, sent.seq);
     await this.relay.request({ t: 'allow', group: serverId, user });
     await this.relay.request({
@@ -1721,23 +1603,120 @@ export class Controller {
     this.scheduleBackup();
   }
 
+  /** Publish a staged commit and let the relay's ordered log decide whether
+      it wins its epoch.
+
+      Commits used to be merged locally the moment they were built, before
+      the relay had seen them. Two admins acting in the same second each
+      merged their own commit, so each held a different epoch N+1 and could
+      never decrypt the other again — the group forked permanently, silently,
+      with the failures swallowed as "undecryptable blob".
+
+      Now the commit is staged; the relay compare-and-swaps on the epoch and
+      accepts exactly one. On acceptance the caller merges. On `EpochConflict`
+      we drop the staged commit and stay where we were, so the commit that did
+      win arrives over the normal subscription and is processed like anyone
+      else's. The caller's operation is not applied — it is reported as
+      retryable, because re-deriving intent (which member, which role) against
+      the new epoch is the caller's business, not this function's. */
+  async publishCommit(record, epoch, commit) {
+    try {
+      return await this.relay.request({
+        t: 'send',
+        group: record.id,
+        epoch,
+        payload: b64.enc(commit),
+        commit: true,
+      });
+    } catch (e) {
+      const conflict = /epoch conflict/i.test(e.message ?? '');
+      try {
+        // Persist the rolled-back MLS state too, so a reload cannot
+        // resurrect the commit we just abandoned.
+        const { state } = await this.crypto('discardStagedCommit', { group: record.id });
+        await this.persistState(state);
+      } catch (inner) {
+        // Staging state is now ambiguous; say so rather than pretending.
+        console.error(`could not discard the staged commit for ${record.id}: ${inner.message}`);
+        throw e;
+      }
+      throw new Error(
+        conflict
+          ? 'someone else changed this circle at the same moment — nothing was applied, try again'
+          : e.message
+      );
+    }
+  }
+
+  /** Mint a fresh kept-history key for every channel that has one, keeping
+      the old keys for reading.
+
+      Removing someone re-keys MLS, so they can decrypt no further *messages*.
+      The per-channel history key was a separate story: it was minted once
+      when history was switched on and never rotated, so a removed member
+      kept a valid key for that channel's future entries too. Only the
+      relay's ACL stood in the way, and the ACL is the deliberately weak
+      boundary — cached ciphertext or a hostile relay defeated it.
+
+      Old keys are archived rather than discarded: the removed member was
+      present for those entries anyway, so destroying them would punish the
+      members who stayed without denying the leaver anything. Rotation is
+      about the future, which is exactly what post-compromise security means.
+      Returns the channels that rotated. */
+  rotateHistoryKeys(record) {
+    const rotated = [];
+    for (const [channel, meta] of Object.entries(record.chanMeta ?? {})) {
+      if (!meta?.hid || !meta?.hkey) continue;
+      const archive = [meta.hkey, ...(meta.hkeys ?? [])].slice(0, MAX_ARCHIVED_HISTORY_KEYS);
+      record.chanMeta = {
+        ...record.chanMeta,
+        [channel]: { ...meta, hkey: generateHistoryKey(), hkeys: archive },
+      };
+      rotated.push(channel);
+    }
+    return rotated;
+  }
+
+  /** Kill every invite link parked for this circle.
+
+      An invite is a bearer token: `redeem_invite` grants relay membership to
+      whoever presents the id, with no check against who was removed. Worse,
+      removal *refreshes* the parked blob to the new epoch, so a link the
+      removed member still holds keeps working — they can walk straight back
+      in. Any link in circulation has to die with them.
+
+      This also invalidates links held by people who were legitimately about
+      to join; there is no way to tell the two apart, so it takes the safe
+      side and says so out loud. */
+  async revokeAllInvites(record) {
+    const invites = record.invites ?? [];
+    if (!invites.length) return 0;
+    let revoked = 0;
+    for (const invite of invites) {
+      try {
+        await this.relay.request({ t: 'revoke_invite', invite: invite.id });
+        revoked += 1;
+      } catch (e) {
+        console.warn(`revoke invite ${invite.id}: ${e.message}`);
+      }
+    }
+    record.invites = [];
+    return revoked;
+  }
+
   /** Remove a member: the MLS commit re-keys the group so they can read and
       send nothing further (the real boundary), and the relay drops them from
       the ACL so they stop being listed and served. UI-gated to admins. */
   async removeMember(serverId, user) {
     const record = this.servers.get(serverId);
     if (!record || user === this.me) return;
-    const { commit, epoch, members, state } = await this.crypto('removeMember', {
+    const { commit, epoch, state } = await this.crypto('removeMember', {
       group: serverId,
       name: user,
     });
     await this.persistState(state);
-    const sent = await this.relay.request({
-      t: 'send',
-      group: serverId,
-      epoch,
-      payload: b64.enc(commit),
-    });
+    const sent = await this.publishCommit(record, epoch, commit);
+    const { members } = await this.crypto('mergeStagedCommit', { group: serverId });
     record.lastSeq = Math.max(record.lastSeq, sent.seq);
     record.members = members;
     record.epoch = epoch;
@@ -1751,8 +1730,29 @@ export class Controller {
       .request({ t: 'disallow', group: serverId, user })
       .catch((e) => console.warn(`disallow ${user}: ${e.message}`));
     await this.addSystemMessage(serverId, `${user} was removed from the circle by you (epoch ${epoch})`);
-    // The epoch moved: any parked invite GroupInfo blob is now stale.
-    await this.refreshInvites(record);
+
+    // Removal has to close every door, not just the MLS one.
+    const rotated = this.rotateHistoryKeys(record);
+    // Do NOT refreshInvites here: re-parking the blob under the same id is
+    // what kept a removed member's link alive. Revoke instead.
+    const revoked = await this.revokeAllInvites(record);
+    if (rotated.length || revoked) {
+      // Members need the new history keys; this is also what tells them the
+      // rotation happened at all.
+      await this.sendContent(serverId, this.metaContent(record));
+    }
+    if (rotated.length) {
+      await this.addSystemMessage(
+        serverId,
+        `new history key for ${rotated.map((c) => `#${c}`).join(', ')} — ${user} cannot read anything kept from here on`
+      );
+    }
+    if (revoked) {
+      await this.addSystemMessage(
+        serverId,
+        `${revoked} invite link${revoked === 1 ? '' : 's'} revoked, in case ${user} still held one — share a new link to invite anyone else`
+      );
+    }
     await this.db.serverPut(record);
     this.dispatch({ type: 'servers', servers: this.snapshotServers() });
     this.scheduleBackup();
@@ -1804,9 +1804,51 @@ export class Controller {
 
   /** Tear down every local trace of a circle: MLS keys, the record, its
       messages, any live call. Shared by leave, delete, and being kicked. */
+  /**
+   * Surface a fork once we believe in it.
+   *
+   * Deliberately not a silent flag. A forked circle looks *fine* — messages
+   * you send appear to go out, the member list is right, and the other
+   * branch's messages simply never arrive. Without a notice the user
+   * concludes the circle went quiet, which is the failure mode §1.1 called
+   * "no detection and no recovery path".
+   *
+   * There is no repair to offer from here. Rejoining needs a current
+   * GroupInfo, and the only one this client can get comes from an invite
+   * blob — our own parked invites were re-encrypted from our own broken
+   * branch. So the notice asks for a link from someone whose circle works,
+   * which is the existing external-commit rejoin, and the record is marked
+   * so the UI can keep saying so after the toast is gone.
+   */
+  noteFork(record) {
+    const verdict = this.forks.verdict(record.id);
+    const text = forkMessage(verdict, record.name ?? record.id);
+    if (!text) return;
+    // The record flag tracks the live verdict either way; only the toast is
+    // once-per-session, because repeating it on every blob from the other
+    // branch would be its own kind of broken.
+    const wasOut = record.outOfSync === true;
+    record.outOfSync = verdict.outOfSync;
+    if (wasOut !== record.outOfSync) {
+      this.dispatch({ type: 'servers', servers: this.snapshotServers() });
+    }
+    const key = `${record.id}:${verdict.outOfSync ? 'self' : verdict.stranded.join(',')}`;
+    if (this.forkWarned.has(key)) return;
+    this.forkWarned.add(key);
+    console.error(`fork detected in ${record.id}: ${text}`);
+    this.toast(text);
+    this.addSystemMessage(record.id, text).catch(() => {});
+  }
+
   async forgetServerLocal(serverId) {
     const wasActiveCall = this.voice?.active?.server === serverId;
     this.servers.delete(serverId);
+    // A rejoin must start from a clean slate, or the old branch's evidence
+    // would immediately re-condemn the new membership.
+    this.forks.clear(serverId);
+    for (const key of [...this.forkWarned]) {
+      if (key.startsWith(`${serverId}:`)) this.forkWarned.delete(key);
+    }
     try {
       const { state } = await this.crypto('forgetGroup', { group: serverId });
       await this.persistState(state);
@@ -1824,19 +1866,40 @@ export class Controller {
 
   // === roles ==============================================================
 
-  /** Advisory admin gate for admin-only envelopes (overview, chanset,
-      channel create/rename/delete). MLS can't enforce roles; the relay's
-      ACL is the source of truth, but our cache of it can lag a promotion —
-      an admin's edit arriving just after they were promoted must not be
-      silently dropped because this device still has them as "member".
-      Fail open while the role is unknown; on a cache that disagrees,
-      re-pull the ACL once and re-check before dropping. */
-  async senderIsAdmin(record, sender) {
+  /** Admin gate for admin-only envelopes (overview, chanset, channel
+      create/rename/delete). MLS can't enforce roles; the relay's ACL is the
+      source of truth, but our cache of it can lag a promotion — an admin's
+      edit arriving just after they were promoted must not be silently
+      dropped because this device still has them as "member". So a sender we
+      don't have as an admin always costs one ACL re-pull before we decide.
+
+      When that re-pull still leaves the role unknown (the fetch failed, or
+      the sender isn't in the roster yet) the two classes of envelope are
+      NOT symmetric, so `destructive` picks the safe direction:
+
+      - Additive envelopes (create a channel, edit the home base) fail
+        *open*. A wrong guess leaves a stray channel, and the meta snapshot
+        that trails these repairs the opposite error anyway.
+      - Destructive envelopes fail *closed*. `chan-del` reaches
+        `db.msgsDelete` and irreversibly drops this device's only copy of a
+        room's history — in an E2EE app with no server-side backup, no later
+        role sync can undo that. `chanset` counts as destructive too: it
+        carries the kept-history and retention switches, so applying one
+        from an unverified sender is a forward-secrecy downgrade. */
+  async senderIsAdmin(record, sender, { destructive = false } = {}) {
     const cached = record.roles?.[sender];
-    if (!cached || cached === 'admin') return true;
+    if (cached === 'admin') return true;
     await this.refreshRoles(record.id);
     const fresh = record.roles?.[sender];
-    return !fresh || fresh === 'admin';
+    if (fresh === 'admin') return true;
+    if (fresh) return false; // authoritative: in the roster, not an admin
+    if (destructive) {
+      console.warn(
+        `dropped a destructive envelope from ${sender} in ${record.id}: role still unknown after an ACL refresh`
+      );
+      return false;
+    }
+    return true;
   }
 
   /** Pull the relay's roster roles (admin/member) into the local record.
@@ -1962,15 +2025,17 @@ export class Controller {
   }
 
   // === account vaults =====================================================
+  // The work lives in `AccountService` (plan §2.2). These stay as the
+  // controller's surface because the UI calls them, and because the two
+  // sign-in paths finish with something only the controller can do: adopting
+  // an identity and booting on it.
 
-  async checkVault() {
-    try {
-      const reply = await this.relay.request({ t: 'vault_status' });
-      const securedLocal = (await this.db.kvGet('securedLocal')) ?? true;
-      this.dispatch({ type: 'vault', kind: reply.kind ?? null, securedLocal });
-    } catch (e) {
-      console.warn(`vault status: ${e.message}`);
-    }
+  checkVault() {
+    return this.accounts.status();
+  }
+
+  markSecuredLocal() {
+    return this.accounts.markSecuredLocal();
   }
 
   identityBytes() {
@@ -1979,200 +2044,51 @@ export class Controller {
     return b64.dec(stored);
   }
 
-  async markSecuredLocal() {
-    await this.db.kvPut('securedLocal', true);
-    await this.checkVault();
+  secureWithPassword(password) {
+    return this.accounts.secureWithPassword(password);
   }
 
-  /** Password vault: Argon2id splits into an auth half (relay stores only
-      its hash) and a wrap half (encrypts the identity, never leaves). */
-  async secureWithPassword(password) {
-    if ((password ?? '').length < 8) throw new Error('password: 8 characters minimum');
-    const salt = crypto.getRandomValues(new Uint8Array(16));
-    const keys = new Uint8Array(await this.crypto('deriveLoginKeys', { password, salt }));
-    const authKey = keys.slice(0, 32);
-    const wrapKey = keys.slice(32);
-    const verifier = new Uint8Array(await crypto.subtle.digest('SHA-256', authKey));
-    const wrapped = await encryptBlob(wrapKey, this.identityBytes());
-    await this.relay.request({
-      t: 'vault_set',
-      kind: 'password',
-      salt: b64.enc(salt),
-      verifier: b64.enc(verifier),
-      wrapped: b64.enc(wrapped),
-      credential: null,
-    });
-    await this.markSecuredLocal();
+  secureWithPasskey() {
+    return this.accounts.secureWithPasskey();
   }
 
-  /** Passkey vault: register a WebAuthn credential, derive a wrap key via
-      the PRF extension, park the wrapped identity. Nothing brute-forceable
-      is stored anywhere. */
-  async secureWithPasskey() {
-    if (!navigator.credentials?.create) throw new Error('WebAuthn unavailable in this browser');
-    const start = await this.relay.request({ t: 'passkey_register_start' });
-    const created = await navigator.credentials.create({
-      publicKey: parseCreationOptions(JSON.parse(start.payload)),
-    });
-    const finish = await this.relay.request({
-      t: 'passkey_register_finish',
-      credential: JSON.stringify(serializeRegistration(created)),
-    });
-    // A constant salt (not a random one): PRF output is already unique per
-    // credential, and pinning the salt lets usernameless sign-in derive this
-    // same wrap key with no prior account lookup. Still stored on the vault so
-    // the handle-first path keeps reading it from /params unchanged.
-    const prfSalt = VAULT_PRF_SALT;
-    // Prefer the PRF value returned at creation; fall back to a fresh assertion
-    // for browsers that only evaluate PRF on a get().
-    const secret = prfSecret(created) ?? (await derivePrfSecret(created.rawId, prfSalt));
-    if (!secret) throw new Error(noPrfMessage());
-    const wrapped = await encryptBlob(secret, this.identityBytes());
-    await this.relay.request({
-      t: 'vault_set',
-      kind: 'passkey',
-      salt: b64.enc(prfSalt),
-      verifier: b64.enc(new Uint8Array(0)),
-      wrapped: b64.enc(wrapped),
-      credential: finish.payload,
-    });
-    await this.markSecuredLocal();
+  enrollDevicePasskey(label) {
+    return this.accounts.enrollDevicePasskey(label);
   }
 
-  /** Enroll an ADDITIONAL passkey for this device (e.g. Windows Hello) that
-      unlocks the same identity, without touching the primary vault or any
-      other device's passkey. Each device seals the identity under its own PRF
-      secret; the relay keys the wrap by credential id. Reachable once you're
-      already signed in here (typically right after linking a new device). */
-  async enrollDevicePasskey() {
-    if (!navigator.credentials?.create) throw new Error('WebAuthn unavailable in this browser');
-    const start = await this.relay.request({ t: 'passkey_register_start' });
-    const created = await navigator.credentials.create({
-      publicKey: parseCreationOptions(JSON.parse(start.payload)),
-    });
-    const finish = await this.relay.request({
-      t: 'passkey_register_finish',
-      credential: JSON.stringify(serializeRegistration(created)),
-    });
-    const secret = prfSecret(created) ?? (await derivePrfSecret(created.rawId, VAULT_PRF_SALT));
-    if (!secret) throw new Error(noPrfMessage());
-    const wrapped = await encryptBlob(secret, this.identityBytes());
-    await this.relay.request({
-      t: 'passkey_wrap_add',
-      cred_id: b64url.enc(created.rawId),
-      credential: finish.payload,
-      salt: b64.enc(VAULT_PRF_SALT),
-      wrapped: b64.enc(wrapped),
-    });
-    await this.markSecuredLocal();
+  listDevices() {
+    return this.accounts.listDevices();
   }
 
-  /** Pre-boot probe: how (if at all) a handle signs in on this relay, so
-      the gate can offer only the method that will actually work.
-      Returns 'passkey' | 'password', or null when there's no server vault
-      for that handle (identity was never secured for cross-device use). */
-  async accountKind(user) {
-    try {
-      const params = await this.accountFetch(`/account/${encodeURIComponent(user)}/params`);
-      return params.kind ?? null;
-    } catch (e) {
-      if (/no such account|no vault|404/i.test(e.message)) return null;
-      throw e;
-    }
+  revokeDevice(credId) {
+    return this.accounts.revokeDevice(credId);
   }
 
-  /** Pre-boot sign-in on a fresh device: fetch the vault, unwrap locally,
-      adopt the identity. Groups don't transfer — only who you are. */
-  async signInWithPassword(user, password) {
-    const params = await this.accountFetch(`/account/${encodeURIComponent(user)}/params`);
-    if (params.kind !== 'password') throw new Error(`this account uses ${params.kind} sign-in`);
-    const salt = b64.dec(params.salt);
-    const keys = new Uint8Array(await this.crypto('deriveLoginKeys', { password, salt }));
-    const reply = await this.accountFetch(`/account/${encodeURIComponent(user)}/login`, {
-      auth_key: b64.enc(keys.slice(0, 32)),
-    });
-    const identity = await decryptBlob(keys.slice(32), b64.dec(reply.wrapped)).catch(() => {
-      throw new Error('could not decrypt vault — corrupt data');
-    });
+  accountKind(user) {
+    return this.accounts.accountKind(user);
+  }
+
+  accountFetch(path, body) {
+    return this.accounts.fetch(path, body);
+  }
+
+  /** Unlocking a vault yields an identity; adopting it is the irreversible
+      half, and it stays here beside the rest of boot. */
+  async adoptIdentity(identity) {
     await this.restoreIdentity(identity);
     await this.completeOnboarding(true);
+  }
+
+  async signInWithPassword(user, password) {
+    await this.adoptIdentity(await this.accounts.unlockWithPassword(user, password));
   }
 
   async signInWithPasskey(user) {
-    if (!navigator.credentials?.get) throw new Error('this browser has no passkey support');
-    const params = await this.accountFetch(`/account/${encodeURIComponent(user)}/params`);
-    if (params.kind !== 'passkey') throw new Error(`this account uses ${params.kind} sign-in, not a passkey`);
-    const prfSalt = b64.dec(params.salt);
-    const challenge = await this.accountFetch(
-      `/account/${encodeURIComponent(user)}/passkey/challenge`,
-      {}
-    );
-    const assertion = await navigator.credentials.get({
-      publicKey: parseRequestOptions(challenge, prfSalt),
-    });
-    const secret = prfSecret(assertion);
-    if (!secret) throw new Error('authenticator returned no PRF secret');
-    const reply = await this.accountFetch(`/account/${encodeURIComponent(user)}/passkey/login`, {
-      assertion: serializeAssertion(assertion),
-    });
-    const identity = await decryptBlob(secret, b64.dec(reply.wrapped)).catch(() => {
-      throw new Error('could not decrypt vault — corrupt data');
-    });
-    await this.restoreIdentity(identity);
-    await this.completeOnboarding(true);
+    await this.adoptIdentity(await this.accounts.unlockWithPasskey(user));
   }
 
-  /** Usernameless sign-in: no handle. The authenticator offers its resident
-      passkeys, the relay resolves which account signed, and the vault comes
-      back keyed by nothing but the credential. Works only for passkeys sealed
-      under the constant PRF salt (i.e. registered by this version onward).
-
-      `mediation: 'conditional'` drives passkey autofill: the get() stays
-      pending (non-modal) until the user picks a passkey from the browser's
-      autocomplete, or `signal` aborts it. Omit both for the modal button. */
-  async signInWithDiscoverablePasskey({ mediation, signal } = {}) {
-    if (!navigator.credentials?.get) throw new Error('this browser has no passkey support');
-    const { session, options } = await this.accountFetch('/passkey/discover/challenge', {});
-    const assertion = await navigator.credentials.get({
-      publicKey: parseRequestOptions(options, VAULT_PRF_SALT),
-      mediation,
-      signal,
-    });
-    const secret = prfSecret(assertion);
-    if (!secret) throw new Error('this passkey has no PRF secret — sign in with your handle instead');
-    const reply = await this.accountFetch('/passkey/discover/login', {
-      session,
-      assertion: serializeAssertion(assertion),
-    });
-    // Here the credential already matched and its signature verified, so a
-    // decrypt failure isn't corruption — it's a passkey sealed under the old
-    // per-account salt (registered before one-tap sign-in). The handle-first
-    // path reads that salt from the server and still works; re-securing then
-    // migrates the passkey to the constant salt.
-    const identity = await decryptBlob(secret, b64.dec(reply.wrapped)).catch(() => {
-      // The passkey proved who you are, but this device can't reproduce the
-      // key that sealed the vault (an older per-account salt, or a PRF that
-      // differs across devices — e.g. this passkey on Windows). The graceful
-      // path is to link from a device you're already signed in on.
-      const e = new Error("this device can't unlock your vault with that passkey");
-      e.linkFallback = true;
-      throw e;
-    });
-    await this.restoreIdentity(identity);
-    await this.completeOnboarding(true);
-  }
-
-  async accountFetch(path, body) {
-    const res = await fetch(`${this.httpBase()}${path}`, {
-      method: body === undefined ? 'GET' : 'POST',
-      headers: body === undefined ? {} : { 'content-type': 'application/json' },
-      body: body === undefined ? undefined : JSON.stringify(body),
-    });
-    if (!res.ok) {
-      const text = await res.text();
-      throw new Error(res.status === 404 ? 'no such account' : text || `HTTP ${res.status}`);
-    }
-    return res.json();
+  async signInWithDiscoverablePasskey(opts) {
+    await this.adoptIdentity(await this.accounts.unlockWithDiscoverablePasskey(opts));
   }
 
   // === attachments ========================================================
@@ -2214,8 +2130,13 @@ export class Controller {
     const key = generateFragmentKey();
     const encrypted = await encryptBlob(key, data);
     const blobId = b64url.enc(crypto.getRandomValues(new Uint8Array(18)));
+    // The PUT route is unauthenticated by design (it carries opaque bytes
+    // and no session), so authorize this one upload over the authenticated
+    // socket first. Without it, anyone could write to the relay's disk.
+    const { ticket } = await this.relay.request({ t: 'blob_ticket', id: blobId });
     const res = await fetch(`${this.httpBase()}/blobs/${blobId}`, {
       method: 'PUT',
+      headers: { 'x-upload-ticket': ticket },
       body: encrypted,
     });
     if (!res.ok) throw new Error(`upload failed: ${await res.text()}`);
@@ -2246,11 +2167,72 @@ export class Controller {
     return this.crypto('safetyNumber', { group: serverId, peer });
   }
 
+  /** Verification is stored against the *key* it was performed on, not the
+      handle. `record.verifiedSn` maps peer -> the safety number the user
+      actually compared out of band; `record.verified` stays the plain array
+      the roster renders from, derived from it.
+
+      The safety number is a collision-resistant function of both parties'
+      MLS identity keys (crypto-core `safety_number`), so it is already the
+      binding we need: if the peer's key is ever replaced — a remove/re-add,
+      or a relay substituting a KeyPackage — the number no longer matches what
+      was checked, and `revalidateVerified` drops the badge. Storing only the
+      handle, as this did before, left a ✓ that survived a key change and so
+      certified nothing. */
   async markVerified(serverId, peer) {
     const record = this.servers.get(serverId);
-    record.verified = [...new Set([...(record.verified ?? []), peer])];
+    const sn = await this.safetyNumber(serverId, peer);
+    record.verifiedSn = { ...(record.verifiedSn ?? {}), [peer]: sn };
+    record.verified = Object.keys(record.verifiedSn);
     await this.db.serverPut(record);
     this.dispatch({ type: 'servers', servers: this.snapshotServers() });
+  }
+
+  /** Re-derive every stored safety number and clear the ones that moved.
+      Runs on each membership change, which is when a key can enter the group.
+
+      Records written before verification was key-bound carry a `verified`
+      array with no `verifiedSn`. Those are dropped rather than adopted: the
+      user did compare digits at some point, but nothing recorded against
+      what, so a substitution that happened after that check would be
+      indistinguishable from a clean history. Re-verifying is cheap; a ✓ that
+      might certify the wrong key is not. */
+  async revalidateVerified(record) {
+    const legacy = !record.verifiedSn && record.verified?.length;
+    if (legacy) {
+      record.verifiedSn = {};
+      record.verified = [];
+      await this.addSystemMessage(
+        record.id,
+        'verification badges were reset — safety numbers are now checked against the key that was verified. Please re-check the members you trust.'
+      );
+      return true;
+    }
+    const stored = record.verifiedSn;
+    if (!stored || !Object.keys(stored).length) return false;
+
+    let changed = false;
+    for (const [peer, was] of Object.entries(stored)) {
+      // Someone who has left the group keeps their entry: if they are ever
+      // re-added the check below runs against the new key and catches it.
+      if (!record.members?.includes(peer)) continue;
+      let now;
+      try {
+        now = await this.safetyNumber(record.id, peer);
+      } catch {
+        continue; // no MLS view of this peer right now; decide next time
+      }
+      if (now !== was) {
+        delete stored[peer];
+        changed = true;
+        await this.addSystemMessage(
+          record.id,
+          `${peer}'s safety number changed — verification cleared. Check it again before trusting this device.`
+        );
+      }
+    }
+    if (changed) record.verified = Object.keys(stored);
+    return changed;
   }
 
   // === web push ===========================================================
@@ -2268,6 +2250,19 @@ export class Controller {
             this.dispatch({ type: 'select', server: data.group, channel: null });
           }
         });
+        // A deploy swaps the shell underneath a running page: the worker
+        // calls skipWaiting, so the new cache takes over while this tab is
+        // still executing the previous bundle. Anything it loads lazily from
+        // here on is a chunk the new shell no longer has.
+        //
+        // Say so rather than reloading. A tab reloading itself mid-sentence
+        // is a worse outcome than a stale one, and only the person typing
+        // can judge when it is safe.
+        if (updatePrompt(navigator.serviceWorker.controller)) {
+          navigator.serviceWorker.addEventListener('controllerchange', () => {
+            this.dispatch({ type: 'toast', text: UPDATE_TEXT });
+          });
+        }
       }
       return this.swReg;
     } catch (e) {
@@ -2369,7 +2364,20 @@ export class Controller {
     await this.persistState(state);
     // Publishing our external commit is what makes the join real for
     // everyone else; its seq is where our log begins.
-    const sent = await this.relay.request({ t: 'send', group, epoch, payload: b64.enc(commit) });
+    // An external commit advances the epoch like any other, so it takes
+    // part in the same compare-and-swap. If it loses, the group changed
+    // under us mid-join: drop the half-built local group and let the user
+    // retry the link rather than leaving an unusable stub behind.
+    const sent = await this.relay
+      .request({ t: 'send', group, epoch, payload: b64.enc(commit), commit: true })
+      .catch(async (e) => {
+        await this.crypto('forgetGroup', { group }).catch(() => {});
+        throw new Error(
+          /epoch conflict/i.test(e.message ?? '')
+            ? 'the circle changed while you were joining — open the invite link again'
+            : e.message
+        );
+      });
     // Merge over a restored stub the same way onWelcome does.
     const prior = this.servers.get(group);
     const record = {
@@ -2383,6 +2391,7 @@ export class Controller {
       seen: prior?.seen ?? {},
       hcursor: prior?.hcursor ?? {},
       verified: prior?.verified,
+      verifiedSn: prior?.verifiedSn,
       members,
       epoch,
       lastSeq: sent.seq,
@@ -2433,6 +2442,45 @@ export class Controller {
     await this.storeMessage({ server: serverId, channel, sender: '', text, ts: Date.now(), system: true });
   }
 
+  /** Ask the browser not to evict our storage, and say so when it refuses.
+
+      This used to run once, during onboarding, with its result discarded.
+      That is the worst possible handling on WebKit: Safari does not
+      implement persist() at all, so the optional chain silently no-ops, and
+      script-writable storage for a site the user has not installed is
+      cleared after 7 days of no interaction. The identity key mirror in
+      localStorage goes in the same sweep. A user who follows the README —
+      open the link in Safari, use it — is on an undisclosed timer to losing
+      their account and every group ratchet, with nothing on screen.
+
+      Run on every boot (grants can be revoked, and a site that was denied
+      once may qualify later once the user engages with it), check the
+      answer, and surface it. Returns true when storage is durable. */
+  async requestPersistentStorage() {
+    let persisted = false;
+    try {
+      // Already granted? Do not re-prompt.
+      persisted = (await navigator.storage?.persisted?.()) ?? false;
+      if (!persisted) persisted = (await navigator.storage?.persist?.()) ?? false;
+    } catch {
+      persisted = false;
+    }
+    this.storagePersisted = persisted;
+    if (!persisted) {
+      // Distinguish "the browser said no" from "the browser has no opinion":
+      // only the former is a countdown we can name.
+      const evicts = typeof navigator !== 'undefined' && /^((?!chrome|android).)*safari/i.test(navigator.userAgent ?? '');
+      this.dispatch({
+        type: 'storageAtRisk',
+        evicts,
+      });
+      console.warn(
+        `storage is not persistent${evicts ? ' — WebKit clears it after 7 days without interaction' : ''}`
+      );
+    }
+    return persisted;
+  }
+
   async persistState(state) {
     if (state) await this.db.kvPut('mlsState', state);
   }
@@ -2450,6 +2498,8 @@ export class Controller {
         voiceChannels: [...(r.voiceChannels ?? ['lounge'])],
         members: [...r.members],
         roles: { ...(r.roles ?? {}) },
+        verified: [...(r.verified ?? [])],
+        verifiedSn: { ...(r.verifiedSn ?? {}) },
         notices: [...(r.notices ?? [])],
         rsvps: { ...(r.rsvps ?? {}) },
         overview: r.overview ? JSON.parse(JSON.stringify(r.overview)) : r.overview,
@@ -2479,45 +2529,41 @@ export class Controller {
   }
 }
 
-/** A message's timestamp is the sender's clock, carried on the wire, so every
-    device orders and dedupes it identically and it matches the kept-history
-    copy. Older senders (or a hostile payload) may omit it or send garbage; a
-    non-finite/non-positive value falls back to this device's own clock. The
-    history log already trusts the sender's ts, so this only makes live
-    receipt consistent with it. */
-export function messageTs(claimed, now = Date.now()) {
-  const t = Number(claimed);
-  return Number.isFinite(t) && t > 0 ? t : now;
+
+export const UPDATE_TEXT = 'a new version is ready — reload when you get a moment';
+
+/**
+ * Should a controller change be announced as an update?
+ *
+ * Only when this page was *already* controlled. The very first visit takes
+ * control for the first time, which fires the same event and is not an
+ * update — announcing it would greet every new install with a notice about a
+ * version they just installed.
+ */
+export function updatePrompt(currentController) {
+  return currentController != null;
 }
 
-/** A call's conversation thread lives under `voice:<room>` — real E2EE chat
-    storage, but stage-scoped: it must never surface as a text room. */
-export function isCallChat(channel) {
-  return typeof channel === 'string' && channel.startsWith('voice:');
+/** How far back "unread" reaches in a room this device has never opened.
+    Falling back to 0 would count a circle's entire backfilled history as
+    unread the moment you join it; `joinedAt` scopes it to what arrived after
+    you did. */
+export function seenFloor(record, channel) {
+  return record?.seen?.[channel] ?? record?.joinedAt ?? 0;
 }
 
-export function callChatChannel(room) {
-  return `voice:${room}`;
-}
-
-/** Human-readable summary of a channel's settings for system messages. */
-function describeChanMeta(meta = {}) {
-  const parts = [];
-  parts.push(meta.hid ? 'history: kept for joiners' : 'history: this-device-only');
-  if (meta.retention) parts.push(`auto-delete: ${describeRetention(meta.retention)}`);
-  if (meta.topic) parts.push(`topic: “${meta.topic}”`);
-  return ` (${parts.join(', ')})`;
-}
-
-export function describeRetention(seconds) {
-  if (!seconds) return 'off';
-  if (seconds % 86400 === 0) {
-    const d = seconds / 86400;
-    return d === 1 ? '1 day' : `${d} days`;
+/** Messages that arrived after this device last looked. Your own messages
+    never count — they are read by definition, and a sender clock running
+    ahead of the device that sent them would otherwise leave them unread
+    forever. `system` chips are chrome, not conversation. */
+export function countUnread(msgs, seen, me) {
+  let n = 0;
+  for (const m of msgs ?? []) {
+    if (m.system || m.sender === me) continue;
+    if ((Number(m.ts) || 0) > seen) n += 1;
   }
-  if (seconds % 3600 === 0) {
-    const h = seconds / 3600;
-    return h === 1 ? '1 hour' : `${h} hours`;
-  }
-  return `${seconds}s`;
+  return n;
 }
+
+
+

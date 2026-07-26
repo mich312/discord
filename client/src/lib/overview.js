@@ -162,14 +162,25 @@ export function mergeNotices(mine, incoming) {
   return merged.sort((a, b) => b.ts - a.ts).slice(0, NOTICES_MAX);
 }
 
-/** May `requester` remove this notice? Authors always may; admins may.
-    Same advisory model as every role gate here: fail open while the
-    requester's role is still unknown, the roster's eyes do the rest. */
-export function canRemoveNotice(notice, requester, roles) {
+/** May `requester` remove this notice? Authors always may; admins may;
+    nobody else does.
+
+    Takes a resolved `isAdmin`, not a roles map, and that is the point. It
+    used to read `roles[requester]` itself and return **true** when the
+    requester was absent from the map — which meant the answer depended on
+    whether that particular device had refreshed its roster yet. Two devices
+    handling the same `notice/del` reached different conclusions and the
+    board silently desynchronised; a member missing from a stale map could
+    unpin anyone's notice. Neither was intended.
+
+    Resolving the role is now the caller's job, so both call sites ask the
+    same question and an unknown role fails closed like every other
+    non-author path. See `adminRequirement` in envelope.js for how the
+    reducer gets an authoritative answer. */
+export function canRemoveNotice(notice, requester, isAdmin) {
   if (!notice) return false;
   if (requester === notice.author) return true;
-  if (roles?.[requester]) return roles[requester] === 'admin';
-  return true;
+  return isAdmin === true;
 }
 
 /** Countdown label for the up-next block: "in 3 days", "in 5 h",

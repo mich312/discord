@@ -1,8 +1,21 @@
 import React, { useEffect, useRef, useState } from 'react';
 import Seal from './Seal.jsx';
 import VoiceMeter from './VoiceMeter.jsx';
-import { activitySrc, freshPresence, gameHost } from '../lib/games.js';
+import { activitySrc, freshPresence, gameHost, isSameOriginSrc } from '../lib/games.js';
 import { X, Lock, External, Gamepad, Wave, Users, LinkGlyph } from './icons.jsx';
+
+/** Sandbox tokens for a game frame.
+
+    `allow-same-origin` is granted only to genuinely cross-origin games,
+    where it means "keep your own origin" and costs us nothing. A frame
+    served from our own origin — a bundled demo, or a registry entry
+    pointing back at us — is denied it, so it runs with an opaque origin
+    and cannot reach the identity key in localStorage or the MLS state in
+    IndexedDB. See isSameOriginSrc. */
+function frameSandbox(src) {
+  const base = 'allow-scripts allow-forms allow-pointer-lock';
+  return isSameOriginSrc(src) ? base : `${base} allow-same-origin`;
+}
 
 function timeOf(ts) {
   return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -93,7 +106,7 @@ export default function GameStage({
             data-testid="game-frame"
             src={src}
             title={game.name}
-            sandbox="allow-scripts allow-same-origin allow-forms allow-pointer-lock"
+            sandbox={frameSandbox(src)}
             allow="fullscreen; gamepad"
             referrerPolicy="no-referrer"
           />

@@ -62,8 +62,10 @@ impl Conn {
         let challenge = recv(&mut ws).await;
         assert_eq!(challenge["t"], "challenge");
         let nonce = B64.decode(challenge["nonce"].as_str().unwrap()).unwrap();
-        let mut signed = b"relay-auth-v1".to_vec();
+        let mut signed = b"relay-auth-v2".to_vec();
         signed.extend_from_slice(&nonce);
+        signed.extend_from_slice(&(name.len() as u32).to_be_bytes());
+        signed.extend_from_slice(name.as_bytes());
         let sig = mls.sign(&signed).unwrap();
         ws.send(Message::Text(json!({"t":"auth","sig":B64.encode(sig)}).to_string().into()))
             .await
@@ -257,6 +259,11 @@ async fn welcome_is_delivered_live_to_an_online_recipient() {
     // still reaches him directly via the online map, not the group log.
     let mut bob = Conn::connect(addr, "bob").await;
 
+    // A Welcome may only target someone already on the group's ACL, which is
+    // what stopped a member parking stored Welcomes on arbitrary handles.
+    // The real add flow allows before it welcomes, so mirror that here.
+    alice.request(json!({"t":"allow","group":"g1","user":"bob"})).await;
+
     let payload = B64.encode(b"opaque-welcome-blob");
     let reply = alice
         .request(json!({"t":"welcome","to":"bob","group":"g1","after":0,"payload":payload.clone()}))
@@ -293,10 +300,35 @@ async fn blob_http_put_get_and_error_paths() {
     let (status, _) = http(&app, Request::get("/blobs/cap123").body(Body::empty()).unwrap()).await;
     assert_eq!(status, StatusCode::NOT_FOUND);
 
-    // PUT stores; GET returns the exact bytes.
+    // Writes now need a ticket minted over the authenticated socket: a bare
+    // PUT is how anyone on the internet used to fill the relay's disk.
     let (status, _) = http(
         &app,
         Request::put("/blobs/cap123").body(Body::from(&b"ciphertext"[..])).unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN, "an unticketed write must be refused");
+
+    // A ticket for a DIFFERENT id must not authorize this one.
+    let other = app.blob_tickets.mint("someone-elses-id");
+    let (status, _) = http(
+        &app,
+        Request::put("/blobs/cap123")
+            .header("x-upload-ticket", &other)
+            .body(Body::from(&b"ciphertext"[..]))
+            .unwrap(),
+    )
+    .await;
+    assert_eq!(status, StatusCode::FORBIDDEN);
+
+    // PUT with the right ticket stores; GET returns the exact bytes.
+    let ticket = app.blob_tickets.mint("cap123");
+    let (status, _) = http(
+        &app,
+        Request::put("/blobs/cap123")
+            .header("x-upload-ticket", &ticket)
+            .body(Body::from(&b"ciphertext"[..]))
+            .unwrap(),
     )
     .await;
     assert_eq!(status, StatusCode::CREATED);
@@ -304,18 +336,27 @@ async fn blob_http_put_get_and_error_paths() {
     assert_eq!(status, StatusCode::OK);
     assert_eq!(body, b"ciphertext");
 
-    // A blob id is a write-once capability: re-PUT is rejected.
+    // A blob id is a write-once capability: re-PUT is rejected even with a
+    // fresh ticket.
+    let ticket = app.blob_tickets.mint("cap123");
     let (status, _) = http(
         &app,
-        Request::put("/blobs/cap123").body(Body::from(&b"overwrite"[..])).unwrap(),
+        Request::put("/blobs/cap123")
+            .header("x-upload-ticket", &ticket)
+            .body(Body::from(&b"overwrite"[..]))
+            .unwrap(),
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);
 
     // An id with characters outside the token alphabet is refused (no path tricks).
+    let ticket = app.blob_tickets.mint("bad.id");
     let (status, _) = http(
         &app,
-        Request::put("/blobs/bad.id").body(Body::from(&b"x"[..])).unwrap(),
+        Request::put("/blobs/bad.id")
+            .header("x-upload-ticket", &ticket)
+            .body(Body::from(&b"x"[..]))
+            .unwrap(),
     )
     .await;
     assert_eq!(status, StatusCode::BAD_REQUEST);

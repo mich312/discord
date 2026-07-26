@@ -3,11 +3,38 @@
 //! plan. Uses runtime queries (no compile-time DB dependency).
 
 use crate::store::{
-    HistoryEntry, InviteRecord, PasskeyWrap, RegisterOutcome, Store, StoreError, StoredMessage,
-    StoredWelcome, VaultRecord,
+    HistoryEntry, InviteRecord, PasskeyDevice, PasskeyWrap, RegisterOutcome, Store, StoreError,
+    StoredMessage, StoredWelcome, VaultRecord,
 };
 use async_trait::async_trait;
 use sqlx::{postgres::PgPoolOptions, PgPool, Row};
+
+/// Bump when a migration is NOT purely additive — i.e. when an older relay
+/// could no longer operate correctly against the new shape. Additive changes
+/// (a new table, a new nullable column) need no bump; the
+/// CREATE TABLE IF NOT EXISTS batch in `migrate` handles those either way.
+pub const SCHEMA_VERSION: i32 = 1;
+
+/// Should this binary refuse to run against a database at version `found`?
+///
+/// Extracted from `migrate` so the comparison itself is testable without a
+/// Postgres. It is a one-line rule with an outsized blast radius: get it
+/// backwards and either every upgrade refuses to boot, or the rollback
+/// corruption this exists to prevent happens silently.
+///
+/// `None` (no row yet) is a *fresh or pre-versioning* database, which is
+/// exactly the case that must be allowed — every relay built before this
+/// landed has no row, and refusing them would brick the upgrade that
+/// introduces versioning.
+pub fn schema_refusal(found: Option<i32>) -> Option<String> {
+    match found {
+        Some(v) if v > SCHEMA_VERSION => Some(format!(
+            "database is at schema version {v}, but this relay understands {SCHEMA_VERSION}. \
+             It was written by a newer build — upgrade the relay rather than rolling it back."
+        )),
+        _ => None,
+    }
+}
 
 pub struct PgStore {
     pool: PgPool,
@@ -49,6 +76,10 @@ impl PgStore {
                 last_seq bigint NOT NULL DEFAULT 0,
                 created_at timestamptz NOT NULL DEFAULT now()
             );
+            -- The MLS epoch as the log has serialized it. Additive, so
+            -- existing deployments pick it up at 0 and the first commit
+            -- after upgrade sets it correctly.
+            ALTER TABLE groups ADD COLUMN IF NOT EXISTS epoch bigint NOT NULL DEFAULT 0;
             CREATE TABLE IF NOT EXISTS group_members (
                 group_id text NOT NULL REFERENCES groups(group_id),
                 user_id text NOT NULL,
@@ -108,6 +139,18 @@ impl PgStore {
                 wrapped bytea NOT NULL,
                 created_at timestamptz NOT NULL DEFAULT now()
             );
+            -- Device revocation needs a list a human can act on, so each wrap
+            -- carries a name and an enrolment time. Both additive, so an
+            -- older relay keeps working against this shape and SCHEMA_VERSION
+            -- does not move.
+            --
+            -- `enrolled_at` duplicates `created_at` as plain unix seconds on
+            -- purpose: sqlx here is built without the chrono/time features,
+            -- so decoding timestamptz would mean adding a dependency to a
+            -- crypto stack for the sake of one column. `created_at` stays for
+            -- an operator reading the table by hand.
+            ALTER TABLE passkey_wraps ADD COLUMN IF NOT EXISTS label text NOT NULL DEFAULT '';
+            ALTER TABLE passkey_wraps ADD COLUMN IF NOT EXISTS enrolled_at bigint NOT NULL DEFAULT 0;
             CREATE TABLE IF NOT EXISTS push_subscriptions (
                 user_id text NOT NULL,
                 endpoint text NOT NULL,
@@ -137,6 +180,15 @@ impl PgStore {
                 payload bytea NOT NULL,
                 updated_at timestamptz NOT NULL DEFAULT now()
             );
+            -- (invite, user) pairs that have already counted a use. The
+            -- join flow presents an invite twice (Hello, then RedeemInvite),
+            -- so uses are counted per claimant, not per presentation.
+            CREATE TABLE IF NOT EXISTS invite_claims (
+                invite_id text NOT NULL,
+                user_id text NOT NULL,
+                claimed_at timestamptz NOT NULL DEFAULT now(),
+                PRIMARY KEY (invite_id, user_id)
+            );
             CREATE TABLE IF NOT EXISTS invites (
                 invite_id text PRIMARY KEY,
                 group_id text NOT NULL REFERENCES groups(group_id),
@@ -146,11 +198,45 @@ impl PgStore {
                 uses bigint NOT NULL DEFAULT 0,
                 created_at timestamptz NOT NULL DEFAULT now()
             );
+
+            -- Schema version. Every migration so far has been additive, so
+            -- the batch above was enough and downgrades worked by accident.
+            -- The first destructive change breaks that, and without a
+            -- recorded version an operator cannot tell which shape their
+            -- database is in. Cheap now; not retrofittable after a bad
+            -- upgrade.
+            CREATE TABLE IF NOT EXISTS schema_version (
+                id integer PRIMARY KEY CHECK (id = 1),
+                version integer NOT NULL,
+                applied_at timestamptz NOT NULL DEFAULT now()
+            );
             "#,
         )
         .execute(&self.pool)
         .await
         .map_err(backend)?;
+
+        // Refuse to run against a database written by a NEWER relay: its
+        // shape may have moved in ways this binary does not know about, and
+        // operating on it regardless is how a rollback corrupts data. Older
+        // is fine — the batch above brings it forward.
+        let found: Option<i32> =
+            sqlx::query_scalar("SELECT version FROM schema_version WHERE id = 1")
+                .fetch_optional(&self.pool)
+                .await
+                .map_err(backend)?;
+        if let Some(why) = schema_refusal(found) {
+            return Err(StoreError::Backend(why));
+        }
+        sqlx::query(
+            "INSERT INTO schema_version (id, version) VALUES (1, $1)
+             ON CONFLICT (id) DO UPDATE SET version = $1, applied_at = now()",
+        )
+        .bind(SCHEMA_VERSION)
+        .execute(&self.pool)
+        .await
+        .map_err(backend)?;
+        tracing::info!(version = SCHEMA_VERSION, "schema up to date");
         Ok(())
     }
 }
@@ -424,6 +510,15 @@ impl Store for PgStore {
         Ok(seq as u64)
     }
 
+    async fn sweep_expired_history(&self, now: u64) -> Result<u64, StoreError> {
+        let done = sqlx::query("DELETE FROM history WHERE expires_at IS NOT NULL AND expires_at < $1")
+            .bind(now as i64)
+            .execute(&self.pool)
+            .await
+            .map_err(backend)?;
+        Ok(done.rows_affected())
+    }
+
     async fn history_after(
         &self,
         group: &str,
@@ -539,26 +634,38 @@ impl Store for PgStore {
     }
 
     async fn add_passkey_wrap(&self, cred_id: &str, wrap: PasskeyWrap) -> Result<(), StoreError> {
-        sqlx::query(
-            "INSERT INTO passkey_wraps (cred_id, user_id, credential, salt, wrapped)
-             VALUES ($1, $2, $3, $4, $5)
+        // The cred_id is client-chosen and a victim's is disclosed by the
+        // passkey challenge, so an unconditional upsert let an attacker
+        // re-point someone else's row at themselves and lock the victim out
+        // of device recovery. Updating is allowed only for rows the caller
+        // already owns.
+        let updated = sqlx::query(
+            "INSERT INTO passkey_wraps (cred_id, user_id, credential, salt, wrapped, label, enrolled_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)
              ON CONFLICT (cred_id) DO UPDATE SET
-               user_id = $2, credential = $3, salt = $4, wrapped = $5",
+               credential = $3, salt = $4, wrapped = $5, label = $6, enrolled_at = $7
+             WHERE passkey_wraps.user_id = $2",
         )
         .bind(cred_id)
         .bind(&wrap.user)
         .bind(&wrap.credential)
         .bind(&wrap.salt)
         .bind(&wrap.wrapped)
+        .bind(&wrap.label)
+        .bind(wrap.created_at)
         .execute(&self.pool)
         .await
         .map_err(backend)?;
+        if updated.rows_affected() == 0 {
+            return Err(StoreError::CredentialTaken);
+        }
         Ok(())
     }
 
     async fn get_passkey_wrap(&self, cred_id: &str) -> Result<Option<PasskeyWrap>, StoreError> {
         let row = sqlx::query(
-            "SELECT user_id, credential, salt, wrapped FROM passkey_wraps WHERE cred_id = $1",
+            "SELECT user_id, credential, salt, wrapped, label, enrolled_at
+             FROM passkey_wraps WHERE cred_id = $1",
         )
         .bind(cred_id)
         .fetch_optional(&self.pool)
@@ -569,7 +676,41 @@ impl Store for PgStore {
             credential: r.get("credential"),
             salt: r.get("salt"),
             wrapped: r.get("wrapped"),
+            label: r.get("label"),
+            created_at: r.get("enrolled_at"),
         }))
+    }
+
+    async fn list_passkey_wraps(&self, user: &str) -> Result<Vec<PasskeyDevice>, StoreError> {
+        let rows = sqlx::query(
+            "SELECT cred_id, label, enrolled_at FROM passkey_wraps
+             WHERE user_id = $1 ORDER BY enrolled_at DESC, cred_id ASC",
+        )
+        .bind(user)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(backend)?;
+        Ok(rows
+            .into_iter()
+            .map(|r| PasskeyDevice {
+                cred_id: r.get("cred_id"),
+                label: r.get("label"),
+                created_at: r.get("enrolled_at"),
+            })
+            .collect())
+    }
+
+    async fn delete_passkey_wrap(&self, cred_id: &str, user: &str) -> Result<bool, StoreError> {
+        // `user_id = $2` is in the WHERE clause, not a prior check: a
+        // read-then-delete would let a request race a re-enrolment, and the
+        // whole value of this call is that it cannot touch another account.
+        let done = sqlx::query("DELETE FROM passkey_wraps WHERE cred_id = $1 AND user_id = $2")
+            .bind(cred_id)
+            .bind(user)
+            .execute(&self.pool)
+            .await
+            .map_err(backend)?;
+        Ok(done.rows_affected() > 0)
     }
 
     async fn list_passkey_vaults(&self) -> Result<Vec<(String, VaultRecord)>, StoreError> {
@@ -642,16 +783,49 @@ impl Store for PgStore {
         epoch: u64,
         sender: &str,
         payload: Vec<u8>,
+        commit: bool,
     ) -> Result<u64, StoreError> {
         let mut tx = self.pool.begin().await.map_err(backend)?;
-        let row = sqlx::query(
-            "UPDATE groups SET last_seq = last_seq + 1 WHERE group_id = $1 RETURNING last_seq",
-        )
-        .bind(group)
-        .fetch_optional(&mut *tx)
-        .await
-        .map_err(backend)?
-        .ok_or(StoreError::NoSuchGroup)?;
+        // Commits compare-and-swap the epoch in the same transaction that
+        // allocates the seq, so two racing commits cannot both win.
+        let row = if commit {
+            let updated = sqlx::query(
+                "UPDATE groups SET last_seq = last_seq + 1, epoch = $2
+                 WHERE group_id = $1 AND epoch = $2 - 1
+                 RETURNING last_seq",
+            )
+            .bind(group)
+            .bind(epoch as i64)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(backend)?;
+            match updated {
+                Some(r) => r,
+                None => {
+                    // Either the group is gone or another commit took this
+                    // epoch first; tell them apart so the client can react.
+                    let exists = sqlx::query("SELECT 1 FROM groups WHERE group_id = $1")
+                        .bind(group)
+                        .fetch_optional(&mut *tx)
+                        .await
+                        .map_err(backend)?;
+                    return Err(if exists.is_some() {
+                        StoreError::EpochConflict
+                    } else {
+                        StoreError::NoSuchGroup
+                    });
+                }
+            }
+        } else {
+            sqlx::query(
+                "UPDATE groups SET last_seq = last_seq + 1 WHERE group_id = $1 RETURNING last_seq",
+            )
+            .bind(group)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(backend)?
+            .ok_or(StoreError::NoSuchGroup)?
+        };
         let seq: i64 = row.get("last_seq");
         sqlx::query(
             "INSERT INTO messages (group_id, seq, epoch, sender, payload)
@@ -748,12 +922,12 @@ impl Store for PgStore {
         .bind(record.max_uses.map(|m| m as i64))
         .execute(&self.pool)
         .await
-        .map_err(|e| {
-            if e.to_string().contains("foreign key") {
-                StoreError::NoSuchGroup
-            } else {
-                backend(e)
-            }
+        // Was: string-matching "foreign key" on the error text, which is
+        // brittle across sqlx and Postgres versions. SQLSTATE 23503 is the
+        // foreign-key-violation code and is stable.
+        .map_err(|e| match e.as_database_error().and_then(|d| d.code()) {
+            Some(code) if code == "23503" => StoreError::NoSuchGroup,
+            _ => backend(e),
         })?;
         Ok(())
     }
@@ -789,37 +963,115 @@ impl Store for PgStore {
         Ok(())
     }
 
-    async fn redeem_invite(&self, invite: &str, now: u64) -> Result<(String, Vec<u8>), StoreError> {
-        // Atomic check-and-count so concurrent redemptions can't exceed
-        // max_uses.
-        let row = sqlx::query(
-            "UPDATE invites SET uses = uses + 1
-             WHERE invite_id = $1
-               AND (expires_at IS NULL OR expires_at >= $2)
-               AND (max_uses IS NULL OR uses < max_uses)
-             RETURNING group_id, payload",
+    async fn redeem_invite(
+        &self,
+        invite: &str,
+        user: &str,
+        now: u64,
+    ) -> Result<(String, Vec<u8>), StoreError> {
+        let mut tx = self.pool.begin().await.map_err(backend)?;
+
+        // Has this handle already spent a use of this link? The join flow
+        // presents the invite twice, so the second presentation must not
+        // count again.
+        let claimed = sqlx::query("SELECT 1 FROM invite_claims WHERE invite_id = $1 AND user_id = $2")
+            .bind(invite)
+            .bind(user)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(backend)?
+            .is_some();
+
+        let row = if claimed {
+            // Expiry still applies; the use count does not.
+            sqlx::query(
+                "SELECT group_id, payload FROM invites
+                 WHERE invite_id = $1 AND (expires_at IS NULL OR expires_at >= $2)",
+            )
+            .bind(invite)
+            .bind(now as i64)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(backend)?
+        } else {
+            // Atomic check-and-count so concurrent claims can't exceed
+            // max_uses.
+            sqlx::query(
+                "UPDATE invites SET uses = uses + 1
+                 WHERE invite_id = $1
+                   AND (expires_at IS NULL OR expires_at >= $2)
+                   AND (max_uses IS NULL OR uses < max_uses)
+                 RETURNING group_id, payload",
+            )
+            .bind(invite)
+            .bind(now as i64)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(backend)?
+        };
+        let row = row.ok_or(StoreError::InviteInvalid)?;
+
+        sqlx::query(
+            "INSERT INTO invite_claims (invite_id, user_id) VALUES ($1, $2)
+             ON CONFLICT DO NOTHING",
         )
         .bind(invite)
-        .bind(now as i64)
-        .fetch_optional(&self.pool)
+        .bind(user)
+        .execute(&mut *tx)
         .await
-        .map_err(backend)?
-        .ok_or(StoreError::InviteInvalid)?;
+        .map_err(backend)?;
+        tx.commit().await.map_err(backend)?;
         Ok((row.get("group_id"), row.get("payload")))
     }
 
-    async fn invite_usable(&self, invite: &str, now: u64) -> Result<bool, StoreError> {
-        let row = sqlx::query(
-            "SELECT 1 FROM invites
-             WHERE invite_id = $1
-               AND (expires_at IS NULL OR expires_at >= $2)
-               AND (max_uses IS NULL OR uses < max_uses)",
-        )
-        .bind(invite)
-        .bind(now as i64)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(backend)?;
-        Ok(row.is_some())
+    async fn claim_invite_for_registration(
+        &self,
+        invite: &str,
+        user: &str,
+        now: u64,
+    ) -> Result<bool, StoreError> {
+        match self.redeem_invite(invite, user, now).await {
+            Ok(_) => Ok(true),
+            Err(StoreError::InviteInvalid) => Ok(false),
+            Err(e) => Err(e),
+        }
+    }
+}
+
+#[cfg(test)]
+mod schema_tests {
+    use super::*;
+
+    #[test]
+    fn a_database_from_a_newer_relay_is_refused() {
+        // The whole point: rolling the binary back past a destructive
+        // migration must fail loudly rather than operate on a shape it does
+        // not understand.
+        let why = schema_refusal(Some(SCHEMA_VERSION + 1)).expect("must refuse");
+        assert!(why.contains(&(SCHEMA_VERSION + 1).to_string()), "{why}");
+        assert!(why.contains(&SCHEMA_VERSION.to_string()), "{why}");
+        assert!(why.contains("upgrade the relay"), "the message must say what to do: {why}");
+    }
+
+    #[test]
+    fn the_current_version_runs() {
+        assert_eq!(schema_refusal(Some(SCHEMA_VERSION)), None, "equal is not newer");
+    }
+
+    #[test]
+    fn an_older_database_is_brought_forward_rather_than_refused() {
+        // Older is the ordinary upgrade path; the CREATE TABLE IF NOT EXISTS
+        // batch handles it. Refusing here would block every upgrade.
+        assert_eq!(schema_refusal(Some(SCHEMA_VERSION - 1)), None);
+        assert_eq!(schema_refusal(Some(0)), None);
+        assert_eq!(schema_refusal(Some(i32::MIN)), None);
+    }
+
+    #[test]
+    fn a_database_with_no_version_row_is_allowed() {
+        // Every relay built before versioning landed has no row. Refusing
+        // them would brick the very upgrade that introduces versioning —
+        // this is the case most likely to be got wrong.
+        assert_eq!(schema_refusal(None), None);
     }
 }

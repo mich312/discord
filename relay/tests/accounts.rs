@@ -53,8 +53,10 @@ async fn password_vault_roundtrip() {
     let challenge: Value =
         serde_json::from_str(ws.next().await.unwrap().unwrap().to_text().unwrap()).unwrap();
     let nonce = B64.decode(challenge["nonce"].as_str().unwrap()).unwrap();
-    let mut signed = b"relay-auth-v1".to_vec();
+    let mut signed = b"relay-auth-v2".to_vec();
     signed.extend_from_slice(&nonce);
+    signed.extend_from_slice(&("alice".len() as u32).to_be_bytes());
+    signed.extend_from_slice(b"alice");
     ws.send(Message::Text(json!({"t":"auth","sig":B64.encode(mls.sign(&signed).unwrap())}).to_string()))
         .await
         .unwrap();

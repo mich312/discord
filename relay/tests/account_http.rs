@@ -208,12 +208,7 @@ async fn passkey_wrap_round_trips_by_credential_id() {
     app.store
         .add_passkey_wrap(
             "cred-abc",
-            relay::store::PasskeyWrap {
-                user: "alice".into(),
-                credential: "{\"stub\":true}".into(),
-                salt: b"salt".to_vec(),
-                wrapped: b"sealed-identity".to_vec(),
-            },
+            wrap("alice", "sealed-identity", "phone", 100),
         )
         .await
         .unwrap();
@@ -221,6 +216,105 @@ async fn passkey_wrap_round_trips_by_credential_id() {
     assert_eq!(got.user, "alice");
     assert_eq!(got.wrapped, b"sealed-identity");
     assert!(app.store.get_passkey_wrap("missing").await.unwrap().is_none());
+}
+
+/// A device passkey wrap, with the fields these tests care about.
+fn wrap(user: &str, sealed: &str, label: &str, created_at: i64) -> relay::store::PasskeyWrap {
+    relay::store::PasskeyWrap {
+        user: user.into(),
+        credential: "{\"stub\":true}".into(),
+        salt: b"salt".to_vec(),
+        wrapped: sealed.as_bytes().to_vec(),
+        label: label.into(),
+        created_at,
+    }
+}
+
+/* --- device revocation (forward-only) ---------------------------------- */
+
+#[tokio::test]
+async fn listing_devices_never_returns_the_sealed_identity() {
+    // The point of revoking a device is to stop it obtaining the wrapped
+    // identity. A list endpoint that returned the wrap alongside the label
+    // would hand it to anyone who asks, so `PasskeyDevice` has no field for
+    // it — this test exists so that stays true if someone "helpfully" widens
+    // the struct later.
+    let app = make_app();
+    app.store
+        .add_passkey_wrap("c1", wrap("alice", "sealed-identity", "laptop", 100))
+        .await
+        .unwrap();
+
+    let devices = app.store.list_passkey_wraps("alice").await.unwrap();
+    assert_eq!(devices.len(), 1);
+    assert_eq!(devices[0].cred_id, "c1");
+    assert_eq!(devices[0].label, "laptop");
+    let rendered = format!("{:?}", devices[0]);
+    assert!(!rendered.contains("sealed-identity"), "the wrap must not be reachable: {rendered}");
+}
+
+#[tokio::test]
+async fn devices_are_listed_newest_first_and_only_your_own() {
+    let app = make_app();
+    app.store.add_passkey_wrap("c-old", wrap("alice", "s", "old", 100)).await.unwrap();
+    app.store.add_passkey_wrap("c-new", wrap("alice", "s", "new", 300)).await.unwrap();
+    app.store.add_passkey_wrap("c-bob", wrap("bob", "s", "bob's", 200)).await.unwrap();
+
+    let ids: Vec<String> =
+        app.store.list_passkey_wraps("alice").await.unwrap().into_iter().map(|d| d.cred_id).collect();
+    assert_eq!(ids, vec!["c-new", "c-old"], "newest first, and bob's is not alice's business");
+    assert!(app.store.list_passkey_wraps("nobody").await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn a_revoked_device_can_no_longer_unlock_the_identity() {
+    let app = make_app();
+    app.store.add_passkey_wrap("c1", wrap("alice", "sealed-identity", "laptop", 100)).await.unwrap();
+
+    assert!(app.store.delete_passkey_wrap("c1", "alice").await.unwrap());
+    assert!(
+        app.store.get_passkey_wrap("c1").await.unwrap().is_none(),
+        "revocation has to remove the wrap itself, not just hide it from the list"
+    );
+    assert!(app.store.list_passkey_wraps("alice").await.unwrap().is_empty());
+}
+
+#[tokio::test]
+async fn you_cannot_revoke_somebody_else_s_device() {
+    // The authorization the whole feature rests on. A credential id is
+    // disclosed by the passkey challenge, so without the ownership scope
+    // anyone who has seen one could unenroll its owner's device.
+    let app = make_app();
+    app.store.add_passkey_wrap("c-bob", wrap("bob", "s", "bob's laptop", 100)).await.unwrap();
+
+    assert!(!app.store.delete_passkey_wrap("c-bob", "mallory").await.unwrap());
+    assert!(
+        app.store.get_passkey_wrap("c-bob").await.unwrap().is_some(),
+        "bob still has his device"
+    );
+}
+
+#[tokio::test]
+async fn revoking_an_unknown_device_is_indistinguishable_from_revoking_another_s() {
+    // Both answer false rather than distinct errors: telling them apart
+    // would answer "is this credential id enrolled by somebody?" for anyone
+    // who asks.
+    let app = make_app();
+    app.store.add_passkey_wrap("c-bob", wrap("bob", "s", "bob's", 100)).await.unwrap();
+    assert!(!app.store.delete_passkey_wrap("nope", "mallory").await.unwrap());
+    assert!(!app.store.delete_passkey_wrap("c-bob", "mallory").await.unwrap());
+}
+
+#[tokio::test]
+async fn re_enrolling_the_same_credential_replaces_rather_than_duplicates() {
+    let app = make_app();
+    app.store.add_passkey_wrap("c1", wrap("alice", "first", "phone", 100)).await.unwrap();
+    app.store.add_passkey_wrap("c1", wrap("alice", "second", "phone renamed", 400)).await.unwrap();
+
+    let devices = app.store.list_passkey_wraps("alice").await.unwrap();
+    assert_eq!(devices.len(), 1, "one credential is one device");
+    assert_eq!(devices[0].label, "phone renamed");
+    assert_eq!(app.store.get_passkey_wrap("c1").await.unwrap().unwrap().wrapped, b"second");
 }
 
 #[tokio::test]

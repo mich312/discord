@@ -18,8 +18,15 @@ pub enum ClientMsg {
         pubkey: String,
         #[serde(default)]
         invite: Option<String>,
+        /// Client wire-protocol version. Optional so an older client still
+        /// parses. Not enforced — it is here so that a skew between a cached
+        /// client and an upgraded relay is diagnosable rather than showing up
+        /// as arbitrary downstream failures. The handshake previously carried
+        /// no version at all.
+        #[serde(default)]
+        v: Option<u32>,
     },
-    /// Signature over `b"relay-auth-v1" || nonce`.
+    /// Signature over `AUTH_CONTEXT || nonce || u32be(len(user)) || user`.
     Auth { sig: String },
     /// Pre-publish KeyPackages so members can be added while offline.
     PublishKp { rid: u64, payloads: Vec<String> },
@@ -53,7 +60,23 @@ pub enum ClientMsg {
     /// Append an opaque blob to the group log. `epoch` is client-declared
     /// metadata (the server cannot verify it) used for keying and later
     /// retention policies.
-    Send { rid: u64, group: String, epoch: u64, payload: String },
+    /// `commit` marks a payload that advances the MLS epoch. The relay
+    /// compare-and-swaps on it so exactly one commit per epoch is accepted;
+    /// see `Store::append_message`. It leaks nothing new — every Send
+    /// already carries `epoch`, so a commit was always the message that
+    /// bumped it.
+    Send {
+        rid: u64,
+        group: String,
+        epoch: u64,
+        payload: String,
+        #[serde(default)] commit: bool,
+    },
+    /// Mint a single-use, short-lived ticket authorizing ONE upload to
+    /// `/blobs/{id}`. Blob writes have no other authentication — the id is
+    /// a capability for *reading*, which says nothing about who may write —
+    /// so without this any stranger could fill the relay's disk.
+    BlobTicket { rid: u64, id: String },
     /// Deliver a Welcome directly to `to` (stored if offline). `group` and
     /// `after` tell the joiner where their log begins.
     Welcome { rid: u64, to: String, group: String, after: u64, payload: String },
@@ -141,7 +164,22 @@ pub enum ClientMsg {
         credential: String,
         salt: String,
         wrapped: String,
+        /// Human name for the device. Optional so an older client still
+        /// enrolls; absent becomes "" and the UI falls back to the date.
+        #[serde(default)]
+        label: Option<String>,
     },
+    /// This account's enrolled devices. Metadata only — never the wraps.
+    PasskeyWrapList { rid: u64 },
+    /// Revoke one enrolled device, by credential id.
+    ///
+    /// Forward-only, and the client says so in as many words: it stops that
+    /// passkey unlocking the identity from here on. It cannot reach into a
+    /// device that already holds the identity locally. What it does defeat is
+    /// the case that matters for a *synced* passkey — iCloud Keychain, Google
+    /// Password Manager — where the credential outlives the hardware and
+    /// would otherwise keep pulling the identity down forever.
+    PasskeyWrapDel { rid: u64, cred_id: String },
     /// Is this account secured, and how?
     VaultStatus { rid: u64 },
     /// WebAuthn registration ceremony (authenticated side).
@@ -170,11 +208,24 @@ pub enum ServerMsg {
     AdminList { rid: u64, users: Vec<String>, groups: Vec<GroupEntry> },
     Ok { rid: u64, #[serde(skip_serializing_if = "Option::is_none")] seq: Option<u64> },
     Error { #[serde(skip_serializing_if = "Option::is_none")] rid: Option<u64>, message: String },
-    Kp { rid: u64, user: String, #[serde(skip_serializing_if = "Option::is_none")] payload: Option<String> },
+    /// A consumed KeyPackage for `user`, plus the signature key this relay
+    /// has pinned for that handle. The adder checks the KeyPackage's
+    /// credential and signature key against `user`/`pubkey` before adding —
+    /// otherwise a relay could answer with a KeyPackage it minted itself and
+    /// join the group. Optional only so an older relay stays parseable; a
+    /// client that gets no `pubkey` refuses the add.
+    Kp {
+        rid: u64,
+        user: String,
+        #[serde(skip_serializing_if = "Option::is_none")] payload: Option<String>,
+        #[serde(default, skip_serializing_if = "Option::is_none")] pubkey: Option<String>,
+    },
     Msg { group: String, seq: u64, epoch: u64, sender: String, payload: String },
     Welcome { from: String, group: String, after: u64, payload: String },
     Invite { rid: u64, group: String, payload: String },
     PushInfo { rid: u64, pubkey: String },
+    /// Bearer token for one PUT to the id it was minted for.
+    BlobTicket { rid: u64, ticket: String },
     /// JSON passthrough: an array of RTCIceServer objects for the client to
     /// feed straight into `RTCPeerConnection({ iceServers })`.
     IceInfo { rid: u64, servers: String },
@@ -184,6 +235,18 @@ pub enum ServerMsg {
     VaultStatus { rid: u64, kind: Option<String> },
     /// WebAuthn ceremony payloads (JSON passthrough).
     Passkey { rid: u64, payload: String },
+    /// The caller's enrolled devices, newest first.
+    PasskeyDevices { rid: u64, devices: Vec<PasskeyDeviceOut> },
+}
+
+/// One enrolled device as it goes over the wire. `wrapped` and `credential`
+/// are absent by construction, not by omission — see `store::PasskeyDevice`.
+#[derive(Debug, Clone, Serialize)]
+pub struct PasskeyDeviceOut {
+    pub cred_id: String,
+    pub label: String,
+    /// Unix seconds.
+    pub created_at: i64,
 }
 
 #[derive(Debug, Clone, Serialize)]
@@ -205,4 +268,11 @@ pub struct HistoryEntryOut {
     pub payload: String,
 }
 
-pub const AUTH_CONTEXT: &[u8] = b"relay-auth-v1";
+/// Domain separator for the connection challenge. v2 binds the handle into
+/// the signed bytes: v1 signed only `context || nonce`, so a signature
+/// captured for one identity was a valid proof for any other, and a hostile
+/// relay could forward the real relay's nonce and replay the answer.
+pub const AUTH_CONTEXT: &[u8] = b"relay-auth-v2";
+
+/// Wire protocol version this relay speaks. See `ClientMsg::Hello::v`.
+pub const PROTOCOL_VERSION: u32 = 1;

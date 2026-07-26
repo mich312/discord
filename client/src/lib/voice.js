@@ -34,6 +34,87 @@ import { frameRms, levelFromRms, nextSpeaking } from './meter.js';
 
 const DEFAULT_ICE = [{ urls: 'stun:stun.l.google.com:19302' }];
 
+/// How many people may be in one call.
+///
+/// This is a full mesh: every browser holds a peer connection to every other,
+/// so the connection count grows with the square of the party and each
+/// participant uploads their audio once per peer. Past roughly this many it
+/// does not fail cleanly — it degrades into unusable audio while everyone
+/// blames their own network.
+///
+/// Enforced client-side and therefore **advisory**: media is peer-to-peer,
+/// there is no authority to ask, and two people joining at the same instant
+/// can both see room. It turns the common case from a silent collapse into a
+/// clear refusal, which is all a client-side check can honestly claim.
+export const MESH_LIMIT = 8;
+
+/** Is a call of `count` people already at the mesh ceiling? */
+export function meshFull(count) {
+  return (Number(count) || 0) >= MESH_LIMIT;
+}
+
+/** What to tell someone who cannot get in. Names the real reason — the
+ *  alternative is a refusal that reads as a bug. */
+export function meshFullMessage() {
+  return `this call is full (${MESH_LIMIT} people). calls are peer-to-peer, so every extra person costs everyone else bandwidth`;
+}
+
+/// Device preference: route my media through TURN so call peers never see my
+/// address. Off by default, because turning it on without a TURN server
+/// configured means calls stop connecting.
+export const RELAY_ONLY_KEY = 'quorum-voice-relay-only';
+
+/** Is there a TURN server in this ICE list? Relay-only mode has nothing to
+ *  relay through without one. Used to warn, not to override — see below. */
+export function hasTurn(servers) {
+  return (servers ?? []).some((s) => {
+    const urls = Array.isArray(s?.urls) ? s.urls : [s?.urls];
+    return urls.some((u) => typeof u === 'string' && /^turns?:/i.test(u.trim()));
+  });
+}
+
+/**
+ * The RTCPeerConnection config.
+ *
+ * When `relayOnly` is set we pass `iceTransportPolicy: 'relay'`, which stops
+ * the browser offering host and server-reflexive candidates — so peers see
+ * the TURN server's address instead of yours.
+ *
+ * **It is applied even when no TURN server is configured**, which makes calls
+ * fail rather than connect. That is deliberate: a privacy switch that
+ * silently does nothing is worse than one that visibly does not work, because
+ * only the second kind can be noticed. The UI is responsible for saying that
+ * TURN is missing (`hasTurn`) — the policy is not responsible for quietly
+ * overriding what someone asked for.
+ *
+ * Note the asymmetry, which the UI also states: this hides *your* address
+ * from peers. It does not hide theirs from you unless they enable it too.
+ */
+export function peerConfig(iceServers, relayOnly) {
+  const config = { iceServers: iceServers ?? DEFAULT_ICE };
+  if (relayOnly) config.iceTransportPolicy = 'relay';
+  return config;
+}
+
+/** Read the device preference. Absent or unreadable means off. */
+export function loadRelayOnly(storage = globalThis.localStorage) {
+  try {
+    return storage?.getItem(RELAY_ONLY_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+export function saveRelayOnly(on, storage = globalThis.localStorage) {
+  try {
+    if (on) storage?.setItem(RELAY_ONLY_KEY, '1');
+    else storage?.removeItem(RELAY_ONLY_KEY);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // Opus fmtp knobs we stamp onto every offer/answer. DTX stops the encoder
 // sending steady packets through silence (big win in a mesh, where every
 // participant is a separate uplink); the bitrate cap keeps a mono voice
@@ -111,6 +192,8 @@ export class VoiceManager {
     this.onCallStarted = opts.onCallStarted ?? (() => {});
     this.muted = false; // my mic, track.enabled-level — peers hear silence
     this.iceServers = opts.iceServers ?? DEFAULT_ICE;
+    // Device preference, not account state — same treatment as the theme.
+    this.relayOnly = opts.relayOnly ?? loadRelayOnly();
     this.active = null; // {server, channel, stream}
     this.ring = null; // incoming direct call awaiting our answer: {server, room, from}
     this.dial = null; // outgoing direct call we're ringing: {server, room, to}
@@ -495,6 +578,11 @@ export class VoiceManager {
 
   async join(server, channel) {
     if (this.active) await this.leave();
+    // Before the mic, not after: refusing a call is bad, and refusing it
+    // having just turned on someone's microphone is worse.
+    if (meshFull(this.participants(server, channel).length)) {
+      throw new Error(meshFullMessage());
+    }
     const stream = await this.captureAudio();
     this.muted = false; // every call starts open-mic; muting is a per-call act
     // Joining an *empty* group room starts a call: push-wake the roster so
@@ -1044,7 +1132,7 @@ export class VoiceManager {
   }
 
   createPeer(server, name) {
-    const pc = new RTCPeerConnection({ iceServers: this.iceServers });
+    const pc = new RTCPeerConnection(peerConfig(this.iceServers, this.relayOnly));
     const peer = {
       pc,
       audio: null,
@@ -1162,7 +1250,13 @@ export class VoiceManager {
           const politeLoser = this.me > sender;
           if (!politeLoser) break; // their offer loses; ours is in flight
           // setRemoteDescription(offer) implicitly rolls back our pending
-          // local offer; our track change re-offers once this settles.
+          // local offer — so whatever that offer carried (a camera track, a
+          // screen share) is no longer being negotiated. Mark it needed
+          // again, or the loser's track is silently dropped forever: the
+          // peer renders a tile for it, having seen the announcement, and
+          // no media ever arrives. `renegotiate` cleared this flag on its
+          // way to setLocalDescription, so nothing else re-sets it.
+          peer.renegotiateNeeded = true;
         }
         await peer.pc.setRemoteDescription({ type: 'offer', sdp: content.sdp });
         // The sender may have left (dropPeer closed this leg) while the
@@ -1180,6 +1274,20 @@ export class VoiceManager {
           type: 'answer',
           sdp: answer.sdp,
         });
+        // Answering settles the pc. onsignalingstatechange normally drives
+        // the postponed re-offer, but it can fire while `makingOffer` is
+        // still set (the losing renegotiate is unwinding), and that guard
+        // makes it skip — with no later state change to try again. So kick
+        // it here too; renegotiate is idempotent when nothing is pending.
+        if (
+          peer.renegotiateNeeded &&
+          peer.pc.signalingState === 'stable' &&
+          this.peers.get(sender) === peer &&
+          this.active
+        ) {
+          peer.renegotiateNeeded = false;
+          this.renegotiate(server, sender, peer).catch(() => {});
+        }
         break;
       }
       case 'answer': {

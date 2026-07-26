@@ -4,7 +4,7 @@
 //! the real deployment target.
 
 use async_trait::async_trait;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 
 #[derive(Debug, thiserror::Error)]
@@ -15,6 +15,14 @@ pub enum StoreError {
     NoSuchGroup,
     #[error("invite not valid (missing, expired, or used up)")]
     InviteInvalid,
+    /// A commit arrived for an epoch the log has already moved past —
+    /// someone else's commit won this epoch. The sender must discard its
+    /// staged commit, process the winner, and retry.
+    #[error("epoch conflict: the group has already moved past this epoch")]
+    EpochConflict,
+    /// This credential id already belongs to another account.
+    #[error("credential already enrolled by another account")]
+    CredentialTaken,
     #[error("storage error: {0}")]
     Backend(String),
 }
@@ -62,6 +70,27 @@ pub struct PasskeyWrap {
     pub salt: Vec<u8>,
     /// The identity bundle sealed under this passkey's PRF secret. Opaque.
     pub wrapped: Vec<u8>,
+    /// Client-supplied name for the device ("work laptop"). Cosmetic, and
+    /// bounded by the server — a credential id is unusable in a UI, and a
+    /// revocation list nobody can read is a revocation list nobody uses.
+    pub label: String,
+    /// Unix seconds, assigned by the server rather than the client: it is
+    /// shown to a user deciding which device to revoke, so a client-chosen
+    /// value would let a stolen device disguise itself as the old one.
+    pub created_at: i64,
+}
+
+/// One enrolled device, as shown to its owner.
+///
+/// Deliberately NOT a `PasskeyWrap`: listing devices must never hand back
+/// `wrapped` or `credential`. Those are the sealed identity and the material
+/// for answering a challenge with it, and the whole point of revocation is to
+/// stop a device obtaining them.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PasskeyDevice {
+    pub cred_id: String,
+    pub label: String,
+    pub created_at: i64,
 }
 
 /// The two membership roles. Admins manage the (weak, server-side) ACL:
@@ -125,6 +154,11 @@ pub trait Store: Send + Sync {
     /// Add `user` as a plain member; keeps the existing role if already in.
     async fn allow_member(&self, group: &str, user: &str) -> Result<(), StoreError>;
     /// Remove `user` from the group's ACL. No-op if they were not a member.
+    /// Drop `user` from `group`'s ACL. Idempotent, like any DELETE: removing
+    /// someone who is not there, or from a group that does not exist,
+    /// succeeds. The two impls disagreed on this — memory errored,
+    /// Postgres did not — which is exactly the class of divergence the
+    /// shared conformance suite now catches.
     async fn disallow_member(&self, group: &str, user: &str) -> Result<(), StoreError>;
     /// Purge a group entirely: roster, log, history, invites, welcomes.
     async fn delete_group(&self, group: &str) -> Result<(), StoreError>;
@@ -138,12 +172,19 @@ pub trait Store: Send + Sync {
     /// All groups as (group_id, created_by) pairs.
     async fn list_groups(&self) -> Result<Vec<(String, String)>, StoreError>;
     /// Append to the group's ordered log; returns the assigned seq (1-based).
+    /// Append to the group log. When `commit` is set the epoch is
+    /// compare-and-swapped: the append succeeds only if `epoch` is exactly
+    /// one past the group's current epoch, and it advances the group.
+    /// Concurrent commits therefore serialize — the loser gets
+    /// `EpochConflict` instead of silently forking the group.
+    /// Non-commit payloads are not epoch-checked.
     async fn append_message(
         &self,
         group: &str,
         epoch: u64,
         sender: &str,
         payload: Vec<u8>,
+        commit: bool,
     ) -> Result<u64, StoreError>;
     async fn messages_after(&self, group: &str, after: u64) -> Result<Vec<StoredMessage>, StoreError>;
     async fn store_welcome(&self, to: &str, welcome: StoredWelcome) -> Result<(), StoreError>;
@@ -162,6 +203,11 @@ pub trait Store: Send + Sync {
         payload: Vec<u8>,
     ) -> Result<u64, StoreError>;
     /// Entries after `after`, excluding ones expired at `now`.
+    /// Delete every expired history entry across every group. Retention was
+    /// enforced only lazily, inside `history_after`, so an abandoned
+    /// channel's expired ciphertext lived forever — the auto-delete promise
+    /// held only for rooms someone still opened. Returns rows removed.
+    async fn sweep_expired_history(&self, now: u64) -> Result<u64, StoreError>;
     async fn history_after(
         &self,
         group: &str,
@@ -188,6 +234,13 @@ pub trait Store: Send + Sync {
     async fn add_passkey_wrap(&self, cred_id: &str, wrap: PasskeyWrap) -> Result<(), StoreError>;
     /// The per-device passkey enrolled under `cred_id`, if any.
     async fn get_passkey_wrap(&self, cred_id: &str) -> Result<Option<PasskeyWrap>, StoreError>;
+    /// This user's enrolled devices, newest first. Metadata only.
+    async fn list_passkey_wraps(&self, user: &str) -> Result<Vec<PasskeyDevice>, StoreError>;
+    /// Revoke one device. Scoped to `user` in the query itself rather than
+    /// checked beforehand, so there is no window between the check and the
+    /// delete and no path where a caller removes somebody else's device.
+    /// `false` means nothing matched — unknown id, or not the caller's.
+    async fn delete_passkey_wrap(&self, cred_id: &str, user: &str) -> Result<bool, StoreError>;
 
     // --- push subscriptions ---
     async fn put_push_subscription(
@@ -200,6 +253,10 @@ pub trait Store: Send + Sync {
     async fn delete_push_subscription(&self, user: &str, endpoint: &str) -> Result<(), StoreError>;
 
     // --- invites ---
+    /// Park an invite. First writer wins: an id already in use is left
+    /// alone (Postgres does ON CONFLICT DO NOTHING, and the memory impl
+    /// used to overwrite — a divergence that let one group's admin repoint
+    /// another group's circulating link).
     async fn create_invite(&self, invite: &str, record: InviteRecord) -> Result<(), StoreError>;
     /// Which group an invite belongs to (for authorization), if it exists.
     async fn invite_group(&self, invite: &str) -> Result<Option<String>, StoreError>;
@@ -207,10 +264,30 @@ pub trait Store: Send + Sync {
     async fn update_invite(&self, invite: &str, payload: Vec<u8>) -> Result<(), StoreError>;
     async fn revoke_invite(&self, invite: &str) -> Result<(), StoreError>;
     /// Validate expiry/uses at `now`, count a use, return (group, payload).
-    async fn redeem_invite(&self, invite: &str, now: u64) -> Result<(String, Vec<u8>), StoreError>;
-    /// Would `invite` be redeemable at `now`? Does NOT count a use — the
-    /// registration gate checks this; the use is only spent on redeem.
-    async fn invite_usable(&self, invite: &str, now: u64) -> Result<bool, StoreError>;
+    /// Claim `invite` for `user`, returning the group and blob.
+    ///
+    /// Idempotent per (invite, user): a use is counted the FIRST time a
+    /// given handle claims a link, and not again. That matters because the
+    /// join flow presents the same invite twice — once in `Hello` to pass
+    /// the registration gate, once in `RedeemInvite` to fetch the blob —
+    /// so counting naively would burn two uses of a `max_uses: 1` link and
+    /// break the ordinary path.
+    async fn redeem_invite(
+        &self,
+        invite: &str,
+        user: &str,
+        now: u64,
+    ) -> Result<(String, Vec<u8>), StoreError>;
+    /// Claim `invite` for `user` at the registration gate. Same accounting
+    /// as `redeem_invite` — this used to be a pure read, which is why one
+    /// never-redeemed `max_uses: 1` link could register unlimited accounts
+    /// on an "invite-only" relay.
+    async fn claim_invite_for_registration(
+        &self,
+        invite: &str,
+        user: &str,
+        now: u64,
+    ) -> Result<bool, StoreError>;
 }
 
 #[derive(Default)]
@@ -220,6 +297,9 @@ struct MemoryInner {
     groups: HashMap<String, GroupData>,
     welcomes: HashMap<String, Vec<StoredWelcome>>,
     invites: HashMap<String, InviteRecord>,
+    /// (invite, user) pairs that have already counted a use, so the same
+    /// joiner presenting the link twice spends it once.
+    invite_claims: HashSet<(String, String)>,
     /// user -> endpoint -> subscription json
     push_subs: HashMap<String, HashMap<String, String>>,
     vaults: HashMap<String, VaultRecord>,
@@ -233,6 +313,9 @@ struct GroupData {
     created_by: String,
     /// (user, role)
     members: Vec<(String, String)>,
+    /// The MLS epoch as the log has serialized it: bumped only by an
+    /// accepted commit, and the value the commit CAS is checked against.
+    epoch: u64,
     log: Vec<StoredMessage>,
     /// hid -> history log
     history: HashMap<String, HistoryLog>,
@@ -297,6 +380,7 @@ impl Store for MemoryStore {
             group.to_string(),
             GroupData {
                 created_by: creator.to_string(),
+                epoch: 0,
                 members: vec![(creator.to_string(), ROLE_ADMIN.to_string())],
                 log: Vec::new(),
                 history: HashMap::new(),
@@ -316,8 +400,9 @@ impl Store for MemoryStore {
 
     async fn disallow_member(&self, group: &str, user: &str) -> Result<(), StoreError> {
         let mut inner = self.inner.lock().unwrap();
-        let data = inner.groups.get_mut(group).ok_or(StoreError::NoSuchGroup)?;
-        data.members.retain(|(m, _)| m != user);
+        if let Some(data) = inner.groups.get_mut(group) {
+            data.members.retain(|(m, _)| m != user);
+        }
         Ok(())
     }
 
@@ -399,6 +484,19 @@ impl Store for MemoryStore {
         Ok(seq)
     }
 
+    async fn sweep_expired_history(&self, now: u64) -> Result<u64, StoreError> {
+        let mut inner = self.inner.lock().unwrap();
+        let mut removed = 0u64;
+        for group in inner.groups.values_mut() {
+            for log in group.history.values_mut() {
+                let before = log.entries.len();
+                log.entries.retain(|e| !e.expires_at.is_some_and(|t| t < now));
+                removed += (before - log.entries.len()) as u64;
+            }
+        }
+        Ok(removed)
+    }
+
     async fn history_after(
         &self,
         group: &str,
@@ -457,6 +555,10 @@ impl Store for MemoryStore {
 
     async fn add_passkey_wrap(&self, cred_id: &str, wrap: PasskeyWrap) -> Result<(), StoreError> {
         let mut inner = self.inner.lock().unwrap();
+        // Only the owner may replace an existing row; see the Postgres impl.
+        if inner.passkey_wraps.get(cred_id).is_some_and(|w| w.user != wrap.user) {
+            return Err(StoreError::CredentialTaken);
+        }
         inner.passkey_wraps.insert(cred_id.to_string(), wrap);
         Ok(())
     }
@@ -464,6 +566,34 @@ impl Store for MemoryStore {
     async fn get_passkey_wrap(&self, cred_id: &str) -> Result<Option<PasskeyWrap>, StoreError> {
         let inner = self.inner.lock().unwrap();
         Ok(inner.passkey_wraps.get(cred_id).cloned())
+    }
+
+    async fn list_passkey_wraps(&self, user: &str) -> Result<Vec<PasskeyDevice>, StoreError> {
+        let inner = self.inner.lock().unwrap();
+        let mut out: Vec<PasskeyDevice> = inner
+            .passkey_wraps
+            .iter()
+            .filter(|(_, w)| w.user == user)
+            .map(|(cred_id, w)| PasskeyDevice {
+                cred_id: cred_id.clone(),
+                label: w.label.clone(),
+                created_at: w.created_at,
+            })
+            .collect();
+        // Newest first, then by id so equal timestamps still order stably —
+        // a HashMap's iteration order would otherwise reshuffle the list on
+        // every poll.
+        out.sort_by(|a, b| b.created_at.cmp(&a.created_at).then(a.cred_id.cmp(&b.cred_id)));
+        Ok(out)
+    }
+
+    async fn delete_passkey_wrap(&self, cred_id: &str, user: &str) -> Result<bool, StoreError> {
+        let mut inner = self.inner.lock().unwrap();
+        if inner.passkey_wraps.get(cred_id).is_none_or(|w| w.user != user) {
+            return Ok(false);
+        }
+        inner.passkey_wraps.remove(cred_id);
+        Ok(true)
     }
 
     async fn put_push_subscription(
@@ -504,9 +634,16 @@ impl Store for MemoryStore {
         epoch: u64,
         sender: &str,
         payload: Vec<u8>,
+        commit: bool,
     ) -> Result<u64, StoreError> {
         let mut inner = self.inner.lock().unwrap();
         let data = inner.groups.get_mut(group).ok_or(StoreError::NoSuchGroup)?;
+        if commit {
+            if epoch != data.epoch + 1 {
+                return Err(StoreError::EpochConflict);
+            }
+            data.epoch = epoch;
+        }
         let seq = data.log.len() as u64 + 1;
         data.log.push(StoredMessage {
             group: group.to_string(),
@@ -540,7 +677,10 @@ impl Store for MemoryStore {
         if !inner.groups.contains_key(&record.group) {
             return Err(StoreError::NoSuchGroup);
         }
-        inner.invites.insert(invite.to_string(), record);
+        // First writer wins, matching Postgres's ON CONFLICT DO NOTHING.
+        // This used to overwrite unconditionally, so one group's admin could
+        // repoint another group's circulating invite id at their own group.
+        inner.invites.entry(invite.to_string()).or_insert(record);
         Ok(())
     }
 
@@ -562,23 +702,41 @@ impl Store for MemoryStore {
         Ok(())
     }
 
-    async fn redeem_invite(&self, invite: &str, now: u64) -> Result<(String, Vec<u8>), StoreError> {
+    async fn redeem_invite(
+        &self,
+        invite: &str,
+        user: &str,
+        now: u64,
+    ) -> Result<(String, Vec<u8>), StoreError> {
         let mut inner = self.inner.lock().unwrap();
+        let already = inner.invite_claims.contains(&(invite.to_string(), user.to_string()));
         let record = inner.invites.get_mut(invite).ok_or(StoreError::InviteInvalid)?;
-        if record.expires_at.is_some_and(|t| now > t)
-            || record.max_uses.is_some_and(|m| record.uses >= m)
-        {
+        if record.expires_at.is_some_and(|t| now > t) {
             return Err(StoreError::InviteInvalid);
         }
-        record.uses += 1;
-        Ok((record.group.clone(), record.payload.clone()))
+        // A handle that already claimed this link may finish its join even
+        // if the link has since reached max_uses on its account.
+        if !already {
+            if record.max_uses.is_some_and(|m| record.uses >= m) {
+                return Err(StoreError::InviteInvalid);
+            }
+            record.uses += 1;
+        }
+        let out = (record.group.clone(), record.payload.clone());
+        inner.invite_claims.insert((invite.to_string(), user.to_string()));
+        Ok(out)
     }
 
-    async fn invite_usable(&self, invite: &str, now: u64) -> Result<bool, StoreError> {
-        let inner = self.inner.lock().unwrap();
-        Ok(inner.invites.get(invite).is_some_and(|record| {
-            !record.expires_at.is_some_and(|t| now > t)
-                && !record.max_uses.is_some_and(|m| record.uses >= m)
-        }))
+    async fn claim_invite_for_registration(
+        &self,
+        invite: &str,
+        user: &str,
+        now: u64,
+    ) -> Result<bool, StoreError> {
+        match self.redeem_invite(invite, user, now).await {
+            Ok(_) => Ok(true),
+            Err(StoreError::InviteInvalid) => Ok(false),
+            Err(e) => Err(e),
+        }
     }
 }

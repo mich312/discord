@@ -1,0 +1,271 @@
+# SLO recording rules and error-budget burn alerts for a quorum relay.
+#
+# The objectives, and why each is the number it is, are in docs/SLO.md.
+# Load alongside deploy/alerts.yml:
+#
+#   rule_files:
+#     - /etc/prometheus/alerts.yml
+#     - /etc/prometheus/slo-rules.yml
+#
+# Two things to know before editing.
+#
+# 1. Recording rules exist so the same expression is not written six times at
+#    six window lengths. A burn-rate alert needs a long window and a short one,
+#    and there are four burn rates, so the raw SLI would otherwise appear in
+#    eight places per objective and drift between them.
+#
+# 2. Every metric name here is checked against relay/src/metrics.rs by
+#    `relay/tests/slo_rules.rs`. A rule naming a metric the relay does not emit
+#    does not error — it silently evaluates to nothing, forever, and the first
+#    time anybody notices is during the incident it was supposed to catch. That
+#    test exists so a rename breaks the build instead.
+
+groups:
+  # --- SLIs, as error ratios ------------------------------------------------
+  # Error ratios rather than success ratios, because burn rate is defined
+  # against the budget being spent. With no traffic these are 0/0, the series
+  # vanishes, and nothing fires — see docs/SLO.md.
+  - name: quorum-slo-sli
+    interval: 30s
+    rules:
+      # Sends the relay itself failed. `backend` only: the other rejection
+      # reasons are the relay refusing correctly, and epoch_conflict in
+      # particular is the fork protection working. Counting it here would make
+      # the SLO improve as the safety check gets worse.
+      - record: quorum:send_errors:ratio_rate5m
+        expr: >-
+          sum(rate(quorum_send_rejections_total{reason="backend"}[5m]))
+          /
+          (
+            sum(rate(quorum_messages_appended_total[5m]))
+            + sum(rate(quorum_send_rejections_total[5m]))
+          )
+      - record: quorum:send_errors:ratio_rate30m
+        expr: >-
+          sum(rate(quorum_send_rejections_total{reason="backend"}[30m]))
+          /
+          (
+            sum(rate(quorum_messages_appended_total[30m]))
+            + sum(rate(quorum_send_rejections_total[30m]))
+          )
+      - record: quorum:send_errors:ratio_rate1h
+        expr: >-
+          sum(rate(quorum_send_rejections_total{reason="backend"}[1h]))
+          /
+          (
+            sum(rate(quorum_messages_appended_total[1h]))
+            + sum(rate(quorum_send_rejections_total[1h]))
+          )
+      - record: quorum:send_errors:ratio_rate2h
+        expr: >-
+          sum(rate(quorum_send_rejections_total{reason="backend"}[2h]))
+          /
+          (
+            sum(rate(quorum_messages_appended_total[2h]))
+            + sum(rate(quorum_send_rejections_total[2h]))
+          )
+      - record: quorum:send_errors:ratio_rate6h
+        expr: >-
+          sum(rate(quorum_send_rejections_total{reason="backend"}[6h]))
+          /
+          (
+            sum(rate(quorum_messages_appended_total[6h]))
+            + sum(rate(quorum_send_rejections_total[6h]))
+          )
+      - record: quorum:send_errors:ratio_rate1d
+        expr: >-
+          sum(rate(quorum_send_rejections_total{reason="backend"}[1d]))
+          /
+          (
+            sum(rate(quorum_messages_appended_total[1d]))
+            + sum(rate(quorum_send_rejections_total[1d]))
+          )
+      - record: quorum:send_errors:ratio_rate3d
+        expr: >-
+          sum(rate(quorum_send_rejections_total{reason="backend"}[3d]))
+          /
+          (
+            sum(rate(quorum_messages_appended_total[3d]))
+            + sum(rate(quorum_send_rejections_total[3d]))
+          )
+
+      # Appends slower than 1s. A bucket ratio, not histogram_quantile: the
+      # fraction inside a real bucket boundary is exact and aggregates across
+      # instances, where an interpolated quantile does neither. le="1" is a
+      # genuine boundary of this histogram (1000ms), so the threshold is free.
+      - record: quorum:append_slow:ratio_rate5m
+        expr: >-
+          1 - (
+            sum(rate(quorum_append_duration_seconds_bucket{le="1"}[5m]))
+            / sum(rate(quorum_append_duration_seconds_count[5m]))
+          )
+      - record: quorum:append_slow:ratio_rate30m
+        expr: >-
+          1 - (
+            sum(rate(quorum_append_duration_seconds_bucket{le="1"}[30m]))
+            / sum(rate(quorum_append_duration_seconds_count[30m]))
+          )
+      - record: quorum:append_slow:ratio_rate1h
+        expr: >-
+          1 - (
+            sum(rate(quorum_append_duration_seconds_bucket{le="1"}[1h]))
+            / sum(rate(quorum_append_duration_seconds_count[1h]))
+          )
+      - record: quorum:append_slow:ratio_rate2h
+        expr: >-
+          1 - (
+            sum(rate(quorum_append_duration_seconds_bucket{le="1"}[2h]))
+            / sum(rate(quorum_append_duration_seconds_count[2h]))
+          )
+      - record: quorum:append_slow:ratio_rate6h
+        expr: >-
+          1 - (
+            sum(rate(quorum_append_duration_seconds_bucket{le="1"}[6h]))
+            / sum(rate(quorum_append_duration_seconds_count[6h]))
+          )
+      - record: quorum:append_slow:ratio_rate1d
+        expr: >-
+          1 - (
+            sum(rate(quorum_append_duration_seconds_bucket{le="1"}[1d]))
+            / sum(rate(quorum_append_duration_seconds_count[1d]))
+          )
+      - record: quorum:append_slow:ratio_rate3d
+        expr: >-
+          1 - (
+            sum(rate(quorum_append_duration_seconds_bucket{le="1"}[3d]))
+            / sum(rate(quorum_append_duration_seconds_count[3d]))
+          )
+
+      # Availability, as unavailability. `up` is Prometheus's own metric, so
+      # this is still recorded while the relay is too dead to be scraped.
+      - record: quorum:unavailable:ratio_rate1h
+        expr: 1 - avg_over_time(up{job="quorum"}[1h])
+      - record: quorum:unavailable:ratio_rate6h
+        expr: 1 - avg_over_time(up{job="quorum"}[6h])
+      - record: quorum:unavailable:ratio_rate3d
+        expr: 1 - avg_over_time(up{job="quorum"}[3d])
+      - record: quorum:unavailable:ratio_rate5m
+        expr: 1 - avg_over_time(up{job="quorum"}[5m])
+      - record: quorum:unavailable:ratio_rate30m
+        expr: 1 - avg_over_time(up{job="quorum"}[30m])
+      - record: quorum:unavailable:ratio_rate2h
+        expr: 1 - avg_over_time(up{job="quorum"}[2h])
+      - record: quorum:unavailable:ratio_rate1d
+        expr: 1 - avg_over_time(up{job="quorum"}[1d])
+
+  # --- burn-rate alerts -----------------------------------------------------
+  # Each alert pairs a long window (does this matter?) with a short one (is it
+  # still happening?). The short window is what stops an alert firing for hours
+  # after an incident is over; the long one is what stops a blip paging anyone.
+  #
+  # Thresholds are burn-rate multiples of the objective's budget, so the
+  # literal in each expression is (multiplier x budget), spelled out rather
+  # than computed because Prometheus has no arithmetic on rule metadata and a
+  # silently wrong constant here is invisible.
+  - name: quorum-slo-burn
+    rules:
+      # --- SLO 1: availability, 99.5% => 0.5% budget --------------------
+      - alert: QuorumAvailabilityBudgetBurningFast
+        # 14.4 x 0.005 = 0.072
+        expr: >-
+          quorum:unavailable:ratio_rate1h > 0.072
+          and quorum:unavailable:ratio_rate5m > 0.072
+        for: 2m
+        labels: { severity: page, slo: availability }
+        annotations:
+          summary: "Availability budget burning 14x — a month's outage allowance in ~2 days"
+          runbook: "deploy/RUNBOOK.md — 'Relay is down'"
+      - alert: QuorumAvailabilityBudgetBurning
+        # 6 x 0.005 = 0.03
+        expr: >-
+          quorum:unavailable:ratio_rate6h > 0.03
+          and quorum:unavailable:ratio_rate30m > 0.03
+        for: 15m
+        labels: { severity: page, slo: availability }
+        annotations:
+          summary: "Availability budget burning 6x — exhausted in ~5 days at this rate"
+          runbook: "deploy/RUNBOOK.md — 'Relay is down'"
+      - alert: QuorumAvailabilityBudgetLeaking
+        # 1 x 0.005. Not urgent, but at this rate the month ends at zero.
+        expr: >-
+          quorum:unavailable:ratio_rate3d > 0.005
+          and quorum:unavailable:ratio_rate6h > 0.005
+        for: 2h
+        labels: { severity: ticket, slo: availability }
+        annotations:
+          summary: "Availability is tracking to spend the entire 30-day budget"
+          runbook: "docs/SLO.md — 'Reviewing these'"
+
+      # --- SLO 2: message acceptance, 99.9% => 0.1% budget --------------
+      - alert: QuorumSendErrorBudgetBurningFast
+        # 14.4 x 0.001 = 0.0144
+        expr: >-
+          quorum:send_errors:ratio_rate1h > 0.0144
+          and quorum:send_errors:ratio_rate5m > 0.0144
+        for: 2m
+        labels: { severity: page, slo: send-acceptance }
+        annotations:
+          summary: "Sends are failing on the relay side, fast enough to spend the month in ~2 days"
+          runbook: "deploy/RUNBOOK.md — 'Messages are not arriving'"
+          description: >-
+            This counts only reason="backend" — the store returning an error.
+            Look at Postgres and at disk. Authorization refusals and epoch
+            conflicts are excluded by design; see docs/SLO.md.
+      - alert: QuorumSendErrorBudgetBurning
+        # 6 x 0.001 = 0.006
+        expr: >-
+          quorum:send_errors:ratio_rate6h > 0.006
+          and quorum:send_errors:ratio_rate30m > 0.006
+        for: 15m
+        labels: { severity: page, slo: send-acceptance }
+        annotations:
+          summary: "Relay-side send failures are burning the budget 6x"
+          runbook: "deploy/RUNBOOK.md — 'Messages are not arriving'"
+      - alert: QuorumSendErrorBudgetLeaking
+        # 3 x 0.001 = 0.003
+        expr: >-
+          quorum:send_errors:ratio_rate1d > 0.003
+          and quorum:send_errors:ratio_rate2h > 0.003
+        for: 1h
+        labels: { severity: ticket, slo: send-acceptance }
+        annotations:
+          summary: "A steady trickle of relay-side send failures"
+          description: >-
+            Not enough to page for, but it is somebody's message failing to
+            send. Worth finding before it becomes the fast burn.
+
+      # --- SLO 3: append latency, 99% => 1% budget ----------------------
+      - alert: QuorumAppendLatencyBudgetBurningFast
+        # 14.4 x 0.01 = 0.144
+        expr: >-
+          quorum:append_slow:ratio_rate1h > 0.144
+          and quorum:append_slow:ratio_rate5m > 0.144
+        for: 5m
+        labels: { severity: page, slo: append-latency }
+        annotations:
+          summary: "Over 14% of appends are slower than 1s"
+          runbook: "deploy/RUNBOOK.md — 'Messages are not arriving'"
+          description: >-
+            The timer includes waiting for the group's send lock, so a single
+            very busy circle looks the same as a slow database — check
+            Postgres first, then whether one circle dominates the traffic.
+      - alert: QuorumAppendLatencyBudgetBurning
+        # 6 x 0.01 = 0.06
+        expr: >-
+          quorum:append_slow:ratio_rate6h > 0.06
+          and quorum:append_slow:ratio_rate30m > 0.06
+        for: 30m
+        labels: { severity: ticket, slo: append-latency }
+        annotations:
+          summary: "Append latency is burning its budget 6x"
+          runbook: "deploy/RUNBOOK.md — 'Messages are not arriving'"
+      - alert: QuorumAppendLatencyBudgetLeaking
+        # 1 x 0.01
+        expr: >-
+          quorum:append_slow:ratio_rate3d > 0.01
+          and quorum:append_slow:ratio_rate6h > 0.01
+        for: 6h
+        labels: { severity: ticket, slo: append-latency }
+        annotations:
+          summary: "Append latency is tracking to spend the entire 30-day budget"
+          runbook: "docs/CAPACITY.md"

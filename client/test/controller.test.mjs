@@ -4,6 +4,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Controller, freshTyping } from '../src/lib/controller.js';
+import { FORK_THRESHOLD } from '../src/lib/fork.js';
 import { b64 } from '../src/lib/relay.js';
 import { openBackup, openHistoryEntry } from '../src/lib/history.js';
 
@@ -28,6 +29,11 @@ function fakeDb() {
     msgsDeleteServer: async (server) => {
       for (let i = messages.length - 1; i >= 0; i--) {
         if (messages[i].server === server) messages.splice(i, 1);
+      }
+    },
+    msgsDelete: async (server, channel) => {
+      for (let i = messages.length - 1; i >= 0; i--) {
+        if (messages[i].server === server && messages[i].channel === channel) messages.splice(i, 1);
       }
     },
     kvPut: async () => {},
@@ -210,10 +216,13 @@ test('removeMember re-keys the group, revokes the ACL, and drops the role', asyn
     },
   });
   const base = c.crypto;
-  c.crypto = async (cmd, args) =>
-    cmd === 'removeMember'
-      ? { commit: new Uint8Array([9]), epoch: 3, members: ['alice'], state: null }
-      : base(cmd, args);
+  // removeMember only STAGES the commit now; the roster moves on merge,
+  // which happens after the relay has accepted it into the log.
+  c.crypto = async (cmd, args) => {
+    if (cmd === 'removeMember') return { commit: new Uint8Array([9]), epoch: 3, state: null };
+    if (cmd === 'mergeStagedCommit') return { epoch: 3, members: ['alice'], state: null };
+    return base(cmd, args);
+  };
   const r = record({ members: ['alice', 'bob'], roles: { alice: 'admin', bob: 'member' } });
   c.servers.set('srv', r);
   await c.removeMember('srv', 'bob');
@@ -469,4 +478,684 @@ test('a rally rides the ephemeral fan-out too, never the group log', async () =>
   const standDown = c.relay.requests[1];
   assert.equal(standDown.notify, undefined, 'standing down notifies no one');
   assert.equal(standDown.notify_kind, undefined, 'standing down carries no push label');
+});
+
+// --- §0.6: the admin gate fails closed for destructive envelopes ----------
+// Previously senderIsAdmin returned true whenever the role was unknown, so a
+// non-admin's chan-del reached db.msgsDelete during the window before a fresh
+// joiner's first roster fetch landed — irreversible local history loss.
+
+test('chan-del from a sender whose role cannot be established is dropped, not applied', async () => {
+  const { c } = makeController({
+    // The ACL fetch fails, so the role stays unknown even after the re-pull.
+    relayHandler: (msg) =>
+      msg.t === 'members' ? Promise.reject(new Error('offline')) : Promise.resolve({ seq: 1 }),
+  });
+  const r = record({ channels: ['general', 'design'] });
+  c.servers.set('srv', r);
+  await c.db.msgAdd({ server: 'srv', channel: 'design', sender: 'bob', ts: 1, text: 'keep me' });
+
+  await c.onContent(r, 'mallory', JSON.stringify({ k: 'chan-del', ch: 'design' }));
+
+  assert.ok(r.channels.includes('design'), 'the channel survives an unestablished sender');
+  assert.equal(
+    c.db.messages.filter((m) => m.channel === 'design' && !m.system).length,
+    1,
+    'and its history was not deleted'
+  );
+  clearTimeout(c.backupTimer);
+});
+
+test('chanset from a sender whose role cannot be established cannot flip kept history', async () => {
+  const { c } = makeController({
+    relayHandler: (msg) =>
+      msg.t === 'members' ? Promise.reject(new Error('offline')) : Promise.resolve({ seq: 1 }),
+  });
+  const r = record();
+  c.servers.set('srv', r);
+
+  await c.onContent(
+    r,
+    'mallory',
+    JSON.stringify({ k: 'chanset', ch: 'general', meta: { hid: 'log1', hkey: 'k' } })
+  );
+
+  assert.equal(r.chanMeta?.general, undefined, 'the settings change was refused');
+  clearTimeout(c.backupTimer);
+});
+
+test('a real admin still gets destructive envelopes applied after the ACL re-pull', async () => {
+  // The fail-closed path must not break the promotion-lag case: bob is cached
+  // as a member but the ACL says admin, so his delete must still land.
+  const { c } = makeController({
+    relayHandler: (msg) =>
+      msg.t === 'members'
+        ? Promise.resolve({ members: [{ user: 'alice', role: 'member' }, { user: 'bob', role: 'admin' }] })
+        : Promise.resolve({ seq: 1 }),
+  });
+  const r = record({ channels: ['general', 'design'], roles: { bob: 'member' } });
+  c.servers.set('srv', r);
+
+  await c.onContent(r, 'bob', JSON.stringify({ k: 'chan-del', ch: 'design' }));
+
+  assert.ok(!r.channels.includes('design'), 'the promoted admin’s delete landed');
+  assert.equal(r.roles.bob, 'admin', 'roles were refreshed');
+  clearTimeout(c.backupTimer);
+});
+
+test('additive envelopes still fail open when the role is unknown', async () => {
+  // Deliberate asymmetry: a stray channel is recoverable, deleted history is
+  // not, so `chan` keeps the permissive behaviour `chan-del` gives up.
+  const { c } = makeController({
+    relayHandler: (msg) =>
+      msg.t === 'members' ? Promise.reject(new Error('offline')) : Promise.resolve({ seq: 1 }),
+  });
+  const r = record();
+  c.servers.set('srv', r);
+
+  await c.onContent(r, 'newcomer', JSON.stringify({ k: 'chan', ch: 'design' }));
+
+  assert.ok(r.channels.includes('design'), 'an additive create from an unknown role still applies');
+  clearTimeout(c.backupTimer);
+});
+
+// --- §0.2: verification is bound to a key, not a handle -------------------
+// Previously markVerified stored only the peer's handle, so the ✓ survived a
+// key change — including a relay substituting a KeyPackage for that handle,
+// which is exactly what safety numbers exist to detect.
+
+function verifyController(safetyNumbers) {
+  // safetyNumbers: peer -> current number, mutable between calls so a test
+  // can simulate the peer's key changing under it.
+  const { c, dispatched } = makeController();
+  c.crypto = async (cmd, args) => {
+    if (cmd === 'safetyNumber') {
+      const sn = safetyNumbers[args.peer];
+      if (!sn) throw new Error(`no member named ${args.peer}`);
+      return sn;
+    }
+    return {};
+  };
+  return { c, dispatched };
+}
+
+test('markVerified records the safety number that was actually compared', async () => {
+  const { c } = verifyController({ bob: '11111 22222' });
+  const r = record();
+  c.servers.set('srv', r);
+
+  await c.markVerified('srv', 'bob');
+
+  assert.equal(r.verifiedSn.bob, '11111 22222', 'the checked number is stored');
+  assert.deepEqual(r.verified, ['bob'], 'and the roster array still renders it');
+  clearTimeout(c.backupTimer);
+});
+
+test("a peer's key changing clears their badge on the next membership change", async () => {
+  const numbers = { bob: '11111 22222' };
+  const { c } = verifyController(numbers);
+  const r = record();
+  c.servers.set('srv', r);
+  await c.markVerified('srv', 'bob');
+
+  // The relay substitutes a different key for the same handle: the safety
+  // number moves, which is the only signal that anything happened.
+  numbers.bob = '99999 88888';
+  const changed = await c.revalidateVerified(r);
+
+  assert.equal(changed, true, 'the change was detected');
+  assert.deepEqual(r.verified, [], 'the ✓ is gone');
+  assert.equal(r.verifiedSn.bob, undefined, 'and the stale binding was dropped');
+  assert.ok(
+    c.db.messages.some((m) => m.system && m.text.includes("bob's safety number changed")),
+    'the user is told, rather than the badge silently vanishing'
+  );
+  clearTimeout(c.backupTimer);
+});
+
+test('an unchanged key keeps the badge across membership changes', async () => {
+  const { c } = verifyController({ bob: '11111 22222' });
+  const r = record();
+  c.servers.set('srv', r);
+  await c.markVerified('srv', 'bob');
+
+  const changed = await c.revalidateVerified(r);
+
+  assert.equal(changed, false, 'nothing moved');
+  assert.deepEqual(r.verified, ['bob'], 'the ✓ survives a routine epoch bump');
+  clearTimeout(c.backupTimer);
+});
+
+test('legacy handle-only verifications are reset rather than trusted', async () => {
+  // A record written before this change proves the user compared digits once,
+  // but not against which key — so it cannot rule out a later substitution.
+  const { c } = verifyController({ bob: '11111 22222' });
+  const r = record({ verified: ['bob'] });
+  c.servers.set('srv', r);
+
+  const changed = await c.revalidateVerified(r);
+
+  assert.equal(changed, true);
+  assert.deepEqual(r.verified, [], 'the unbound badge is dropped');
+  assert.ok(
+    c.db.messages.some((m) => m.system && m.text.includes('verification badges were reset')),
+    'and the reset is explained'
+  );
+  clearTimeout(c.backupTimer);
+});
+
+test('a verified member who left keeps their binding, so a re-add is still checked', async () => {
+  const numbers = { bob: '11111 22222' };
+  const { c } = verifyController(numbers);
+  const r = record();
+  c.servers.set('srv', r);
+  await c.markVerified('srv', 'bob');
+
+  // bob is removed: no MLS view of him, so nothing to compare yet.
+  r.members = ['alice'];
+  delete numbers.bob;
+  await c.revalidateVerified(r);
+  assert.equal(r.verifiedSn.bob, '11111 22222', 'the binding is retained while he is away');
+
+  // He is re-added with a fresh key — that must not silently re-verify him.
+  r.members = ['alice', 'bob'];
+  numbers.bob = '55555 44444';
+  await c.revalidateVerified(r);
+  assert.deepEqual(r.verified, [], 'the re-add is caught by the retained binding');
+  clearTimeout(c.backupTimer);
+});
+
+// --- removal has to close every door, not just the MLS one ---------------
+// The MLS commit re-keys the group, but two other doors stayed open: the
+// per-channel kept-history key was minted once and never rotated, and
+// removal *refreshed* parked invite blobs, keeping alive any link the
+// removed member still held.
+
+test('removing someone rotates every kept-history key and keeps the old ones for reading', async () => {
+  const { c } = makeController();
+  const base = c.crypto;
+  c.crypto = async (cmd, args) => {
+    if (cmd === 'removeMember') return { commit: new Uint8Array([9]), epoch: 3, state: null };
+    if (cmd === 'mergeStagedCommit') return { epoch: 3, members: ['alice'], state: null };
+    return base(cmd, args);
+  };
+  const r = record({
+    members: ['alice', 'bob'],
+    roles: { alice: 'admin', bob: 'member' },
+    chanMeta: {
+      general: { hid: 'log1', hkey: 'OLD-KEY' },
+      chatter: {}, // history off — nothing to rotate
+    },
+  });
+  c.servers.set('srv', r);
+
+  await c.removeMember('srv', 'bob');
+
+  const meta = r.chanMeta.general;
+  assert.notEqual(meta.hkey, 'OLD-KEY', 'the write key moved, so bob cannot read what comes next');
+  assert.deepEqual(meta.hkeys, ['OLD-KEY'], 'the superseded key is kept so members can still read the past');
+  assert.equal(r.chanMeta.chatter.hkey, undefined, 'a channel without history is untouched');
+  assert.ok(
+    c.db.messages.some((m) => m.system && m.text.includes('new history key for #general')),
+    'and the rotation is announced'
+  );
+  clearTimeout(c.backupTimer);
+});
+
+test('removing someone revokes the circle’s invite links instead of refreshing them', async () => {
+  const revoked = [];
+  const { c } = makeController({
+    relayHandler: (msg) => {
+      if (msg.t === 'revoke_invite') revoked.push(msg.invite);
+      if (msg.t === 'update_invite') throw new Error('a removed member’s link must not be refreshed');
+      return Promise.resolve({ seq: 2 });
+    },
+  });
+  const base = c.crypto;
+  c.crypto = async (cmd, args) => {
+    if (cmd === 'removeMember') return { commit: new Uint8Array([9]), epoch: 3, state: null };
+    if (cmd === 'mergeStagedCommit') return { epoch: 3, members: ['alice'], state: null };
+    return base(cmd, args);
+  };
+  const r = record({
+    members: ['alice', 'bob'],
+    roles: { alice: 'admin', bob: 'member' },
+    invites: [{ id: 'inv1', key: 'k1' }, { id: 'inv2', key: 'k2' }],
+  });
+  c.servers.set('srv', r);
+
+  await c.removeMember('srv', 'bob');
+
+  assert.deepEqual(revoked, ['inv1', 'inv2'], 'every parked link is killed');
+  assert.deepEqual(r.invites, [], 'and dropped locally');
+  assert.ok(
+    c.db.messages.some((m) => m.system && m.text.includes('2 invite links revoked')),
+    'the admin is told, since this also invalidates links for pending joiners'
+  );
+  clearTimeout(c.backupTimer);
+});
+
+// --- §1.2: the receive path persists in a crash-safe order ---------------
+// Ratchet → message → cursor meant a crash mid-sequence advanced the ratchet
+// past a message whose seq was never recorded; the replay then failed to
+// decrypt and was dropped silently. Cursor before ratchet inverts which side
+// a crash lands on, and a stale ratchet is recoverable where a lost message
+// is not.
+
+test('a received message is durable before the ratchet snapshot is', async () => {
+  const writes = [];
+  const { c } = makeController();
+  const baseDb = c.db;
+  c.db = {
+    ...baseDb,
+    msgAdd: async (m) => {
+      writes.push('message');
+      return baseDb.msgAdd(m);
+    },
+    serverPut: async (r) => {
+      writes.push('cursor');
+      return baseDb.serverPut(r);
+    },
+    kvPut: async (k, v) => {
+      writes.push(`kv:${k}`);
+      return baseDb.kvPut(k, v);
+    },
+  };
+  c.crypto = async (cmd) => {
+    if (cmd === 'receive') {
+      return {
+        event: { kind: 'message', sender: 'bob', text: 'hello', epoch: 1 },
+        state: new Uint8Array([1, 2, 3]),
+      };
+    }
+    return {};
+  };
+  c.servers.set('srv', record());
+
+  await c.onGroupMessage({ group: 'srv', seq: 7, epoch: 1, sender: 'bob', payload: 'AAAA' });
+
+  const ratchetAt = writes.indexOf('kv:mlsState');
+  const messageAt = writes.indexOf('message');
+  const cursorAt = writes.indexOf('cursor');
+  assert.ok(ratchetAt !== -1, 'the ratchet was persisted');
+  assert.ok(messageAt !== -1 && messageAt < ratchetAt, 'the message lands before the ratchet');
+  assert.ok(cursorAt !== -1 && cursorAt < ratchetAt, 'and so does the cursor');
+  clearTimeout(c.backupTimer);
+});
+
+test('a storage failure while applying a message is reported, not laundered as undecryptable', async () => {
+  // Both failures shared one catch, so a quota error read exactly like our
+  // own commit echoing back on catch-up — a case whose comment calls it
+  // expected. Storage problems were therefore invisible.
+  const { c, dispatched } = makeController();
+  const baseDb = c.db;
+  c.db = { ...baseDb, msgAdd: async () => { throw new Error('QuotaExceededError'); } };
+  c.crypto = async (cmd) =>
+    cmd === 'receive'
+      ? { event: { kind: 'message', sender: 'bob', text: 'hello', epoch: 1 }, state: null }
+      : {};
+  c.servers.set('srv', record());
+
+  await c.onGroupMessage({ group: 'srv', seq: 3, epoch: 1, sender: 'bob', payload: 'AAAA' });
+
+  assert.ok(
+    dispatched.some((a) => a.type === 'toast' && /could not be saved/.test(a.text)),
+    'the user is told the message could not be stored'
+  );
+  clearTimeout(c.backupTimer);
+});
+
+// --- iOS storage eviction ------------------------------------------------
+// persist() ran once during onboarding with its result discarded. Safari
+// does not implement it, so the optional chain silently no-opped, and
+// WebKit clears script-writable storage for a non-installed site after 7
+// days idle — taking the IndexedDB MLS state and the localStorage identity
+// mirror with it. Silent, total account loss.
+
+test('a browser that refuses persistent storage is reported, not ignored', async () => {
+  const { c, dispatched } = makeController();
+  // navigator is a getter-only global in Node, so stub via defineProperty.
+  const restore = stubNavigator({
+    storage: {},
+    userAgent: 'Mozilla/5.0 (iPhone) Version/17.0 Safari/605',
+  });
+
+  const ok = await c.requestPersistentStorage();
+
+  assert.equal(ok, false, 'a browser without the API is not durable');
+  const warned = dispatched.find((a) => a.type === 'storageAtRisk');
+  assert.ok(warned, 'the app is told storage is at risk');
+  assert.equal(warned.evicts, true, 'and that this browser actually evicts');
+  restore();
+  clearTimeout(c.backupTimer);
+});
+
+test('an already-persisted origin is not re-prompted', async () => {
+  const { c, dispatched } = makeController();
+  let persistCalls = 0;
+  const restore = stubNavigator({
+    storage: {
+      persisted: async () => true,
+      persist: async () => {
+        persistCalls += 1;
+        return true;
+      },
+    },
+    userAgent: 'Chrome',
+  });
+
+  const ok = await c.requestPersistentStorage();
+
+  assert.equal(ok, true);
+  assert.equal(persistCalls, 0, 'an existing grant is not asked for again');
+  assert.ok(!dispatched.some((a) => a.type === 'storageAtRisk'), 'and nothing is warned about');
+  restore();
+  clearTimeout(c.backupTimer);
+});
+
+/** Replace the getter-only `navigator` global for one test. */
+function stubNavigator(value) {
+  const had = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+  Object.defineProperty(globalThis, 'navigator', { value, configurable: true, writable: true });
+  return () => {
+    if (had) Object.defineProperty(globalThis, 'navigator', had);
+    else delete globalThis.navigator;
+  };
+}
+
+/* ============================================================ §2.3 gaps == */
+
+// senderIsAdmin's fail-OPEN path. Only the closed path was tested. The two
+// directions are deliberately different: an advisory envelope must survive
+// roles that have not synced yet, while a destructive one must not — and a
+// regression in either direction is invisible until someone loses a channel.
+
+test('an advisory envelope from an unknown sender is applied — fail open', async () => {
+  // A legitimate action racing role sync must not be dropped. The relay's
+  // ACL is advisory anyway; MLS is what actually gates membership.
+  const { c } = makeController({
+    relayHandler: (msg) =>
+      msg.t === 'members' ? Promise.resolve({ members: [] }) : Promise.resolve({ seq: 1 }),
+  });
+  const r = record({ roles: {} });
+  c.servers.set('srv', r);
+
+  assert.equal(await c.senderIsAdmin(r, 'stranger'), true, 'advisory: unknown role passes');
+  await c.onContent(r, 'stranger', JSON.stringify({ k: 'chan', ch: 'design' }));
+  assert.ok(r.channels.includes('design'), 'the channel was created');
+  clearTimeout(c.backupTimer);
+});
+
+test('a destructive envelope from an unknown sender is dropped — fail closed', async () => {
+  // This one reaches db.msgsDelete. Applying it from a sender whose role we
+  // cannot establish is a security downgrade, so it fails the other way.
+  const { c } = makeController({
+    relayHandler: (msg) =>
+      msg.t === 'members' ? Promise.resolve({ members: [] }) : Promise.resolve({ seq: 1 }),
+  });
+  const r = record({ channels: ['general', 'design'], roles: {} });
+  c.servers.set('srv', r);
+
+  assert.equal(await c.senderIsAdmin(r, 'stranger', { destructive: true }), false);
+  await c.onContent(r, 'stranger', JSON.stringify({ k: 'chan-del', ch: 'design' }));
+  assert.deepEqual(r.channels, ['general', 'design'], 'the channel survives');
+  clearTimeout(c.backupTimer);
+});
+
+test('an established non-admin is refused in BOTH directions', async () => {
+  // Once the role is known, "member" is authoritative — fail-open only ever
+  // applies to not-yet-known, never to known-and-not-admin.
+  const { c } = makeController({
+    relayHandler: (msg) =>
+      msg.t === 'members'
+        ? Promise.resolve({ members: [{ user: 'mallory', role: 'member' }] })
+        : Promise.resolve({ seq: 1 }),
+  });
+  const r = record({ roles: {} });
+  c.servers.set('srv', r);
+
+  assert.equal(await c.senderIsAdmin(r, 'mallory'), false, 'advisory');
+  assert.equal(await c.senderIsAdmin(r, 'mallory', { destructive: true }), false, 'destructive');
+  clearTimeout(c.backupTimer);
+});
+
+test('a cached admin is trusted without a round trip', async () => {
+  // Otherwise every admin envelope costs an ACL fetch.
+  let acl = 0;
+  const { c } = makeController({
+    relayHandler: (msg) => {
+      if (msg.t === 'members') acl += 1;
+      return Promise.resolve({ members: [] });
+    },
+  });
+  const r = record({ roles: { bob: 'admin' } });
+  c.servers.set('srv', r);
+  assert.equal(await c.senderIsAdmin(r, 'bob', { destructive: true }), true);
+  assert.equal(acl, 0, 'no ACL refresh was needed');
+  clearTimeout(c.backupTimer);
+});
+
+test('an ACL fetch that fails leaves the advisory gate open and the destructive one shut', async () => {
+  // Offline is exactly when roles cannot be established, so this is the
+  // realistic version of "unknown" rather than an exotic one.
+  const { c } = makeController({
+    relayHandler: (msg) =>
+      msg.t === 'members' ? Promise.reject(new Error('offline')) : Promise.resolve({ seq: 1 }),
+  });
+  const r = record({ roles: {} });
+  c.servers.set('srv', r);
+  assert.equal(await c.senderIsAdmin(r, 'ghost'), true);
+  assert.equal(await c.senderIsAdmin(r, 'ghost', { destructive: true }), false);
+  clearTimeout(c.backupTimer);
+});
+
+/* --- channelDigest: the home base's unread counts ------------------------ */
+
+test('channelDigest counts only what arrived after this device last looked', async () => {
+  const { c } = makeController();
+  const r = record({ channels: ['general', 'design'], seen: { general: 150 }, joinedAt: 100 });
+  c.servers.set('srv', r);
+  for (const m of [
+    { server: 'srv', channel: 'general', sender: 'bob', ts: 120, text: 'before' },
+    { server: 'srv', channel: 'general', sender: 'bob', ts: 200, text: 'after' },
+    { server: 'srv', channel: 'general', sender: 'alice', ts: 300, text: 'mine' },
+    { server: 'srv', channel: 'design', sender: 'bob', ts: 110, text: 'since joining' },
+  ]) {
+    await c.db.msgAdd(m);
+  }
+
+  const digest = await c.channelDigest('srv');
+  const general = digest.find((d) => d.channel === 'general');
+  assert.equal(general.unread, 1, 'only the one past the seen marker, and not my own');
+  assert.equal(general.last.text, 'mine', 'the preview is the newest line regardless');
+
+  const design = digest.find((d) => d.channel === 'design');
+  assert.equal(design.unread, 1, 'a never-opened room counts from joinedAt');
+});
+
+test('channelDigest reports an empty room rather than omitting it', async () => {
+  // The home base lists every room; a missing entry would render as a gap.
+  const { c } = makeController();
+  const r = record({ channels: ['general'] });
+  c.servers.set('srv', r);
+  const [only] = await c.channelDigest('srv');
+  assert.equal(only.channel, 'general');
+  assert.equal(only.unread, 0);
+  assert.equal(only.last, null);
+});
+
+test('channelDigest ignores system chips', async () => {
+  // "carol joined" must not light up the home base.
+  const { c } = makeController();
+  const r = record({ seen: {}, joinedAt: 0 });
+  c.servers.set('srv', r);
+  await c.db.msgAdd({ server: 'srv', channel: 'general', sender: 'x', ts: 500, text: 'joined', system: true });
+  const [general] = await c.channelDigest('srv');
+  assert.equal(general.unread, 0);
+  assert.equal(general.last, null, 'and it is not the preview either');
+});
+
+test('channelDigest on an unknown circle is empty, not an exception', async () => {
+  const { c } = makeController();
+  assert.deepEqual(await c.channelDigest('gone'), []);
+});
+
+/* --- storage failure: a full or evicted quota ---------------------------- */
+
+test('a storage quota failure surfaces instead of silently dropping the message', async () => {
+  // The exact failure iOS produces under eviction pressure. A message that
+  // vanishes with no error is the worst outcome; the receive path must say so.
+  const { c, dispatched } = makeController();
+  const r = record();
+  c.servers.set('srv', r);
+  c.db.msgAdd = async () => {
+    const e = new Error('The quota has been exceeded.');
+    e.name = 'QuotaExceededError';
+    throw e;
+  };
+
+  await assert.rejects(
+    () => c.onContent(r, 'bob', JSON.stringify({ k: 'chat', ch: 'general', text: 'hi' })),
+    /quota/i,
+    'the failure propagates to the caller that logs and toasts it'
+  );
+  assert.equal(
+    dispatched.some((d) => d.type === 'newMessage'),
+    false,
+    'and nothing is announced to the UI as stored'
+  );
+  clearTimeout(c.backupTimer);
+});
+
+test('a storage failure on one envelope does not corrupt the record', async () => {
+  // The record is written by the caller after onContent; a throw must leave
+  // it in a state the next attempt can still work from.
+  const { c } = makeController();
+  const r = record();
+  c.servers.set('srv', r);
+  c.db.msgAdd = async () => {
+    throw new Error('disk is full');
+  };
+  await assert.rejects(() =>
+    c.onContent(r, 'bob', JSON.stringify({ k: 'chat', ch: 'design', text: 'hi' }))
+  );
+  assert.ok(r.channels.includes('design'), 'the channel the message named still exists');
+  clearTimeout(c.backupTimer);
+});
+
+// --- fork detection (plan §1.1, part 4) ----------------------------------
+// §1.1 stopped new forks with the relay-side epoch CAS. Circles that forked
+// BEFORE it landed stayed broken with, in the plan's words, "no detection
+// and no recovery path" — the only trace was a console warning whose own
+// comment calls it expected. These cover the wiring; fork.test.mjs covers
+// the rule.
+
+/** Drive `n` undecryptable blobs from `sender` into a live circle. */
+async function blobs(c, n, { sender = 'bob', epoch = 1, from = 10 } = {}) {
+  c.crypto = async (cmd) => {
+    if (cmd === 'receive') throw new Error('no matching key');
+    return {};
+  };
+  for (let i = 0; i < n; i++) {
+    await c.onGroupMessage({ group: 'srv', seq: from + i, epoch, sender, payload: 'AAAA' });
+  }
+}
+
+test('a circle whose every sender is unreadable is reported as forked', async () => {
+  const { c, dispatched } = makeController();
+  c.servers.set('srv', record({ name: 'Book Club' }));
+
+  await blobs(c, FORK_THRESHOLD);
+
+  const toast = dispatched.find((a) => a.type === 'toast' && /out of sync/.test(a.text ?? ''));
+  assert.ok(toast, 'the user is told, rather than watching the circle go quiet');
+  assert.match(toast.text, /Book Club/);
+  assert.match(toast.text, /invite link/, 'and told the one thing that actually recovers it');
+  assert.equal(c.servers.get('srv').outOfSync, true, 'the record carries it for the UI');
+  clearTimeout(c.backupTimer);
+});
+
+test('our own replayed commits never trip the detector', async () => {
+  // The false positive that matters: catch-up hands every device back its
+  // own commits, so counting these would flag every healthy circle in the
+  // app. Ten times the threshold, and still silent.
+  const { c, dispatched } = makeController();
+  c.servers.set('srv', record());
+
+  await blobs(c, FORK_THRESHOLD * 10, { sender: 'alice' });
+
+  assert.equal(
+    dispatched.filter((a) => a.type === 'toast').length,
+    0,
+    'no toast for the most common undecryptable blob there is'
+  );
+  assert.ok(!c.servers.get('srv').outOfSync);
+  clearTimeout(c.backupTimer);
+});
+
+test('blobs from an epoch we have not caught up to yet are not a fork', async () => {
+  const { c, dispatched } = makeController();
+  c.servers.set('srv', record({ epoch: 1 }));
+
+  await blobs(c, FORK_THRESHOLD * 3, { sender: 'bob', epoch: 9 });
+
+  assert.equal(dispatched.filter((a) => a.type === 'toast').length, 0);
+  clearTimeout(c.backupTimer);
+});
+
+test('a restored read-only stub is not mistaken for a fork', async () => {
+  // It holds no MLS state, so nothing decrypts — by design, not by breakage.
+  const { c, dispatched } = makeController();
+  c.servers.set('srv', record({ restored: true }));
+
+  await blobs(c, FORK_THRESHOLD * 3);
+
+  assert.equal(dispatched.filter((a) => a.type === 'toast').length, 0);
+  clearTimeout(c.backupTimer);
+});
+
+test('one message getting through clears the suspicion it had built up', async () => {
+  const { c, dispatched } = makeController();
+  c.servers.set('srv', record());
+
+  await blobs(c, FORK_THRESHOLD - 1);
+  c.crypto = async (cmd) =>
+    cmd === 'receive'
+      ? { event: { kind: 'message', sender: 'bob', text: 'hi', epoch: 1 }, state: null }
+      : {};
+  await c.onGroupMessage({ group: 'srv', seq: 30, epoch: 1, sender: 'bob', payload: 'AAAA' });
+  await blobs(c, FORK_THRESHOLD - 1, { from: 40 });
+
+  assert.equal(dispatched.filter((a) => a.type === 'toast').length, 0, 'the counter restarted');
+  clearTimeout(c.backupTimer);
+});
+
+test('the fork notice is raised once, not on every blob from the other branch', async () => {
+  const { c, dispatched } = makeController();
+  c.servers.set('srv', record());
+
+  await blobs(c, FORK_THRESHOLD * 4);
+
+  assert.equal(
+    dispatched.filter((a) => a.type === 'toast').length,
+    1,
+    'repeating it on every message would be its own kind of broken'
+  );
+  clearTimeout(c.backupTimer);
+});
+
+test('leaving a circle clears its fork evidence so a rejoin starts clean', async () => {
+  // Otherwise the old branch's tally would immediately re-condemn the new
+  // membership, and the recovery the notice recommends would look like it
+  // had failed.
+  const { c } = makeController();
+  c.servers.set('srv', record());
+  await blobs(c, FORK_THRESHOLD);
+  assert.equal(c.forks.verdict('srv').outOfSync, true);
+
+  await c.forgetServerLocal('srv');
+
+  assert.deepEqual(c.forks.verdict('srv'), { stranded: [], outOfSync: false });
+  assert.equal(c.forkWarned.size, 0, 'and it may warn again if it recurs');
+  clearTimeout(c.backupTimer);
 });

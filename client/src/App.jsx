@@ -29,6 +29,16 @@ import BootLoader from './components/BootLoader.jsx';
 import { Key, ShieldCheck, LinkGlyph, Sun, QuorumGlyph, Gear, LogOut } from './components/icons.jsx';
 import { markPlayed, bumpPlayCount } from './lib/games.js';
 import { withViewTransition } from './lib/viewTransition.js';
+import { hasTurn, loadRelayOnly, saveRelayOnly } from './lib/voice.js';
+import { deviceLabel } from './lib/account.js';
+import {
+  readPref,
+  writePref,
+  resolveTheme,
+  prefersLight,
+  watchSystem,
+  THEME_COLOR,
+} from './lib/theme.js';
 
 /** Content identity of a message for merging a load snapshot with live
     arrivals — same idea as history.js's fingerprint, plus the system flag. */
@@ -60,6 +70,12 @@ function reducer(state, action) {
   switch (action.type) {
     case 'phase':
       return { ...state, phase: action.phase };
+    // Terminal startup failure. Distinct from a toast because there is no
+    // app behind it to return to — the alternative was an endless splash.
+    case 'fatal':
+      return { ...state, phase: 'fatal', fatal: action.text };
+    case 'storageAtRisk':
+      return { ...state, storageAtRisk: true, storageEvicts: action.evicts };
     case 'booted': {
       // Land on the first circle's overview page (channel: null), not in a
       // room — the landing zone is the front door.
@@ -153,16 +169,6 @@ function reducer(state, action) {
   }
 }
 
-// Theme is a device preference, not account state — plain localStorage.
-// ('vellum' is accepted for continuity with the previous theme naming.)
-function loadTheme() {
-  try {
-    const v = localStorage.getItem('quorum-theme');
-    return v === 'paper' || v === 'vellum' ? 'paper' : 'carbon';
-  } catch {
-    return 'carbon';
-  }
-}
 
 export default function App() {
   const [state, rawDispatch] = useReducer(reducer, initial);
@@ -181,7 +187,21 @@ export default function App() {
     }
     rawDispatch(action);
   }, []);
-  const [theme, setTheme] = useState(loadTheme);
+  // Theme is a device preference, not account state — plain localStorage.
+  // `themePref` is 'paper' | 'carbon' | null, where null means "follow the
+  // system"; `theme` is what is actually on screen. Everything downstream
+  // sees only the resolved value and stays a two-way toggle.
+  const [themePref, setThemePref] = useState(readPref);
+  const [systemLight, setSystemLight] = useState(prefersLight);
+  useEffect(() => watchSystem(setSystemLight), []);
+  const theme = resolveTheme(themePref, systemLight);
+  // Pin whichever theme is *not* showing, regardless of how the current one
+  // was arrived at — a toggle that did nothing on its first press because the
+  // stored preference already matched the system would read as broken.
+  const toggleTheme = useCallback(
+    () => setThemePref(resolveTheme(themePref, systemLight) === 'paper' ? 'carbon' : 'paper'),
+    [themePref, systemLight],
+  );
   const [paletteOpen, setPaletteOpen] = useState(false);
   // Narrow-screen drawers: the sidebar and roster slide over the messages
   // pane instead of flanking it. null | 'nav' | 'roster'; CSS ignores this
@@ -203,17 +223,21 @@ export default function App() {
   const [notifPrompt, setNotifPrompt] = useState(false);
 
   useEffect(() => {
-    document.documentElement.dataset.theme = theme;
+    // Leaving the attribute *off* is what hands first paint to the CSS
+    // prefers-color-scheme rule, so "follow the system" must clear it rather
+    // than write the resolved value.
+    if (themePref) document.documentElement.dataset.theme = themePref;
+    else delete document.documentElement.dataset.theme;
+    writePref(themePref);
+  }, [themePref]);
+
+  useEffect(() => {
     // Keep the browser/OS chrome (Android address bar, iOS standalone
-    // status bar) in step with the app surface.
+    // status bar) in step with the app surface. This one tracks the resolved
+    // theme, so it follows the system flipping under us.
     document
       .querySelector('meta[name="theme-color"]')
-      ?.setAttribute('content', theme === 'paper' ? '#e9e6e0' : '#09090a');
-    try {
-      localStorage.setItem('quorum-theme', theme);
-    } catch {
-      // private mode etc. — the toggle still works for this session
-    }
+      ?.setAttribute('content', THEME_COLOR[theme]);
   }, [theme]);
 
   useEffect(() => {
@@ -221,7 +245,28 @@ export default function App() {
     // Default: same origin (single-container mode, relay serves this page).
     // Dev setups (vite on another port) pass ?relay=ws://localhost:9601/ws.
     const wsProto = location.protocol === 'https:' ? 'wss' : 'ws';
-    const relayUrl = params.get('relay') ?? `${wsProto}://${location.host}/ws`;
+    const sameOrigin = `${wsProto}://${location.host}/ws`;
+    // ?relay= used to be honored verbatim, and invite links propagated it —
+    // so a crafted link could point a victim's client at a relay of the
+    // attacker's choosing, which then proxies to the real one. Only accept
+    // an override that stays on this origin, or a loopback address for the
+    // documented `npm run dev` split (vite on another port).
+    const requested = params.get('relay');
+    const allowed =
+      requested &&
+      (() => {
+        try {
+          const u = new URL(requested);
+          if (u.host === location.host) return true;
+          return ['localhost', '127.0.0.1', '[::1]'].includes(u.hostname);
+        } catch {
+          return false;
+        }
+      })();
+    if (requested && !allowed) {
+      console.warn(`ignoring ?relay=${requested}: only this origin or localhost is allowed`);
+    }
+    const relayUrl = allowed ? requested : sameOrigin;
     const controller = new Controller({
       db: null,
       crypto: createCrypto(),
@@ -231,10 +276,20 @@ export default function App() {
     const invite = parseInviteUrl(location);
     if (invite) controller.setPendingInvite(invite);
     controllerRef.current = controller;
-    openDb().then((db) => {
-      controller.db = db;
-      controller.boot().catch((e) => dispatch({ type: 'toast', text: e.message }));
-    });
+    openDb()
+      .then((db) => {
+        controller.db = db;
+        controller.boot().catch((e) => dispatch({ type: 'toast', text: e.message }));
+      })
+      // Private browsing and locked-down profiles reject openDb outright.
+      // This had no catch, so the rejection went unhandled and the app sat
+      // on the boot splash forever with nothing on screen to explain it.
+      .catch((e) =>
+        dispatch({
+          type: 'fatal',
+          text: `this browser will not let quorum store data (${e.message}). Private browsing usually causes this — try a normal window.`,
+        })
+      );
   }, []);
 
   // Sending side of device-linking: a signed-in device opened with a link URL
@@ -347,6 +402,39 @@ export default function App() {
       alive = false;
     };
   }, [server, channel, state.messagesRev, state.messages]);
+
+  // Device preference, like the theme: whether to route call media through
+  // TURN so peers never see this device's address.
+  const [relayOnly, setRelayOnly] = useState(loadRelayOnly);
+
+  // Must be stable: the palette re-runs its scan whenever this identity
+  // changes, so an inline arrow would rescan on every keystroke it causes.
+  const searchMessages = useCallback(
+    (q) => controllerRef.current?.searchMessages(q) ?? { hits: [], truncated: false },
+    [],
+  );
+
+  // Also must be stable: the security panel loads the device list in an
+  // effect keyed on this, so an inline arrow would refetch on every render.
+  const listDevices = useCallback(
+    () => controllerRef.current?.listDevices() ?? Promise.resolve([]),
+    [],
+  );
+
+  // Cross-circle activity for the rail badges. Same seen markers as the
+  // per-channel pills, rolled up per circle — without it nothing on screen
+  // says a circle you are not looking at has moved.
+  const [circleUnreads, setCircleUnreads] = useState({});
+  useEffect(() => {
+    let alive = true;
+    controllerRef.current
+      ?.circleUnreads()
+      .then((u) => alive && setCircleUnreads(u))
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [server, channel, state.messagesRev, state.messages, state.servers]);
 
   // Auto-dismiss toasts.
   useEffect(() => {
@@ -480,6 +568,14 @@ export default function App() {
     );
   }
 
+  if (state.phase === 'fatal') {
+    return (
+      <div className="boot-fatal">
+        <h1>quorum can't start</h1>
+        <p>{state.fatal}</p>
+      </div>
+    );
+  }
   if (state.phase === 'loading') {
     return <BootLoader />;
   }
@@ -536,7 +632,7 @@ export default function App() {
       label: theme === 'paper' ? 'switch to carbon (dark)' : 'switch to paper (light)',
       hint: 'action',
       glyph: <Sun />,
-      run: () => setTheme((t) => (t === 'paper' ? 'carbon' : 'paper')),
+      run: toggleTheme,
     },
   ];
 
@@ -549,7 +645,8 @@ export default function App() {
         canInvite={canManage}
         onInvite={openInvite}
         onPalette={() => setPaletteOpen(true)}
-        onTheme={() => setTheme((t) => (t === 'paper' ? 'carbon' : 'paper'))}
+        onTheme={toggleTheme}
+        drawer={drawer}
         onMenu={() => setDrawer((d) => (d === 'nav' ? null : 'nav'))}
         onRoster={() => setDrawer((d) => (d === 'roster' ? null : 'roster'))}
       />
@@ -565,6 +662,19 @@ export default function App() {
           </button>
         </div>
       )}
+      {state.storageAtRisk && state.storageEvicts && !unsecured && (
+        // Only shown where it is a real countdown (WebKit, not installed)
+        // and only once the account is already secured — an unsecured
+        // account has a louder banner of its own, and stacking two nags is
+        // how people learn to dismiss both.
+        <div className="secure-banner" data-testid="storage-banner">
+          <Key size={14} />
+          <span>
+            this browser may delete quorum's data after 7 days without use —{' '}
+            <strong>add it to your home screen</strong> to keep your account and messages
+          </span>
+        </div>
+      )}
       <div className="app">
         {drawer && (
           <div
@@ -573,10 +683,11 @@ export default function App() {
             onClick={() => setDrawer(null)}
           />
         )}
-        <nav className="sidebar">
+        <nav className="sidebar" id="nav-drawer" aria-label="circles and rooms">
           <Rail
             servers={state.servers}
             active={server}
+            unreads={circleUnreads}
             onSelect={(id) =>
               withViewTransition(() => {
                 // Picking a circle lands on its game hub, not a room.
@@ -910,9 +1021,20 @@ export default function App() {
           <Settings
             me={state.me}
             theme={theme}
-            onTheme={() => setTheme((t) => (t === 'paper' ? 'carbon' : 'paper'))}
+            themePref={themePref}
+            onTheme={toggleTheme}
+            onSystemTheme={() => setThemePref(null)}
             onEnableNotifications={() => controllerRef.current.enableNotifications()}
             voice={controllerRef.current?.voice}
+            relayOnly={relayOnly}
+            turnAvailable={hasTurn(controllerRef.current?.voice?.iceServers)}
+            onRelayOnly={(on) => {
+              setRelayOnly(on);
+              saveRelayOnly(on);
+              // Existing peer connections keep the policy they were built
+              // with; this takes effect on the next call, which the panel says.
+              if (controllerRef.current?.voice) controllerRef.current.voice.relayOnly = on;
+            }}
             secured={!unsecured}
             onShowIdentity={openIdentity}
             onSecure={openSecure}
@@ -938,9 +1060,16 @@ export default function App() {
               await controllerRef.current.sendIdentityToDevice(blobId, pub);
             }}
             onEnrollDevice={async () => {
-              await controllerRef.current.enrollDevicePasskey();
+              await controllerRef.current.enrollDevicePasskey(
+                deviceLabel(navigator.userAgent)
+              );
               dispatch({ type: 'modal', modal: null });
               dispatch({ type: 'toast', text: 'this device can now sign in with one tap' });
+            }}
+            onListDevices={listDevices}
+            onRevokeDevice={async (credId) => {
+              await controllerRef.current.revokeDevice(credId);
+              dispatch({ type: 'toast', text: 'device revoked — it can no longer sign in' });
             }}
             onVerify={async (srv, peer) => {
               await controllerRef.current.markVerified(srv, peer);
@@ -985,6 +1114,7 @@ export default function App() {
             servers={state.servers}
             active={server}
             actions={paletteActions}
+            onSearch={searchMessages}
             onNavigate={(srv, ch) => {
               dispatch({ type: 'select', server: srv, channel: ch });
               setStage(false);

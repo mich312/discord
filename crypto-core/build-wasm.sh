@@ -14,6 +14,13 @@ if [ "$version" -ge 116 ]; then
     wasm-opt -Os -o pkg/crypto_core_bg.wasm.opt pkg/crypto_core_bg.wasm
     mv pkg/crypto_core_bg.wasm.opt pkg/crypto_core_bg.wasm
     echo "wasm-opt: $(du -h pkg/crypto_core_bg.wasm | cut -f1)"
+elif [ "${WASM_REQUIRE_OPT:-}" = "1" ]; then
+    # CI sets this. Silently shipping an unoptimized artifact meant a release
+    # could differ from every local build for a reason nobody would look for —
+    # and it makes the published hashes describe a binary nobody intended.
+    echo "ERROR: wasm-opt >= 116 is required (found ${version}); install binaryen" >&2
+    exit 1
 else
     echo "wasm-opt >= 116 not found; shipping unoptimized wasm ($(du -h pkg/crypto_core_bg.wasm | cut -f1))" >&2
+    echo "  (set WASM_REQUIRE_OPT=1 to make this a hard failure, as CI does)" >&2
 fi

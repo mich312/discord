@@ -16,7 +16,16 @@ export const b64 = {
   dec: (s) => Uint8Array.from(atob(s), (c) => c.charCodeAt(0)),
 };
 
-const AUTH_CONTEXT = 'relay-auth-v1';
+const AUTH_CONTEXT = 'relay-auth-v2';
+
+/** How long a single request may go unanswered. Generous: the slowest real
+    call is an invite redeem behind a cold database, not a user gesture. */
+const REQUEST_TIMEOUT_MS = 20000;
+
+/** Wire protocol version, sent in the Hello. The relay does not enforce it
+    yet; it exists so a future skew between a cached client and an upgraded
+    relay is diagnosable instead of presenting as arbitrary failures. */
+export const PROTOCOL_VERSION = 1;
 
 export class Relay {
   /**
@@ -48,7 +57,15 @@ export class Relay {
       // First-time registration on an invite-only relay must present a
       // usable invite id; pinned users are admitted regardless.
       const invite = this.opts.getInvite?.() ?? null;
-      ws.send(JSON.stringify({ t: 'hello', user: this.opts.name, pubkey: b64.enc(pubkey), invite }));
+      ws.send(
+        JSON.stringify({
+          t: 'hello',
+          user: this.opts.name,
+          pubkey: b64.enc(pubkey),
+          invite,
+          v: PROTOCOL_VERSION,
+        })
+      );
     };
 
     ws.onmessage = async ({ data }) => {
@@ -63,8 +80,15 @@ export class Relay {
       }
       if (msg.t === 'challenge') {
         const nonce = b64.dec(msg.nonce);
-        const context = new TextEncoder().encode(AUTH_CONTEXT);
-        const signed = new Uint8Array([...context, ...nonce]);
+        const enc = new TextEncoder();
+        const context = enc.encode(AUTH_CONTEXT);
+        // The handle is length-prefixed into the signed bytes so a
+        // signature proves *who* it authenticates, not merely that the key
+        // holder was live. Must match relay/src/server.rs.
+        const name = enc.encode(this.opts.name);
+        const len = new Uint8Array(4);
+        new DataView(len.buffer).setUint32(0, name.length, false);
+        const signed = new Uint8Array([...context, ...nonce, ...len, ...name]);
         const sig = await this.opts.sign(signed);
         ws.send(JSON.stringify({ t: 'auth', sig: b64.enc(sig) }));
         return;
@@ -130,7 +154,26 @@ export class Relay {
     return new Promise((resolve, reject) => {
       if (!this.ready) return reject(new Error('offline'));
       const rid = this.nextRid++;
-      this.pending.set(rid, { resolve, reject });
+      // A pending request resolved only on a matching rid or a socket close.
+      // A relay that stays connected — answering pings — but never answers
+      // one particular rid left its caller awaiting forever, and callers
+      // like addMember sit in the middle of a multi-step flow. Time out so
+      // the failure is reportable and retryable.
+      const timer = setTimeout(() => {
+        if (this.pending.delete(rid)) {
+          reject(new Error(`the relay did not answer "${msg.t}" in time`));
+        }
+      }, REQUEST_TIMEOUT_MS);
+      this.pending.set(rid, {
+        resolve: (v) => {
+          clearTimeout(timer);
+          resolve(v);
+        },
+        reject: (e) => {
+          clearTimeout(timer);
+          reject(e);
+        },
+      });
       this.ws.send(JSON.stringify({ ...msg, rid }));
     });
   }
