@@ -253,3 +253,33 @@ async fn backups_are_per_user_and_replace() {
     assert_eq!(s.get_backup("alice").await.unwrap(), Some(b"blob-2".to_vec()));
     assert_eq!(s.get_backup("bob").await.unwrap(), Some(b"bob-blob".to_vec()));
 }
+
+/// Concurrent commits must serialize: the log accepts exactly one commit per
+/// epoch, so the loser is told to retry instead of both sides forking.
+#[tokio::test]
+async fn commits_compare_and_swap_the_epoch() {
+    let s = store();
+    s.create_group("g", "alice").await.unwrap();
+
+    // Ordinary messages are not epoch-checked at all.
+    s.append_message("g", 0, "alice", b"hello".to_vec(), false).await.unwrap();
+
+    // Two admins both commit against epoch 0, both claiming epoch 1.
+    s.append_message("g", 1, "alice", b"commit-a".to_vec(), true).await.unwrap();
+    let loser = s.append_message("g", 1, "bob", b"commit-b".to_vec(), true).await;
+    assert!(
+        matches!(loser, Err(StoreError::EpochConflict)),
+        "the second commit for an epoch must be refused, got {loser:?}"
+    );
+
+    // The winner advanced the group, so the next epoch is now accepted.
+    s.append_message("g", 2, "bob", b"commit-c".to_vec(), true).await.unwrap();
+
+    // A commit that skips an epoch is refused too.
+    let skipped = s.append_message("g", 9, "alice", b"commit-d".to_vec(), true).await;
+    assert!(matches!(skipped, Err(StoreError::EpochConflict)), "got {skipped:?}");
+
+    // The refused commits left no trace in the log.
+    let log = s.messages_after("g", 0).await.unwrap();
+    assert_eq!(log.len(), 3, "only the accepted appends are in the log");
+}

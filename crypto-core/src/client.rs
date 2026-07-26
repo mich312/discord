@@ -346,7 +346,7 @@ impl ChatClient {
         let (commit, welcome, _group_info) = group
             .add_members(&self.provider, &self.signer, &[key_package])
             .map_err(CoreError::mls)?;
-        group.merge_pending_commit(&self.provider).map_err(CoreError::mls)?;
+        // Staged, NOT merged: see `merge_staged_commit`.
         Ok(AddResult {
             commit: commit.tls_serialize_detached().map_err(CoreError::mls)?,
             welcome: welcome.tls_serialize_detached().map_err(CoreError::mls)?,
@@ -366,8 +366,40 @@ impl ChatClient {
         let (commit, _welcome, _group_info) = group
             .remove_members(&self.provider, &self.signer, &[target.index])
             .map_err(CoreError::mls)?;
-        group.merge_pending_commit(&self.provider).map_err(CoreError::mls)?;
+        // Staged, NOT merged: see `merge_staged_commit`.
         commit.tls_serialize_detached().map_err(CoreError::mls)
+    }
+
+    /// Merge the commit staged by `add_member`/`remove_member`, moving the
+    /// group to its next epoch.
+    ///
+    /// Commits used to be merged the instant they were created, before the
+    /// relay had accepted them. Two admins acting in the same second both
+    /// merged locally and both published, so each held a *different* epoch
+    /// N+1 and could never decrypt the other again — an unrecoverable fork
+    /// with no detection. Staging makes the relay's ordered log the
+    /// serializer: exactly one commit per epoch is accepted, and only the
+    /// winner merges. The loser calls `discard_staged_commit`, processes the
+    /// winning commit like any other member, and retries.
+    pub fn merge_staged_commit(&mut self, id: &str) -> Result<u64, CoreError> {
+        let group = self
+            .groups
+            .get_mut(id)
+            .ok_or_else(|| CoreError::UnknownGroup(id.to_string()))?;
+        group.merge_pending_commit(&self.provider).map_err(CoreError::mls)?;
+        Ok(group.epoch().as_u64())
+    }
+
+    /// Drop a staged commit the relay refused. The group stays exactly where
+    /// it was, so the commit that won the epoch can be processed normally.
+    pub fn discard_staged_commit(&mut self, id: &str) -> Result<(), CoreError> {
+        let group = self
+            .groups
+            .get_mut(id)
+            .ok_or_else(|| CoreError::UnknownGroup(id.to_string()))?;
+        group
+            .clear_pending_commit(self.provider.storage())
+            .map_err(|e| CoreError::Mls(format!("{e:?}")))
     }
 
     /// Join a group from a serialized Welcome message. Returns the group id.

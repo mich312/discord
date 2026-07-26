@@ -657,7 +657,7 @@ async fn handle_request(
             None
         }
 
-        ClientMsg::Send { rid, group, epoch, payload } => {
+        ClientMsg::Send { rid, group, epoch, payload, commit } => {
             if let Err(e) = require_member(app, &group, user).await {
                 return err(rid, e);
             }
@@ -669,7 +669,10 @@ async fn handle_request(
             // order for every subscriber.
             let seq = {
                 let mut hub = app.hub.lock().await;
-                let seq = match app.store.append_message(&group, epoch, user, payload.clone()).await
+                let seq = match app
+                    .store
+                    .append_message(&group, epoch, user, payload.clone(), commit)
+                    .await
                 {
                     Ok(s) => s,
                     Err(e) => return err(rid, e),

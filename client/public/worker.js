@@ -44,13 +44,15 @@ const commands = {
     client.createGroup(group);
     return { epoch: Number(client.epoch(group)), state: snapshot() };
   },
+  // add/removeMember STAGE a commit — they no longer advance the epoch.
+  // `epoch` is the epoch this commit will produce once the relay accepts
+  // it into the log; members/roster only move on mergeStagedCommit.
   addMember({ group, keyPackage, expectIdentity, expectKey }) {
     const r = client.addMember(group, keyPackage, expectIdentity, expectKey);
     return {
       commit: r.commit,
       welcome: r.welcome,
-      epoch: Number(client.epoch(group)),
-      members: client.members(group),
+      epoch: Number(client.epoch(group)) + 1,
       state: snapshot(),
     };
   },
@@ -58,6 +60,20 @@ const commands = {
     const commit = client.removeMember(group, name);
     return {
       commit,
+      epoch: Number(client.epoch(group)) + 1,
+      state: snapshot(),
+    };
+  },
+  /** The relay accepted our staged commit: adopt it. */
+  mergeStagedCommit({ group }) {
+    const epoch = Number(client.mergeStagedCommit(group));
+    return { epoch, members: client.members(group), state: snapshot() };
+  },
+  /** The relay refused it (someone else won this epoch): drop it and stay
+      put, so the winning commit can be processed like any other. */
+  discardStagedCommit({ group }) {
+    client.discardStagedCommit(group);
+    return {
       epoch: Number(client.epoch(group)),
       members: client.members(group),
       state: snapshot(),

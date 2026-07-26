@@ -133,6 +133,19 @@ impl Client {
         Ok(self.inner.remove_member(id, name)?)
     }
 
+    /// Merge a staged commit once the relay has accepted it. Returns the new
+    /// epoch. See `ChatClient::merge_staged_commit`.
+    #[wasm_bindgen(js_name = mergeStagedCommit)]
+    pub fn merge_staged_commit(&mut self, id: &str) -> Result<u64, JsError> {
+        Ok(self.inner.merge_staged_commit(id)?)
+    }
+
+    /// Drop a staged commit the relay refused.
+    #[wasm_bindgen(js_name = discardStagedCommit)]
+    pub fn discard_staged_commit(&mut self, id: &str) -> Result<(), JsError> {
+        Ok(self.inner.discard_staged_commit(id)?)
+    }
+
     /// Join from a Welcome; returns the joined group's id.
     #[wasm_bindgen(js_name = joinFromWelcome)]
     pub fn join_from_welcome(&mut self, welcome: &[u8]) -> Result<String, JsError> {

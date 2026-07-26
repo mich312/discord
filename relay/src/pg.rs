@@ -49,6 +49,10 @@ impl PgStore {
                 last_seq bigint NOT NULL DEFAULT 0,
                 created_at timestamptz NOT NULL DEFAULT now()
             );
+            -- The MLS epoch as the log has serialized it. Additive, so
+            -- existing deployments pick it up at 0 and the first commit
+            -- after upgrade sets it correctly.
+            ALTER TABLE groups ADD COLUMN IF NOT EXISTS epoch bigint NOT NULL DEFAULT 0;
             CREATE TABLE IF NOT EXISTS group_members (
                 group_id text NOT NULL REFERENCES groups(group_id),
                 user_id text NOT NULL,
@@ -642,16 +646,49 @@ impl Store for PgStore {
         epoch: u64,
         sender: &str,
         payload: Vec<u8>,
+        commit: bool,
     ) -> Result<u64, StoreError> {
         let mut tx = self.pool.begin().await.map_err(backend)?;
-        let row = sqlx::query(
-            "UPDATE groups SET last_seq = last_seq + 1 WHERE group_id = $1 RETURNING last_seq",
-        )
-        .bind(group)
-        .fetch_optional(&mut *tx)
-        .await
-        .map_err(backend)?
-        .ok_or(StoreError::NoSuchGroup)?;
+        // Commits compare-and-swap the epoch in the same transaction that
+        // allocates the seq, so two racing commits cannot both win.
+        let row = if commit {
+            let updated = sqlx::query(
+                "UPDATE groups SET last_seq = last_seq + 1, epoch = $2
+                 WHERE group_id = $1 AND epoch = $2 - 1
+                 RETURNING last_seq",
+            )
+            .bind(group)
+            .bind(epoch as i64)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(backend)?;
+            match updated {
+                Some(r) => r,
+                None => {
+                    // Either the group is gone or another commit took this
+                    // epoch first; tell them apart so the client can react.
+                    let exists = sqlx::query("SELECT 1 FROM groups WHERE group_id = $1")
+                        .bind(group)
+                        .fetch_optional(&mut *tx)
+                        .await
+                        .map_err(backend)?;
+                    return Err(if exists.is_some() {
+                        StoreError::EpochConflict
+                    } else {
+                        StoreError::NoSuchGroup
+                    });
+                }
+            }
+        } else {
+            sqlx::query(
+                "UPDATE groups SET last_seq = last_seq + 1 WHERE group_id = $1 RETURNING last_seq",
+            )
+            .bind(group)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(backend)?
+            .ok_or(StoreError::NoSuchGroup)?
+        };
         let seq: i64 = row.get("last_seq");
         sqlx::query(
             "INSERT INTO messages (group_id, seq, epoch, sender, payload)

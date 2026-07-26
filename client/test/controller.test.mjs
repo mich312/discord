@@ -215,10 +215,13 @@ test('removeMember re-keys the group, revokes the ACL, and drops the role', asyn
     },
   });
   const base = c.crypto;
-  c.crypto = async (cmd, args) =>
-    cmd === 'removeMember'
-      ? { commit: new Uint8Array([9]), epoch: 3, members: ['alice'], state: null }
-      : base(cmd, args);
+  // removeMember only STAGES the commit now; the roster moves on merge,
+  // which happens after the relay has accepted it into the log.
+  c.crypto = async (cmd, args) => {
+    if (cmd === 'removeMember') return { commit: new Uint8Array([9]), epoch: 3, state: null };
+    if (cmd === 'mergeStagedCommit') return { epoch: 3, members: ['alice'], state: null };
+    return base(cmd, args);
+  };
   const r = record({ members: ['alice', 'bob'], roles: { alice: 'admin', bob: 'member' } });
   c.servers.set('srv', r);
   await c.removeMember('srv', 'bob');

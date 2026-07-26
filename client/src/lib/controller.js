@@ -1692,19 +1692,15 @@ export class Controller {
         `the relay did not provide an identity key for ${user}; refusing to add them unverified`
       );
     }
-    const { commit, welcome, epoch, members, state } = await this.crypto('addMember', {
+    const { commit, welcome, epoch, state } = await this.crypto('addMember', {
       group: serverId,
       keyPackage: b64.dec(reply.payload),
       expectIdentity: user,
       expectKey: b64.dec(reply.pubkey),
     });
     await this.persistState(state);
-    const sent = await this.relay.request({
-      t: 'send',
-      group: serverId,
-      epoch,
-      payload: b64.enc(commit),
-    });
+    const sent = await this.publishCommit(record, epoch, commit);
+    const { members } = await this.crypto('mergeStagedCommit', { group: serverId });
     record.lastSeq = Math.max(record.lastSeq, sent.seq);
     await this.relay.request({ t: 'allow', group: serverId, user });
     await this.relay.request({
@@ -1741,23 +1737,64 @@ export class Controller {
     this.scheduleBackup();
   }
 
+  /** Publish a staged commit and let the relay's ordered log decide whether
+      it wins its epoch.
+
+      Commits used to be merged locally the moment they were built, before
+      the relay had seen them. Two admins acting in the same second each
+      merged their own commit, so each held a different epoch N+1 and could
+      never decrypt the other again — the group forked permanently, silently,
+      with the failures swallowed as "undecryptable blob".
+
+      Now the commit is staged; the relay compare-and-swaps on the epoch and
+      accepts exactly one. On acceptance the caller merges. On `EpochConflict`
+      we drop the staged commit and stay where we were, so the commit that did
+      win arrives over the normal subscription and is processed like anyone
+      else's. The caller's operation is not applied — it is reported as
+      retryable, because re-deriving intent (which member, which role) against
+      the new epoch is the caller's business, not this function's. */
+  async publishCommit(record, epoch, commit) {
+    try {
+      return await this.relay.request({
+        t: 'send',
+        group: record.id,
+        epoch,
+        payload: b64.enc(commit),
+        commit: true,
+      });
+    } catch (e) {
+      const conflict = /epoch conflict/i.test(e.message ?? '');
+      try {
+        // Persist the rolled-back MLS state too, so a reload cannot
+        // resurrect the commit we just abandoned.
+        const { state } = await this.crypto('discardStagedCommit', { group: record.id });
+        await this.persistState(state);
+      } catch (inner) {
+        // Staging state is now ambiguous; say so rather than pretending.
+        console.error(`could not discard the staged commit for ${record.id}: ${inner.message}`);
+        throw e;
+      }
+      throw new Error(
+        conflict
+          ? 'someone else changed this circle at the same moment — nothing was applied, try again'
+          : e.message
+      );
+    }
+  }
+
   /** Remove a member: the MLS commit re-keys the group so they can read and
       send nothing further (the real boundary), and the relay drops them from
       the ACL so they stop being listed and served. UI-gated to admins. */
   async removeMember(serverId, user) {
     const record = this.servers.get(serverId);
     if (!record || user === this.me) return;
-    const { commit, epoch, members, state } = await this.crypto('removeMember', {
+    const { commit, epoch, state } = await this.crypto('removeMember', {
       group: serverId,
       name: user,
     });
     await this.persistState(state);
-    const sent = await this.relay.request({
-      t: 'send',
-      group: serverId,
-      epoch,
-      payload: b64.enc(commit),
-    });
+    const sent = await this.publishCommit(record, epoch, commit);
+    const { members } = await this.crypto('mergeStagedCommit', { group: serverId });
     record.lastSeq = Math.max(record.lastSeq, sent.seq);
     record.members = members;
     record.epoch = epoch;
@@ -2471,7 +2508,20 @@ export class Controller {
     await this.persistState(state);
     // Publishing our external commit is what makes the join real for
     // everyone else; its seq is where our log begins.
-    const sent = await this.relay.request({ t: 'send', group, epoch, payload: b64.enc(commit) });
+    // An external commit advances the epoch like any other, so it takes
+    // part in the same compare-and-swap. If it loses, the group changed
+    // under us mid-join: drop the half-built local group and let the user
+    // retry the link rather than leaving an unusable stub behind.
+    const sent = await this.relay
+      .request({ t: 'send', group, epoch, payload: b64.enc(commit), commit: true })
+      .catch(async (e) => {
+        await this.crypto('forgetGroup', { group }).catch(() => {});
+        throw new Error(
+          /epoch conflict/i.test(e.message ?? '')
+            ? 'the circle changed while you were joining — open the invite link again'
+            : e.message
+        );
+      });
     // Merge over a restored stub the same way onWelcome does.
     const prior = this.servers.get(group);
     const record = {

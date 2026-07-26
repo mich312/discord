@@ -53,7 +53,18 @@ pub enum ClientMsg {
     /// Append an opaque blob to the group log. `epoch` is client-declared
     /// metadata (the server cannot verify it) used for keying and later
     /// retention policies.
-    Send { rid: u64, group: String, epoch: u64, payload: String },
+    /// `commit` marks a payload that advances the MLS epoch. The relay
+    /// compare-and-swaps on it so exactly one commit per epoch is accepted;
+    /// see `Store::append_message`. It leaks nothing new — every Send
+    /// already carries `epoch`, so a commit was always the message that
+    /// bumped it.
+    Send {
+        rid: u64,
+        group: String,
+        epoch: u64,
+        payload: String,
+        #[serde(default)] commit: bool,
+    },
     /// Deliver a Welcome directly to `to` (stored if offline). `group` and
     /// `after` tell the joiner where their log begins.
     Welcome { rid: u64, to: String, group: String, after: u64, payload: String },

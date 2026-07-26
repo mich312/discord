@@ -15,6 +15,11 @@ pub enum StoreError {
     NoSuchGroup,
     #[error("invite not valid (missing, expired, or used up)")]
     InviteInvalid,
+    /// A commit arrived for an epoch the log has already moved past —
+    /// someone else's commit won this epoch. The sender must discard its
+    /// staged commit, process the winner, and retry.
+    #[error("epoch conflict: the group has already moved past this epoch")]
+    EpochConflict,
     #[error("storage error: {0}")]
     Backend(String),
 }
@@ -138,12 +143,19 @@ pub trait Store: Send + Sync {
     /// All groups as (group_id, created_by) pairs.
     async fn list_groups(&self) -> Result<Vec<(String, String)>, StoreError>;
     /// Append to the group's ordered log; returns the assigned seq (1-based).
+    /// Append to the group log. When `commit` is set the epoch is
+    /// compare-and-swapped: the append succeeds only if `epoch` is exactly
+    /// one past the group's current epoch, and it advances the group.
+    /// Concurrent commits therefore serialize — the loser gets
+    /// `EpochConflict` instead of silently forking the group.
+    /// Non-commit payloads are not epoch-checked.
     async fn append_message(
         &self,
         group: &str,
         epoch: u64,
         sender: &str,
         payload: Vec<u8>,
+        commit: bool,
     ) -> Result<u64, StoreError>;
     async fn messages_after(&self, group: &str, after: u64) -> Result<Vec<StoredMessage>, StoreError>;
     async fn store_welcome(&self, to: &str, welcome: StoredWelcome) -> Result<(), StoreError>;
@@ -233,6 +245,9 @@ struct GroupData {
     created_by: String,
     /// (user, role)
     members: Vec<(String, String)>,
+    /// The MLS epoch as the log has serialized it: bumped only by an
+    /// accepted commit, and the value the commit CAS is checked against.
+    epoch: u64,
     log: Vec<StoredMessage>,
     /// hid -> history log
     history: HashMap<String, HistoryLog>,
@@ -297,6 +312,7 @@ impl Store for MemoryStore {
             group.to_string(),
             GroupData {
                 created_by: creator.to_string(),
+                epoch: 0,
                 members: vec![(creator.to_string(), ROLE_ADMIN.to_string())],
                 log: Vec::new(),
                 history: HashMap::new(),
@@ -504,9 +520,16 @@ impl Store for MemoryStore {
         epoch: u64,
         sender: &str,
         payload: Vec<u8>,
+        commit: bool,
     ) -> Result<u64, StoreError> {
         let mut inner = self.inner.lock().unwrap();
         let data = inner.groups.get_mut(group).ok_or(StoreError::NoSuchGroup)?;
+        if commit {
+            if epoch != data.epoch + 1 {
+                return Err(StoreError::EpochConflict);
+            }
+            data.epoch = epoch;
+        }
         let seq = data.log.len() as u64 + 1;
         data.log.push(StoredMessage {
             group: group.to_string(),
