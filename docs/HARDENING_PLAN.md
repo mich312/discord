@@ -20,6 +20,29 @@ Open, in the order I would take them:
 1. §0.7 remainder — `password_login` is a replayable bearer credential
    (`account.rs:203-228`): no nonce, no timestamp. Capture one request body
    and replay it forever to retrieve `wrapped`.
+
+   **This one needs a decision, not just an implementation.** Adding a
+   server nonce does NOT fix it. The client sends `auth_key`; the server
+   stores only `verifier = SHA256(auth_key)`. A nonce-bound proof would
+   have to be something like `SHA256(auth_key ‖ nonce)`, which the server
+   cannot check without holding `auth_key` itself. So the options are:
+
+   a. **Store `auth_key` rather than its hash**, and verify a nonce-bound
+      proof. Kills replay. Costs little against a database attacker — they
+      already hold `wrapped`, and the vault's confidentiality rests on the
+      *wrap* half, which never reaches the server. But it does mean the
+      server holds a value that grants retrieval, which the current design
+      deliberately avoids.
+   b. **Adopt a real PAKE (OPAQUE or SRP).** The correct answer, and the
+      only one that gives mutual authentication and no server-side
+      retrieval secret. Substantially more work and a new dependency.
+   c. **Accept it and scope it honestly.** The exposure is retrieving
+      `wrapped`, which is still Argon2id-sealed under the wrap half, so a
+      replay yields ciphertext rather than an account. Rate limiting
+      already applies. Document it in the README's limitations list.
+
+   My recommendation is (c) now and (b) when the account system is next
+   touched — (a) trades a documented property for a modest gain.
 2. §1.2–§1.8 — atomic persistence, error taxonomy, infrastructure-failure
    handling, voice glare, store conformance, protocol versioning.
 3. Recovery for groups that forked *before* §1.1 landed.
