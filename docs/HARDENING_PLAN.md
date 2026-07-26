@@ -2,27 +2,25 @@
 
 Status: proposed. Written against `266d974`.
 
-**Progress.** Phase 0 is complete except §0.4 and part of §0.7; §1.1 and the
-§2.1 CI gate are also done. All of it is green in CI.
+**Progress.** Phase 0 is complete except part of §0.7. §1.1 and the §2.1 CI
+gate are also done. All of it is green in CI.
 
 Done: §0.1 KeyPackage identity binding · §0.2 key-bound verification ·
-§0.3 auth-challenge binding + `?relay=` allowlist · §0.5 blob upload
-tickets · §0.6 fail-closed authorization · §0.8 removal hardening ·
+§0.3 auth-challenge binding + `?relay=` allowlist · §0.4 invite gate
+consuming a use · §0.5 blob upload tickets · §0.6 fail-closed
+authorization · §0.8 removal hardening ·
 §1.1 staged commits + relay epoch CAS · §2.1 the CI gate.
 Also from §0.7: game-iframe origin isolation, CORS scoping, IPv6 /64
 rate-limit bucketing, and the X-Forwarded-For hop fix.
 
 Open, in the order I would take them:
-1. §0.4 — invite gate consuming a use. Needs a store change: the join flow
-   presents the invite twice (Hello, then RedeemInvite), so consuming
-   naively breaks `max_uses: 1`. Requires tracking (invite, user) pairs.
-2. §0.7 remainder — passkey-wrap cross-user takeover, `FetchKp` being
+1. §0.7 remainder — passkey-wrap cross-user takeover, `FetchKp` being
    unauthenticated and destructive, `Welcome` not constraining `to`,
    replayable `password_login`.
-3. §1.2–§1.8 — atomic persistence, error taxonomy, infrastructure-failure
+2. §1.2–§1.8 — atomic persistence, error taxonomy, infrastructure-failure
    handling, voice glare, store conformance, protocol versioning.
-4. Recovery for groups that forked *before* §1.1 landed.
-5. Phases 2.2–2.6, then 3–5.
+3. Recovery for groups that forked *before* §1.1 landed.
+4. Phases 2.2–2.6, then 3–5.
 
 Phases 6 and 7 are gated on decisions and on external parties
 respectively — see "The three decisions I cannot make for you".
@@ -115,7 +113,7 @@ person's key changed" state in `Members.jsx`, not a silent revert.
 **Done when:** removing and re-adding a member with a new key clears the badge,
 covered by a client test.
 
-### 0.3 Bind the auth challenge; stop honoring arbitrary relays
+### 0.3 Bind the auth challenge; stop honoring arbitrary relays — DONE
 
 The signed challenge is `b"relay-auth-v1" ‖ nonce` (`relay/src/server.rs:294-295`)
 — bound to no origin, no username, no channel. `client/src/App.jsx:224` accepts
@@ -129,7 +127,7 @@ signed payload. Use `verify_strict` (`server.rs:351`). Allowlist `?relay=` to
 same-origin unless an explicit dev flag is set. Add a `<meta>` CSP to
 `client/index.html` so the protection survives static hosting.
 
-### 0.4 Make the invite gate consume a use
+### 0.4 Make the invite gate consume a use — DONE
 
 `registration_allowed` (`server.rs:342`) calls `invite_usable`
 (`store.rs:577-583`), which only *reads*. Only `RedeemInvite` increments. One
@@ -140,7 +138,7 @@ never-redeemed `max_uses: 1` link registers unlimited accounts on an
 the handle. Add handle charset/length validation while you're there — the relay
 validates neither.
 
-### 0.5 Authenticate blob writes
+### 0.5 Authenticate blob writes — DONE
 
 `PUT /blobs/{id}` (`relay/src/lib.rs:55`) has no auth and sits outside both rate
 limiters, with a 25 MiB body cap and caller-chosen ids. Any stranger can fill
