@@ -200,6 +200,22 @@ loop retries, as that deepens the rate limit.
 
 ---
 
+## Upgrading
+
+```sh
+docker compose exec -T db pg_dump -U quorum quorum | gzip > pre-upgrade-$(date +%F).sql.gz
+git pull && docker compose up -d --build
+docker compose logs quorum | grep "schema up to date"
+```
+
+The relay records a schema version and **refuses to start against a database
+written by a newer build**, with a message saying so. That is deliberate: a
+rollback onto a newer schema is how data gets corrupted quietly. If you see
+that error, roll the relay forward rather than the database back.
+
+Migrations so far are additive, so an older binary still works against a
+newer database — but do not rely on that; take the dump first.
+
 ## Backups
 
 There is no automated backup. Set one up before you need it.
