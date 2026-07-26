@@ -70,8 +70,10 @@ one lock shared by every circle — and expired history is swept hourly
 rather than only when someone opens the room.
 
 **Phase 4 started:** connect/disconnect at INFO with the online count,
-subscribe at DEBUG. Still open: metrics, tracing, runbooks, config
-validation at boot.
+subscribe at DEBUG, `/healthz` that round-trips the store, and
+`deploy/RUNBOOK.md` covering the five realistic incidents. Still open:
+Prometheus metrics, OpenTelemetry tracing, and config validation at boot
+(WebAuthn misconfiguration still panics into a restart loop).
 
 **Phase 7 started:** `SECURITY.md` and `docs/THREAT_MODEL.md` (STRIDE per
 component, with the three places the guarantee is weakest ranked). Still

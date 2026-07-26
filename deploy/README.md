@@ -258,3 +258,10 @@ location / {
 
 Get the certificate with `certbot --nginx`, and still set
 `RP_ID`/`RP_ORIGIN` on the relay to your `https://` origin.
+
+## When something breaks
+
+See **[RUNBOOK.md](RUNBOOK.md)** — health checks, the five incidents you are
+most likely to hit (messages not arriving, relay down, disk full, push
+stopped, calls not connecting), what state must be backed up, and which
+symptoms to escalate rather than fix.
