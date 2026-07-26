@@ -1317,6 +1317,19 @@ kbd {
   color: var(--ink-dim);
 }
 .composer-note.restored-note svg { color: var(--ink-mute); }
+/* A forked circle looks healthy — the member list is right and sending
+   appears to work — so the standing notice has to be visibly a fault
+   rather than the muted grey of the read-only note. */
+.composer-note.fork-note {
+  padding: 10px 12px;
+  margin-bottom: 4px;
+  text-transform: none;
+  letter-spacing: 0;
+  border-radius: 8px;
+  background: var(--danger-soft);
+  color: var(--danger);
+}
+.composer-note.fork-note svg { color: var(--danger); flex-shrink: 0; }
 
 /* ---------------------------------------------------------------- roster -- */
 .members {

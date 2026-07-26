@@ -11,7 +11,9 @@ analysis; this is the current state.
 
 - **Phase 0** — all of §0.1–§0.8 except the `password_login` replay, which
   needs a decision rather than an implementation (see *Needs a decision*).
-- **Phase 1** — §1.1–§1.8.
+- **Phase 1** — §1.1–§1.8, including §1.1 part 4 (fork detection). The
+  *automatic* recovery half of part 4 is open by decision, not by omission —
+  see §1.1.
 - **Phase 2** — §2.1 CI gate · §2.2 `applyEnvelope` + `AccountService` ·
   §2.3 the named coverage gaps · §2.4 image-based deploy with fast rollback ·
   §2.5 supply chain · §2.6 wasm integrity check, published hashes, and
@@ -37,14 +39,22 @@ there is still no way to revoke a device short of burning the handle.
    real options and a recommendation are in §0.7 below.
 2. **Commissioning the cryptographic review and penetration test.** Phase 7
    prepared the materials; engaging a firm needs a human and a budget.
-3. **`libcrux-sha3` (RUSTSEC-2026-0208).** Blocked upstream: `hpke-rs`
-   pins `^0.0.8`. Assessed as unreachable for this ciphersuite — reasoning
-   in `deny.toml`. Restore the supply-chain job to blocking once it lifts.
+3. **`libcrux-sha3` (RUSTSEC-2026-0207 and -0208).** Blocked upstream:
+   `hpke-rs` pins `^0.0.8`. An earlier note here and in `deny.toml` called
+   these unreachable "because libcrux arrives through post-quantum support";
+   `cargo tree -e features` in CI shows the opposite — `libcrux-sha3` is an
+   unconditional dependency of `hpke-rs` itself and `hpke-rs-libcrux` is not
+   activated at all. The claim is withdrawn. Settling it means reading
+   `hpke-rs` 0.6.1 to see whether it squeezes a SHAKE XOF on our classical
+   path; -0207 is silently wrong output rather than a panic, so it is worth
+   an hour of somebody's time. Only the cargo-deny advisories *step* is
+   tolerated — the supply-chain job itself blocks again.
 
 ### Next, in order
 
 1. §1.2's sibling work: device revocation and identity key rotation.
-2. Recovery for groups that forked *before* §1.1 landed.
+2. Automatic fork recovery — detection landed in §1.1 part 4; getting a
+   current GroupInfo to a stranded device needs the decision recorded there.
 3. Phase 7's fuzzing, once the nightly-toolchain question below is answered.
 4. Phase 3's message-log GC (design and its hazard are in §3.4) and Phase 4's
    tracing.
@@ -271,6 +281,56 @@ This is the hardest item in the plan and needs a real design, not a patch:
 at the same epoch and both converge on the same epoch with no message loss.
 Every existing epoch test covers only a *stale* message — this path has zero
 coverage today.
+
+**Parts 1–3 done.** Part 4 (detection) is now done too; the recovery half of
+it is described below and needs a decision.
+
+**Detection — done, `client/src/lib/fork.js`.** The difficulty is not spotting
+a decrypt failure, it is that undecryptable blobs are *normal*: our own
+commits come back on catch-up, blobs arrive from epochs we have not applied
+yet, and a restored read-only stub decrypts nothing at all by design. A
+detector that counted those would tell every healthy user their circle is
+broken, which is worse than saying nothing.
+
+So only one shape counts: a message from somebody else, at an epoch we
+believe we have already reached, that will not open — five consecutively from
+the same sender. Counting is **per sender**, which is what makes it useful in
+both directions. With alice and bob on one branch and carol on another, carol
+sees everyone fail and learns she is the one cut off; alice sees bob succeed
+between carol's failures, and a single group-wide counter would reset on bob
+and tell alice nothing. Per sender, alice learns the true and different fact
+that *carol* cannot be reached. The asymmetry is the right way round — the
+device that is cut off detects fastest, and it is the one that must act.
+
+Nothing is persisted: a stale "this circle is broken" flag surviving a
+successful rejoin would be worse than re-earning the verdict over the next
+few messages, so `boot()` drops it and live traffic re-derives it.
+
+**Recovery — NEEDS A DECISION, and this is the reason it is not done.**
+Rejoining by external commit already works (`joinByExternalCommit`, used by
+the invite path). What a forked device cannot get is a *current* GroupInfo:
+the only GroupInfo this client can obtain comes from an invite blob, and our
+own parked invites were re-encrypted from our own broken branch. So today the
+notice tells the user to get a fresh invite link from a member whose circle
+still works — real recovery, but manual.
+
+Making it automatic means the relay serving current GroupInfo to any member
+on request. That is a protocol addition with a genuine cost: GroupInfo is
+currently reachable only via an unguessable invite id plus a fragment key the
+relay never sees, and an endpoint that hands it to any authenticated member
+widens what a compromised relay account can pull. Three options:
+
+1. **Leave it manual.** Zero new surface. The user has to ask somebody.
+2. **`get_group_info` for members only**, rate-limited, returning the same
+   encrypted blob shape. Convenient; widens the ACL's blast radius, and the
+   ACL is explicitly advisory in this design.
+3. **Let a healthy member push a recovery blob** when they see a stranded
+   sender — detection already identifies exactly who is stranded. Keeps the
+   relay out of it, but needs a new envelope and only works while somebody
+   healthy is online.
+
+Recommendation: (3), because detection already produces the input it needs
+and it adds no relay-side capability. (1) is the honest status quo until then.
 
 ### 1.2 Make persistence atomic
 

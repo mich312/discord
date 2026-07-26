@@ -4,6 +4,7 @@
 import test from 'node:test';
 import assert from 'node:assert/strict';
 import { Controller, freshTyping } from '../src/lib/controller.js';
+import { FORK_THRESHOLD } from '../src/lib/fork.js';
 import { b64 } from '../src/lib/relay.js';
 import { openBackup, openHistoryEntry } from '../src/lib/history.js';
 
@@ -1039,5 +1040,122 @@ test('a storage failure on one envelope does not corrupt the record', async () =
     c.onContent(r, 'bob', JSON.stringify({ k: 'chat', ch: 'design', text: 'hi' }))
   );
   assert.ok(r.channels.includes('design'), 'the channel the message named still exists');
+  clearTimeout(c.backupTimer);
+});
+
+// --- fork detection (plan §1.1, part 4) ----------------------------------
+// §1.1 stopped new forks with the relay-side epoch CAS. Circles that forked
+// BEFORE it landed stayed broken with, in the plan's words, "no detection
+// and no recovery path" — the only trace was a console warning whose own
+// comment calls it expected. These cover the wiring; fork.test.mjs covers
+// the rule.
+
+/** Drive `n` undecryptable blobs from `sender` into a live circle. */
+async function blobs(c, n, { sender = 'bob', epoch = 1, from = 10 } = {}) {
+  c.crypto = async (cmd) => {
+    if (cmd === 'receive') throw new Error('no matching key');
+    return {};
+  };
+  for (let i = 0; i < n; i++) {
+    await c.onGroupMessage({ group: 'srv', seq: from + i, epoch, sender, payload: 'AAAA' });
+  }
+}
+
+test('a circle whose every sender is unreadable is reported as forked', async () => {
+  const { c, dispatched } = makeController();
+  c.servers.set('srv', record({ name: 'Book Club' }));
+
+  await blobs(c, FORK_THRESHOLD);
+
+  const toast = dispatched.find((a) => a.type === 'toast' && /out of sync/.test(a.text ?? ''));
+  assert.ok(toast, 'the user is told, rather than watching the circle go quiet');
+  assert.match(toast.text, /Book Club/);
+  assert.match(toast.text, /invite link/, 'and told the one thing that actually recovers it');
+  assert.equal(c.servers.get('srv').outOfSync, true, 'the record carries it for the UI');
+  clearTimeout(c.backupTimer);
+});
+
+test('our own replayed commits never trip the detector', async () => {
+  // The false positive that matters: catch-up hands every device back its
+  // own commits, so counting these would flag every healthy circle in the
+  // app. Ten times the threshold, and still silent.
+  const { c, dispatched } = makeController();
+  c.servers.set('srv', record());
+
+  await blobs(c, FORK_THRESHOLD * 10, { sender: 'alice' });
+
+  assert.equal(
+    dispatched.filter((a) => a.type === 'toast').length,
+    0,
+    'no toast for the most common undecryptable blob there is'
+  );
+  assert.ok(!c.servers.get('srv').outOfSync);
+  clearTimeout(c.backupTimer);
+});
+
+test('blobs from an epoch we have not caught up to yet are not a fork', async () => {
+  const { c, dispatched } = makeController();
+  c.servers.set('srv', record({ epoch: 1 }));
+
+  await blobs(c, FORK_THRESHOLD * 3, { sender: 'bob', epoch: 9 });
+
+  assert.equal(dispatched.filter((a) => a.type === 'toast').length, 0);
+  clearTimeout(c.backupTimer);
+});
+
+test('a restored read-only stub is not mistaken for a fork', async () => {
+  // It holds no MLS state, so nothing decrypts — by design, not by breakage.
+  const { c, dispatched } = makeController();
+  c.servers.set('srv', record({ restored: true }));
+
+  await blobs(c, FORK_THRESHOLD * 3);
+
+  assert.equal(dispatched.filter((a) => a.type === 'toast').length, 0);
+  clearTimeout(c.backupTimer);
+});
+
+test('one message getting through clears the suspicion it had built up', async () => {
+  const { c, dispatched } = makeController();
+  c.servers.set('srv', record());
+
+  await blobs(c, FORK_THRESHOLD - 1);
+  c.crypto = async (cmd) =>
+    cmd === 'receive'
+      ? { event: { kind: 'message', sender: 'bob', text: 'hi', epoch: 1 }, state: null }
+      : {};
+  await c.onGroupMessage({ group: 'srv', seq: 30, epoch: 1, sender: 'bob', payload: 'AAAA' });
+  await blobs(c, FORK_THRESHOLD - 1, { from: 40 });
+
+  assert.equal(dispatched.filter((a) => a.type === 'toast').length, 0, 'the counter restarted');
+  clearTimeout(c.backupTimer);
+});
+
+test('the fork notice is raised once, not on every blob from the other branch', async () => {
+  const { c, dispatched } = makeController();
+  c.servers.set('srv', record());
+
+  await blobs(c, FORK_THRESHOLD * 4);
+
+  assert.equal(
+    dispatched.filter((a) => a.type === 'toast').length,
+    1,
+    'repeating it on every message would be its own kind of broken'
+  );
+  clearTimeout(c.backupTimer);
+});
+
+test('leaving a circle clears its fork evidence so a rejoin starts clean', async () => {
+  // Otherwise the old branch's tally would immediately re-condemn the new
+  // membership, and the recovery the notice recommends would look like it
+  // had failed.
+  const { c } = makeController();
+  c.servers.set('srv', record());
+  await blobs(c, FORK_THRESHOLD);
+  assert.equal(c.forks.verdict('srv').outOfSync, true);
+
+  await c.forgetServerLocal('srv');
+
+  assert.deepEqual(c.forks.verdict('srv'), { stranded: [], outOfSync: false });
+  assert.equal(c.forkWarned.size, 0, 'and it may warn again if it recurs');
   clearTimeout(c.backupTimer);
 });

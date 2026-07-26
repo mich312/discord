@@ -3,7 +3,7 @@ import Seal from './Seal.jsx';
 import { describeRetention, freshTyping } from '../lib/controller.js';
 import { meshFull, meshFullMessage } from '../lib/voice.js';
 import { nameHue } from '../lib/avatar.js';
-import { Lock, Paperclip, Clock, Archive, Wave, Gamepad, Check, Plus, Reply, Pencil, Trash, X } from './icons.jsx';
+import { AlertTriangle, Lock, Paperclip, Clock, Archive, Wave, Gamepad, Check, Plus, Reply, Pencil, Trash, X } from './icons.jsx';
 
 // The reaction palette: small on purpose. Reactions ride MLS like any
 // message and live on the stored message; kept-history skips them.
@@ -680,6 +680,15 @@ export default function Messages({
           </div>
         ) : (
         <>
+        {server.outOfSync && (
+          <div className="composer-note fork-note" role="status" data-testid="fork-note">
+            <AlertTriangle size={13} />
+            <span>
+              this device is out of sync with <strong>{server.name}</strong> and cannot read new
+              messages. Ask a member for a fresh invite link and open it to rejoin.
+            </span>
+          </div>
+        )}
         {!editing && <TypingLine typing={server.typing} channel={channel} me={me} />}
         {editing ? (
           <div className="reply-bar editing" data-testid="edit-bar">

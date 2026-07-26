@@ -98,6 +98,7 @@ import {
 } from './overview.js';
 import { freshPresence, normalizeGameRef, normalizePresence, normalizeWant } from './games.js';
 import { MIN_QUERY, rankHits } from './search.js';
+import { ForkWatch, forkMessage } from './fork.js';
 import {
   adminRequirement,
   applyEnvelope,
@@ -153,6 +154,12 @@ export class Controller {
     this.relay = null;
     this.servers = new Map(); // id -> record
     this.me = null;
+    // §1.1's fourth part: tell a permanently forked circle apart from the
+    // ordinary undecryptable blob. In memory on purpose — see fork.js.
+    this.forks = new ForkWatch();
+    /** Circles we have already warned about, so the notice appears once per
+        session rather than on every message from the other branch. */
+    this.forkWarned = new Set();
     // Vaults, passkeys and sign-in (plan §2.2). `request` is a function
     // rather than the connection because the socket does not exist yet.
     this.accounts = new AccountService({
@@ -175,6 +182,12 @@ export class Controller {
       this.me = result.name;
       await this.persistState(result.state);
       for (const record of await this.db.serversAll()) {
+        // `serverPut` persists whatever is on the record, so a fork verdict
+        // written during the last session would come back with it. Drop it
+        // and re-earn it from live traffic: a stale "this circle is broken"
+        // surviving a successful rejoin is worse than taking a few messages
+        // to say it again. See fork.js.
+        delete record.outOfSync;
         this.servers.set(record.id, record);
       }
       this.dispatch({ type: 'booted', me: this.me, servers: this.snapshotServers() });
@@ -571,10 +584,24 @@ export class Controller {
       const decrypted = await this.crypto('receive', { bytes: b64.dec(msg.payload) });
       event = decrypted.event;
       ratchet = decrypted.state;
+      // Proof the ratchet is still shared with this sender, which is what
+      // clears any fork suspicion against them.
+      this.forks.succeeded(msg.group, msg.sender);
     } catch (e) {
       // Genuinely expected: our own commits replayed by catch-up, and blobs
-      // from an epoch this device never held.
-      console.warn(`undecryptable blob seq ${msg.seq} in ${msg.group}: ${e.message}`);
+      // from an epoch this device never held. `why` separates those from the
+      // one shape that means this device is on a branch of its own — see
+      // fork.js — so the log says which it was instead of lumping them
+      // together under a warning whose own comment calls it expected.
+      const why = this.forks.failed(msg.group, {
+        sender: msg.sender,
+        epoch: msg.epoch,
+        me: this.me,
+        groupEpoch: record.epoch,
+        restored: record.restored,
+      });
+      console.warn(`undecryptable blob seq ${msg.seq} in ${msg.group} (${why}): ${e.message}`);
+      this.noteFork(record);
     }
 
     try {
@@ -1777,9 +1804,51 @@ export class Controller {
 
   /** Tear down every local trace of a circle: MLS keys, the record, its
       messages, any live call. Shared by leave, delete, and being kicked. */
+  /**
+   * Surface a fork once we believe in it.
+   *
+   * Deliberately not a silent flag. A forked circle looks *fine* — messages
+   * you send appear to go out, the member list is right, and the other
+   * branch's messages simply never arrive. Without a notice the user
+   * concludes the circle went quiet, which is the failure mode §1.1 called
+   * "no detection and no recovery path".
+   *
+   * There is no repair to offer from here. Rejoining needs a current
+   * GroupInfo, and the only one this client can get comes from an invite
+   * blob — our own parked invites were re-encrypted from our own broken
+   * branch. So the notice asks for a link from someone whose circle works,
+   * which is the existing external-commit rejoin, and the record is marked
+   * so the UI can keep saying so after the toast is gone.
+   */
+  noteFork(record) {
+    const verdict = this.forks.verdict(record.id);
+    const text = forkMessage(verdict, record.name ?? record.id);
+    if (!text) return;
+    // The record flag tracks the live verdict either way; only the toast is
+    // once-per-session, because repeating it on every blob from the other
+    // branch would be its own kind of broken.
+    const wasOut = record.outOfSync === true;
+    record.outOfSync = verdict.outOfSync;
+    if (wasOut !== record.outOfSync) {
+      this.dispatch({ type: 'servers', servers: this.snapshotServers() });
+    }
+    const key = `${record.id}:${verdict.outOfSync ? 'self' : verdict.stranded.join(',')}`;
+    if (this.forkWarned.has(key)) return;
+    this.forkWarned.add(key);
+    console.error(`fork detected in ${record.id}: ${text}`);
+    this.toast(text);
+    this.addSystemMessage(record.id, text).catch(() => {});
+  }
+
   async forgetServerLocal(serverId) {
     const wasActiveCall = this.voice?.active?.server === serverId;
     this.servers.delete(serverId);
+    // A rejoin must start from a clean slate, or the old branch's evidence
+    // would immediately re-condemn the new membership.
+    this.forks.clear(serverId);
+    for (const key of [...this.forkWarned]) {
+      if (key.startsWith(`${serverId}:`)) this.forkWarned.delete(key);
+    }
     try {
       const { state } = await this.crypto('forgetGroup', { group: serverId });
       await this.persistState(state);

@@ -228,6 +228,16 @@ export const Archive = (p) => (
   </Svg>
 );
 
+// A fault the user has to act on, not a passing hiccup — used where a
+// circle has forked and only rejoining fixes it.
+export const AlertTriangle = (p) => (
+  <Svg {...p}>
+    <path d="M8 2.6 14.4 13.4H1.6z" />
+    <path d="M8 6.4v3.1" />
+    <path d="M8 11.4h.01" />
+  </Svg>
+);
+
 export const Reply = (p) => (
   <Svg {...p}>
     <path d="M6.5 4 3 7.3l3.5 3.3" />
