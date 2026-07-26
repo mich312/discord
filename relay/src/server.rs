@@ -505,6 +505,15 @@ async fn handle_request(
         }
 
         ClientMsg::FetchKp { rid, user: target } => {
+            // Taking a KeyPackage CONSUMES it, so an unauthenticated caller
+            // could drain a user's supply and make them unaddable while
+            // offline. Only a registered user may fetch, and never their own.
+            if target == user {
+                return err(rid, "cannot fetch your own key package");
+            }
+            if app.store.get_user_pubkey(&target).await.unwrap_or(None).is_none() {
+                return err(rid, "no such user");
+            }
             // Serve the pinned identity key with the KeyPackage so the adder
             // can check that the two agree before admitting anyone.
             let pinned = match app.store.get_user_pubkey(&target).await {
@@ -764,6 +773,13 @@ async fn handle_request(
 
         ClientMsg::Welcome { rid, to, group, after, payload } => {
             if let Err(e) = require_member(app, &group, user).await {
+                return err(rid, e);
+            }
+            // `to` was unconstrained, so a member could park stored Welcomes
+            // on — and push-spam — any handle at all. A Welcome is only
+            // meaningful for someone being admitted, i.e. already on the
+            // group's ACL via the add that precedes it.
+            if let Err(e) = require_member(app, &group, &to).await {
                 return err(rid, e);
             }
             let payload = match decode_b64(&payload) {

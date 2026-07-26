@@ -20,6 +20,9 @@ pub enum StoreError {
     /// staged commit, process the winner, and retry.
     #[error("epoch conflict: the group has already moved past this epoch")]
     EpochConflict,
+    /// This credential id already belongs to another account.
+    #[error("credential already enrolled by another account")]
+    CredentialTaken,
     #[error("storage error: {0}")]
     Backend(String),
 }
@@ -496,6 +499,10 @@ impl Store for MemoryStore {
 
     async fn add_passkey_wrap(&self, cred_id: &str, wrap: PasskeyWrap) -> Result<(), StoreError> {
         let mut inner = self.inner.lock().unwrap();
+        // Only the owner may replace an existing row; see the Postgres impl.
+        if inner.passkey_wraps.get(cred_id).is_some_and(|w| w.user != wrap.user) {
+            return Err(StoreError::CredentialTaken);
+        }
         inner.passkey_wraps.insert(cred_id.to_string(), wrap);
         Ok(())
     }

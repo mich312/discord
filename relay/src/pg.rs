@@ -552,11 +552,17 @@ impl Store for PgStore {
     }
 
     async fn add_passkey_wrap(&self, cred_id: &str, wrap: PasskeyWrap) -> Result<(), StoreError> {
-        sqlx::query(
+        // The cred_id is client-chosen and a victim's is disclosed by the
+        // passkey challenge, so an unconditional upsert let an attacker
+        // re-point someone else's row at themselves and lock the victim out
+        // of device recovery. Updating is allowed only for rows the caller
+        // already owns.
+        let updated = sqlx::query(
             "INSERT INTO passkey_wraps (cred_id, user_id, credential, salt, wrapped)
              VALUES ($1, $2, $3, $4, $5)
              ON CONFLICT (cred_id) DO UPDATE SET
-               user_id = $2, credential = $3, salt = $4, wrapped = $5",
+               credential = $3, salt = $4, wrapped = $5
+             WHERE passkey_wraps.user_id = $2",
         )
         .bind(cred_id)
         .bind(&wrap.user)
@@ -566,6 +572,9 @@ impl Store for PgStore {
         .execute(&self.pool)
         .await
         .map_err(backend)?;
+        if updated.rows_affected() == 0 {
+            return Err(StoreError::CredentialTaken);
+        }
         Ok(())
     }
 
