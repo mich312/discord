@@ -259,6 +259,11 @@ async fn welcome_is_delivered_live_to_an_online_recipient() {
     // still reaches him directly via the online map, not the group log.
     let mut bob = Conn::connect(addr, "bob").await;
 
+    // A Welcome may only target someone already on the group's ACL, which is
+    // what stopped a member parking stored Welcomes on arbitrary handles.
+    // The real add flow allows before it welcomes, so mirror that here.
+    alice.request(json!({"t":"allow","group":"g1","user":"bob"})).await;
+
     let payload = B64.encode(b"opaque-welcome-blob");
     let reply = alice
         .request(json!({"t":"welcome","to":"bob","group":"g1","after":0,"payload":payload.clone()}))
