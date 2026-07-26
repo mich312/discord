@@ -69,9 +69,11 @@ impl RateLimiter {
 }
 
 /// The client address the limits key on. The socket peer address by
-/// default; with TRUST_PROXY=1 (the relay sits behind Caddy/nginx, which
-/// overwrites the header) the first hop in X-Forwarded-For. Never trust
-/// the header without a proxy in front — it is client-controlled.
+/// default; with TRUST_PROXY=1 (the relay sits behind Caddy/nginx) the LAST
+/// hop in X-Forwarded-For — the entry our own proxy appended. Never trust
+/// the header without a proxy in front: it is client-controlled, and a
+/// client that sends its own X-Forwarded-For prepends to, not replaces,
+/// what the proxy records.
 pub fn client_ip(trust_proxy: bool, headers: &HeaderMap, peer: Option<SocketAddr>) -> IpAddr {
     if trust_proxy {
         if let Some(ip) = headers
@@ -120,7 +122,14 @@ mod tests {
         headers.insert("x-forwarded-for", "203.0.113.9, 10.0.0.1".parse().unwrap());
         let peer = Some(SocketAddr::from(([192, 168, 1, 5], 4242)));
         assert_eq!(client_ip(false, &headers, peer), IpAddr::from([192, 168, 1, 5]));
-        assert_eq!(client_ip(true, &headers, peer), IpAddr::from([203, 0, 113, 9]));
+        // The LAST hop, not the first. This test used to assert the first,
+        // on the assumption that the fronting proxy overwrites the header.
+        // Some do; nginx's stock $proxy_add_x_forwarded_for APPENDS, and
+        // Caddy appends too — so under a very common config the leading hop
+        // is whatever the client sent, and trusting it let any client pick
+        // its own rate-limit identity. The last hop is the one our own proxy
+        // added, which is correct whether the proxy appends or overwrites.
+        assert_eq!(client_ip(true, &headers, peer), IpAddr::from([10, 0, 0, 1]));
         assert_eq!(client_ip(true, &HeaderMap::new(), peer), IpAddr::from([192, 168, 1, 5]));
     }
 }

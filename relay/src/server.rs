@@ -36,8 +36,9 @@ pub struct App {
     pub open_registration: bool,
     /// Per-client limits on the unauthenticated surface.
     pub limits: Limits,
-    /// TRUST_PROXY=1: key rate limits on X-Forwarded-For (first hop)
-    /// instead of the socket peer. Only sane behind Caddy/nginx.
+    /// TRUST_PROXY=1: key rate limits on X-Forwarded-For (the last hop —
+    /// the one our own proxy appended) instead of the socket peer. Only
+    /// sane behind a proxy; without one the header is client-controlled.
     pub trust_proxy: bool,
     /// Global admins (RELAY_ADMINS, comma-separated user ids): treated as
     /// admin of every group and allowed to list all users/groups. Metadata

@@ -183,7 +183,7 @@ relay).
 | `BLOB_DIR` | `./blobs` | encrypted attachment storage on disk |
 | `VAPID_PRIVATE_KEY` | unset | base64url P-256 scalar; unset = ephemeral (push subscriptions die on restart) |
 | `OPEN_REGISTRATION` | unset | unset/`0` = invite-only: unknown handles register only with a usable invite id (the first user on an empty relay is exempt); `1`/`true` = anyone can register |
-| `TRUST_PROXY` | unset | `1` = key the rate limits on the first `X-Forwarded-For` hop instead of the socket peer — set it ONLY behind a proxy that overwrites the header (the `deploy/` Caddy setups do) |
+| `TRUST_PROXY` | unset | `1` = key the rate limits on the last `X-Forwarded-For` hop (the one your own proxy appended) instead of the socket peer — set it ONLY behind a proxy, since without one the header is client-controlled |
 | `TURN_URLS` / `TURN_SECRET` | unset | voice TURN via coturn's REST API — the relay mints a short-lived credential per user (no shared password to clients). `TURN_TTL` (default 3600) sets its lifetime |
 | `ICE_SERVERS` | public STUN | verbatim JSON array of RTCIceServer objects; an alternative to `TURN_*` (static creds). Unset = public STUN, which only traverses cone NATs |
 | `RP_ID` / `RP_ORIGIN` | `localhost` / `http://localhost:9601` | WebAuthn relying party — must match the origin users load the client from |
