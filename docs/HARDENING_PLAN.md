@@ -43,10 +43,23 @@ Open, in the order I would take them:
 
    My recommendation is (c) now and (b) when the account system is next
    touched — (a) trades a documented property for a modest gain.
-2. §1.2–§1.8 — atomic persistence, error taxonomy, infrastructure-failure
-   handling, voice glare, store conformance, protocol versioning.
-3. Recovery for groups that forked *before* §1.1 landed.
-4. Phases 2.2–2.6, then 3–5.
+2. §1.2 atomic persistence — the ratchet, the message, and the cursor
+   still land in three separate IndexedDB transactions, so a crash between
+   them silently loses a message. The largest remaining correctness item.
+3. §1.3 error taxonomy — the receive path still laundres every failure as
+   "undecryptable blob", which is what hides §1.2 and quota errors.
+4. §1.7 protocol versioning — `Hello` still carries no version, and
+   `request()` still has no timeout.
+5. Device revocation and identity key rotation (moved here from the
+   dropped Phase 6).
+6. Recovery for groups that forked *before* §1.1 landed.
+7. Phases 2.2–2.6, then 3 (single-relay scope), 4, 5, and Phase 7's
+   in-repo preparation.
+
+**Done in Phase 1 so far:** §1.1 (staged commits + epoch CAS), §1.4
+(worker/IndexedDB failure now surfaces instead of hanging on the splash),
+§1.5 (glare re-offer), §1.6 (store impls aligned; SQLSTATE instead of
+string-matching), §1.8 (unread clock skew, view-transition collisions).
 
 **Decisions taken** (these were the open forks; the plan below is now
 scoped to them):
