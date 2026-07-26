@@ -133,6 +133,11 @@ pub trait Store: Send + Sync {
     /// Add `user` as a plain member; keeps the existing role if already in.
     async fn allow_member(&self, group: &str, user: &str) -> Result<(), StoreError>;
     /// Remove `user` from the group's ACL. No-op if they were not a member.
+    /// Drop `user` from `group`'s ACL. Idempotent, like any DELETE: removing
+    /// someone who is not there, or from a group that does not exist,
+    /// succeeds. The two impls disagreed on this — memory errored,
+    /// Postgres did not — which is exactly the class of divergence the
+    /// shared conformance suite now catches.
     async fn disallow_member(&self, group: &str, user: &str) -> Result<(), StoreError>;
     /// Purge a group entirely: roster, log, history, invites, welcomes.
     async fn delete_group(&self, group: &str) -> Result<(), StoreError>;
@@ -215,6 +220,10 @@ pub trait Store: Send + Sync {
     async fn delete_push_subscription(&self, user: &str, endpoint: &str) -> Result<(), StoreError>;
 
     // --- invites ---
+    /// Park an invite. First writer wins: an id already in use is left
+    /// alone (Postgres does ON CONFLICT DO NOTHING, and the memory impl
+    /// used to overwrite — a divergence that let one group's admin repoint
+    /// another group's circulating link).
     async fn create_invite(&self, invite: &str, record: InviteRecord) -> Result<(), StoreError>;
     /// Which group an invite belongs to (for authorization), if it exists.
     async fn invite_group(&self, invite: &str) -> Result<Option<String>, StoreError>;
@@ -358,8 +367,9 @@ impl Store for MemoryStore {
 
     async fn disallow_member(&self, group: &str, user: &str) -> Result<(), StoreError> {
         let mut inner = self.inner.lock().unwrap();
-        let data = inner.groups.get_mut(group).ok_or(StoreError::NoSuchGroup)?;
-        data.members.retain(|(m, _)| m != user);
+        if let Some(data) = inner.groups.get_mut(group) {
+            data.members.retain(|(m, _)| m != user);
+        }
         Ok(())
     }
 
@@ -593,7 +603,10 @@ impl Store for MemoryStore {
         if !inner.groups.contains_key(&record.group) {
             return Err(StoreError::NoSuchGroup);
         }
-        inner.invites.insert(invite.to_string(), record);
+        // First writer wins, matching Postgres's ON CONFLICT DO NOTHING.
+        // This used to overwrite unconditionally, so one group's admin could
+        // repoint another group's circulating invite id at their own group.
+        inner.invites.entry(invite.to_string()).or_insert(record);
         Ok(())
     }
 

@@ -803,12 +803,12 @@ impl Store for PgStore {
         .bind(record.max_uses.map(|m| m as i64))
         .execute(&self.pool)
         .await
-        .map_err(|e| {
-            if e.to_string().contains("foreign key") {
-                StoreError::NoSuchGroup
-            } else {
-                backend(e)
-            }
+        // Was: string-matching "foreign key" on the error text, which is
+        // brittle across sqlx and Postgres versions. SQLSTATE 23503 is the
+        // foreign-key-violation code and is stable.
+        .map_err(|e| match e.as_database_error().and_then(|d| d.code()) {
+            Some(code) if code == "23503" => StoreError::NoSuchGroup,
+            _ => backend(e),
         })?;
         Ok(())
     }
