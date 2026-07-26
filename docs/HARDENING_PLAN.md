@@ -506,12 +506,33 @@ operator, who serves `worker.js` and the manifest too and would change both.
 What it catches is the wasm being wrong *on its own* — a partial deploy, a
 stale or poisoned cache, a CDN out of step with the page.
 
-**Still open: reproducible builds.** The verification story now exists; the
-thing to verify *against* does not. Byte-for-byte reproducibility needs a
-pinned toolchain, a deterministic `wasm-pack`/`wasm-opt` invocation and
-`SOURCE_DATE_EPOCH` handling, and it has not been demonstrated. Until it is,
-`docs/THREAT_MODEL.md` §6.2 stands unchanged: operator-served code remains the
-single largest gap.
+**Reproducible builds — demonstrated, within stated limits.** The compiler is
+pinned in one place (`rust-toolchain.toml`, honoured by rustup in CI, in the
+Docker build and on a laptop alike), binaryen is pinned to a release rather
+than taken from apt, and the `reproducible build` CI job rebuilds every commit
+from a clean tree **on a different machine** from the one that published the
+manifest, then diffs the two. It fails, loudly and with the diff, if they
+differ.
+
+The job is deliberately unlike the `build` job in three ways, so that a match
+carries information: it sets `--remap-path-prefix` (the other does not),
+installs `wasm-pack` from source rather than from a prebuilt action, and
+starts with no cargo cache.
+
+That last difference produced the most useful result. If checkout paths were
+embedded in the wasm, the remapped and unremapped builds would differ — they
+do not, so paths are not in the artifact at all. That is precisely the
+property a third party needs in order to rebuild at their own path and match.
+
+**What is established:** same commit + same pinned toolchain + `ubuntu-latest`
+x86_64 → byte-identical artifacts across independent machines, caches and
+flags.
+
+**What is not:** a different OS, architecture, libc or container base. Nobody
+has yet rebuilt this on hardware GitHub does not own, which is the only test
+that fully answers §6.2. The machinery to check it now exists — publish a
+commit's manifest, hand someone the source, compare — but the check itself is
+still bounded by one runner image.
 
 ---
 

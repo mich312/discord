@@ -110,8 +110,13 @@ the README and `SECURITY.md`.
    user. CSP, SRI, the worker's wasm integrity check and the published
    `integrity.json` narrow it — they catch the crypto core being wrong on its
    own, and give an outside party something specific to verify. None of them
-   defends against the operator, who serves the checks too. Only reproducible
-   builds and a packaged client would close it.
+   defends against the operator, who serves the checks too.
+   **Builds are now reproducible** on a pinned toolchain across independent
+   machines (CI proves it per commit), so a third party *can* rebuild the
+   source and compare against what is served — which is the mechanism that
+   turns a targeted bundle into something detectable. It is not yet
+   demonstrated off one runner image, and nobody is doing the comparison
+   routinely; a packaged, signed client would still be stronger.
 3. **Kept history trades forward secrecy**, per channel, opt-in.
 4. **Invite-link controls are server-enforced** and so bypassable by a
    malicious relay. Membership is not.

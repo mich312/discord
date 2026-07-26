@@ -162,20 +162,25 @@ jobs:
   # names operator-served code as the largest gap in the design, and the only
   # real answer is that anyone can rebuild the source and get the bytes being
   # served. The integrity manifest gives them something to compare; this job
-  # is what establishes there is anything stable to compare against.
+  # establishes there is anything stable to compare against.
   #
-  # It builds the whole client twice, from a clean tree, and diffs the two
-  # manifests. Written to FAIL when the build is not reproducible — a
-  # reproducibility claim backed by a check that cannot fail is worth nothing.
+  # It rebuilds from a clean tree on a DIFFERENT machine from the `build` job
+  # and compares against the manifest that job published. Cross-machine by
+  # construction: an earlier version built twice on one runner, which could
+  # only ever rule out clocks and randomness, not the environment.
+  #
+  # Deliberately different from `build` in three ways, so a match means more:
+  # this job sets --remap-path-prefix (build does not), installs wasm-pack
+  # from source rather than a prebuilt action, and starts with no cargo cache.
+  # If any of those changed the output, the artifacts would diverge here.
   reproducible:
     name: reproducible build
+    needs: build
     runs-on: ubuntu-latest
     timeout-minutes: 30
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-        with:
-          targets: wasm32-unknown-unknown
       - uses: actions/setup-node@v4
         with:
           node-version: '20'
@@ -193,48 +198,49 @@ jobs:
       - run: npm ci
         working-directory: client
 
-      - name: build twice from clean and compare
+      - name: fetch the manifest the build job published
+        uses: actions/download-artifact@v4
+        with:
+          name: integrity-manifest
+          path: /tmp/published
+
+      - name: rebuild independently and compare
         env:
           WASM_REQUIRE_OPT: '1'
-          # Paths leak into the binary via panic messages and debug info. On a
-          # runner the checkout path is stable, but pinning it is what lets a
-          # rebuild somewhere else match.
+          # Paths would leak into the binary through panic messages and debug
+          # info. `build` does NOT set this, so a match proves they are not in
+          # the artifact at all — which is what lets a third party rebuild at
+          # their own path and still match.
           RUSTFLAGS: '--remap-path-prefix=${{ github.workspace }}=/build'
           CARGO_INCREMENTAL: '0'
         run: |
           set -euo pipefail
-          # SOURCE_DATE_EPOCH from the commit, so anything that stamps a time
-          # stamps the same one on every rebuild of this commit.
+          # From the commit, not the clock: anything that stamps a time stamps
+          # the same one on every rebuild of this commit.
           SOURCE_DATE_EPOCH="$(git log -1 --pretty=%ct)"
           export SOURCE_DATE_EPOCH
-          echo "SOURCE_DATE_EPOCH=$SOURCE_DATE_EPOCH"
 
-          build_once() {
-            rm -rf crypto-core/pkg client/public/pkg client/dist
-            cargo clean -p crypto-core
-            ./crypto-core/build-wasm.sh
-            ( cd client && npm run build )
-            cp client/dist/integrity.json "$1"
-          }
+          rm -rf crypto-core/pkg client/public/pkg client/dist
+          ./crypto-core/build-wasm.sh
+          ( cd client && npm run build )
 
-          build_once /tmp/first.json
-          build_once /tmp/second.json
-
-          if diff -u /tmp/first.json /tmp/second.json; then
-            echo "✅ two clean builds of this commit produced identical artifacts"
+          if diff -u /tmp/published/integrity.json client/dist/integrity.json; then
+            echo "✅ an independent rebuild on another machine produced identical artifacts"
             {
               echo "### Reproducible build: verified"
+              echo "Rebuilt from a clean tree on a separate runner, with a different"
+              echo "wasm-pack install, no cargo cache and different RUSTFLAGS."
               echo '```json'
-              cat /tmp/first.json
+              cat client/dist/integrity.json
               echo '```'
             } >> "$GITHUB_STEP_SUMMARY"
           else
-            echo "❌ the build is NOT reproducible — the artifacts above differ between two clean builds"
+            echo "❌ NOT reproducible — an independent rebuild of this commit differs"
             {
               echo "### Reproducible build: FAILED"
-              echo 'Two clean builds of the same commit produced different artifacts:'
+              echo 'An independent rebuild of this commit produced different artifacts:'
               echo '```diff'
-              diff -u /tmp/first.json /tmp/second.json || true
+              diff -u /tmp/published/integrity.json client/dist/integrity.json || true
               echo '```'
             } >> "$GITHUB_STEP_SUMMARY"
             exit 1
