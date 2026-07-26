@@ -58,19 +58,31 @@ test('destructive kinds are the ones that reach deletion or the crypto settings'
   // anyone in the circle can send, so it is asserted explicitly rather than
   // left to the switch statement that consumes it.
   for (const k of ['chanset', 'chan-ren', 'chan-del', 'vchan-ren', 'vchan-del']) {
-    assert.deepEqual(adminRequirement(k), { destructive: true }, k);
+    assert.deepEqual(adminRequirement({ k }), { destructive: true }, k);
   }
   for (const k of ['chan', 'vchan', 'overview']) {
-    assert.deepEqual(adminRequirement(k), { destructive: false }, k);
+    assert.deepEqual(adminRequirement({ k }), { destructive: false }, k);
   }
-  for (const k of ['chat', 'file', 'game', 'react', 'edit', 'del', 'rsvp', 'meta', 'notice', 'role', 'pres', 'want', 'type']) {
-    assert.equal(adminRequirement(k), null, `${k} must not require admin`);
+  for (const k of ['chat', 'file', 'game', 'react', 'edit', 'del', 'rsvp', 'meta', 'role', 'pres', 'want', 'type']) {
+    assert.equal(adminRequirement({ k }), null, `${k} must not require admin`);
   }
+});
+
+test('only the del half of a notice needs a resolved role', () => {
+  // Any member may pin, so `add` must not be gated. `del` drops content and
+  // is author-or-admin, so it needs an authoritative answer — and gets
+  // `authorMayPass` so the blanket gate defers to that finer rule instead of
+  // refusing every non-admin author.
+  assert.equal(adminRequirement({ k: 'notice', op: 'add' }), null);
+  assert.deepEqual(adminRequirement({ k: 'notice', op: 'del' }), {
+    destructive: true,
+    authorMayPass: true,
+  });
 });
 
 test('an unknown kind needs no admin answer and changes nothing', () => {
   const r = circle();
-  assert.equal(adminRequirement('who-knows'), null);
+  assert.equal(adminRequirement({ k: 'who-knows' }), null);
   const { effects } = apply(r, { k: 'who-knows', ch: 'x' });
   assert.deepEqual(effects, []);
   assert.deepEqual(r.channels, ['general']);
@@ -408,30 +420,46 @@ test('the noticeboard author is the authenticated sender', () => {
 });
 
 test('a known non-admin cannot unpin someone else’s notice', () => {
-  const r = circle({ roles: { mallory: 'member' } });
+  const r = circle();
   apply(r, { k: 'notice', op: 'add', n: { id: 'n1', text: 'mine' } }, { sender: 'alice' });
-  apply(r, { k: 'notice', op: 'del', id: 'n1' }, { sender: 'mallory' });
+  apply(r, { k: 'notice', op: 'del', id: 'n1' }, { sender: 'mallory', isAdmin: false });
   assert.equal(r.notices.length, 1, 'an established member is not an admin');
 });
 
-test('an author can always unpin their own notice', () => {
-  const r = circle({ roles: { alice: 'member' } });
+test('an author can unpin their own notice without being an admin', () => {
+  // The reason `notice/del` carries `authorMayPass`: the blanket gate would
+  // otherwise refuse this before the case body ever sees who the author is.
+  const r = circle();
   apply(r, { k: 'notice', op: 'add', n: { id: 'n1', text: 'mine' } }, { sender: 'alice' });
-  apply(r, { k: 'notice', op: 'del', id: 'n1' }, { sender: 'alice' });
+  apply(r, { k: 'notice', op: 'del', id: 'n1' }, { sender: 'alice', isAdmin: false });
   assert.deepEqual(r.notices, []);
 });
 
-test('unpinning fails OPEN when the remover’s role is unknown', () => {
-  // Pre-existing behaviour of canRemoveNotice, pinned here because it is an
-  // authorization decision and the direction is not obvious. It matches the
-  // advisory admin gate elsewhere: while roles are still syncing, a
-  // legitimate action must not be dropped. The cost is that a member whose
-  // role has not arrived can unpin another's notice — recoverable, and the
-  // noticeboard is the whole roster's by design.
-  const r = circle({ roles: {} });
+test('an admin can unpin someone else’s notice', () => {
+  const r = circle();
   apply(r, { k: 'notice', op: 'add', n: { id: 'n1', text: 'mine' } }, { sender: 'alice' });
-  apply(r, { k: 'notice', op: 'del', id: 'n1' }, { sender: 'stranger' });
-  assert.deepEqual(r.notices, [], 'unknown role is permitted, not refused');
+  apply(r, { k: 'notice', op: 'del', id: 'n1' }, { sender: 'root', isAdmin: true });
+  assert.deepEqual(r.notices, []);
+});
+
+test('unpinning fails CLOSED when the remover’s role could not be resolved', () => {
+  // This assertion used to say the opposite, and pinned a real defect.
+  //
+  // `canRemoveNotice` read the record's own roles map and returned true for
+  // anyone absent from it. That map is populated only when something calls
+  // `refreshRoles`, so it is empty on a restored record and stale for a
+  // recent joiner — meaning the same `notice/del` was ACCEPTED on a device
+  // with a cold roster and REFUSED on one with a warm roster. The board
+  // desynchronised between members with no error anywhere, and a member
+  // missing from a stale map could unpin anything.
+  //
+  // The role is now resolved by the caller against the relay's ACL before
+  // the reducer runs, so `null` means "asked and could not establish it" —
+  // which is refused, like every other destructive kind.
+  const r = circle();
+  apply(r, { k: 'notice', op: 'add', n: { id: 'n1', text: 'mine' } }, { sender: 'alice' });
+  apply(r, { k: 'notice', op: 'del', id: 'n1' }, { sender: 'stranger', isAdmin: null });
+  assert.equal(r.notices.length, 1, 'an unresolved role is refused, not waved through');
 });
 
 /* ---------------------------------------------------------------- role -- */

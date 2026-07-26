@@ -140,12 +140,21 @@ export function clearVoiceDeleted(record, ch) {
  * one from a sender whose role cannot be established is a security
  * downgrade.
  *
+ * `{ authorMayPass: true }` additionally means the blanket gate below must
+ * not refuse outright — the sender's own content is theirs to remove, so the
+ * case body applies the finer author-or-admin rule. The answer is still
+ * resolved, because "not the author" has to fall back to something
+ * authoritative.
+ *
+ * Takes the whole envelope rather than its kind: `notice` needs a role for
+ * `op: 'del'` but not for `op: 'add'`, since any member may pin.
+ *
  * Kept as data rather than scattered `if` statements because it is the
  * security-relevant part: a kind silently missing from this table is a kind
  * anyone can send.
  */
-export function adminRequirement(kind) {
-  switch (kind) {
+export function adminRequirement(content) {
+  switch (content?.k) {
     case 'chan':
     case 'vchan':
     case 'overview':
@@ -156,6 +165,10 @@ export function adminRequirement(kind) {
     case 'vchan-ren':
     case 'vchan-del':
       return { destructive: true };
+    // Unpinning drops content, so an unresolvable role fails closed like the
+    // other destructive kinds rather than being waved through.
+    case 'notice':
+      return content.op === 'del' ? { destructive: true, authorMayPass: true } : null;
     default:
       return null;
   }
@@ -202,8 +215,8 @@ export function applyEnvelope(record, sender, content, ctx = {}) {
   // The gate, applied once here rather than repeated per case. A kind that
   // needs an answer and did not get one is refused: `adminRequirement` is
   // the whole allowlist, so forgetting to resolve it fails closed.
-  const need = adminRequirement(content?.k);
-  if (need && isAdmin !== true) return done();
+  const need = adminRequirement(content);
+  if (need && !need.authorMayPass && isAdmin !== true) return done();
 
   const inThisCall = (ch) => inCall?.server === record.id && inCall?.channel === ch;
 
@@ -359,7 +372,10 @@ export function applyEnvelope(record, sender, content, ctx = {}) {
         }
       } else if (content.op === 'del') {
         const target = (record.notices ?? []).find((n) => n.id === content.id);
-        if (target && canRemoveNotice(target, sender, record.roles)) {
+        // `isAdmin`, not `record.roles`: the caller resolved it against the
+        // relay's ACL, so every device answers this identically instead of
+        // from whatever its own roster happened to hold.
+        if (target && canRemoveNotice(target, sender, isAdmin === true)) {
           record.notices = record.notices.filter((n) => n.id !== content.id);
           emit({ t: 'backup' });
         }

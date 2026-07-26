@@ -190,14 +190,18 @@ test('mergeNotices unions by id and my copy wins', () => {
   assert.equal(merged.find((n) => n.id === 'a').text, 'mine');
 });
 
-test('canRemoveNotice: author yes, admin yes, known member no, unknown fails open', () => {
+test('canRemoveNotice: author yes, admin yes, everyone else no', () => {
   const n = { id: 'x', text: 't', ts: NOW, author: 'bob' };
-  const roles = { alice: 'admin', bob: 'member', carol: 'member' };
-  assert.equal(canRemoveNotice(n, 'bob', roles), true);
-  assert.equal(canRemoveNotice(n, 'alice', roles), true);
-  assert.equal(canRemoveNotice(n, 'carol', roles), false);
-  assert.equal(canRemoveNotice(n, 'stranger', roles), true); // role unknown -> fail open
-  assert.equal(canRemoveNotice(null, 'alice', roles), false);
+  // Takes a resolved answer, not a roles map. It used to do the lookup and
+  // return true for anyone the map did not mention, which made the result
+  // depend on whether that device had refreshed its roster — see the
+  // fails-CLOSED test in envelope.test.mjs.
+  assert.equal(canRemoveNotice(n, 'bob', false), true, 'the author never needs a role');
+  assert.equal(canRemoveNotice(n, 'alice', true), true);
+  assert.equal(canRemoveNotice(n, 'carol', false), false);
+  assert.equal(canRemoveNotice(n, 'stranger', null), false, 'unresolved is refused');
+  assert.equal(canRemoveNotice(n, 'stranger', undefined), false, 'so is never asked');
+  assert.equal(canRemoveNotice(null, 'alice', true), false);
 });
 
 test('describeUntil ranges', () => {

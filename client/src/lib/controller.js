@@ -90,7 +90,6 @@ import {
 import { sealIdentity } from './link.js';
 import { AccountService } from './account.js';
 import {
-  canRemoveNotice,
   mergeNotices,
   normalizeNotice,
   normalizeOverview,
@@ -659,7 +658,7 @@ export class Controller {
     // `senderIsAdmin` can consult the relay's ACL, and an async reducer is
     // not a reducer. Resolved only for the kinds that need it, so ordinary
     // chat traffic does not pay for a check it never uses.
-    const need = adminRequirement(content?.k);
+    const need = adminRequirement(content);
     const isAdmin = need ? await this.senderIsAdmin(record, sender, need) : null;
 
     const { effects } = applyEnvelope(record, sender, content, {

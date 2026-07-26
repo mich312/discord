@@ -1176,7 +1176,7 @@ export default function Overview({
                         </span>
                         <span className="notice-text">{n.text}</span>
                       </div>
-                      {canSend && canRemoveNotice(n, me, server.roles) && (
+                      {canSend && canRemoveNotice(n, me, server.roles?.[me] === 'admin') && (
                         <button
                           className="ghost notice-remove"
                           title="unpin"
