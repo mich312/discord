@@ -73,10 +73,16 @@ rather than only when someone opens the room.
 subscribe at DEBUG. Still open: metrics, tracing, runbooks, config
 validation at boot.
 
+**Phase 7 started:** `SECURITY.md` and `docs/THREAT_MODEL.md` (STRIDE per
+component, with the three places the guarantee is weakest ranked). Still
+open: cargo-fuzz targets on protocol parsing, and an epoch state-machine
+simulation harness.
+
 **Phase 5 started:** all three overlays are real dialogs with focus
 management (`useDialog`), and `--ink-mute` now clears WCAG AA in both
-themes. Still open: drawer focus, hit targets, the iOS 7-day storage
-eviction, the PWA offline shell.
+themes. Still open: drawer focus, hit targets, the PWA offline shell. The iOS 7-day
+storage eviction is fixed — persistence is requested every boot, checked,
+and surfaced with a home-screen prompt where it actually evicts.
 
 **Also done:** §2.5 supply-chain gate (cargo-deny + npm audit + lockfile
 sync), a real `/healthz` that round-trips the store with the deploy gate
