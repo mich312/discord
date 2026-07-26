@@ -803,3 +803,61 @@ test('a storage failure while applying a message is reported, not laundered as u
   );
   clearTimeout(c.backupTimer);
 });
+
+// --- iOS storage eviction ------------------------------------------------
+// persist() ran once during onboarding with its result discarded. Safari
+// does not implement it, so the optional chain silently no-opped, and
+// WebKit clears script-writable storage for a non-installed site after 7
+// days idle — taking the IndexedDB MLS state and the localStorage identity
+// mirror with it. Silent, total account loss.
+
+test('a browser that refuses persistent storage is reported, not ignored', async () => {
+  const { c, dispatched } = makeController();
+  // navigator is a getter-only global in Node, so stub via defineProperty.
+  const restore = stubNavigator({
+    storage: {},
+    userAgent: 'Mozilla/5.0 (iPhone) Version/17.0 Safari/605',
+  });
+
+  const ok = await c.requestPersistentStorage();
+
+  assert.equal(ok, false, 'a browser without the API is not durable');
+  const warned = dispatched.find((a) => a.type === 'storageAtRisk');
+  assert.ok(warned, 'the app is told storage is at risk');
+  assert.equal(warned.evicts, true, 'and that this browser actually evicts');
+  restore();
+  clearTimeout(c.backupTimer);
+});
+
+test('an already-persisted origin is not re-prompted', async () => {
+  const { c, dispatched } = makeController();
+  let persistCalls = 0;
+  const restore = stubNavigator({
+    storage: {
+      persisted: async () => true,
+      persist: async () => {
+        persistCalls += 1;
+        return true;
+      },
+    },
+    userAgent: 'Chrome',
+  });
+
+  const ok = await c.requestPersistentStorage();
+
+  assert.equal(ok, true);
+  assert.equal(persistCalls, 0, 'an existing grant is not asked for again');
+  assert.ok(!dispatched.some((a) => a.type === 'storageAtRisk'), 'and nothing is warned about');
+  restore();
+  clearTimeout(c.backupTimer);
+});
+
+/** Replace the getter-only `navigator` global for one test. */
+function stubNavigator(value) {
+  const had = Object.getOwnPropertyDescriptor(globalThis, 'navigator');
+  Object.defineProperty(globalThis, 'navigator', { value, configurable: true, writable: true });
+  return () => {
+    if (had) Object.defineProperty(globalThis, 'navigator', had);
+    else delete globalThis.navigator;
+  };
+}

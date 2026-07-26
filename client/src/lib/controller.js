@@ -178,6 +178,9 @@ export class Controller {
         this.servers.set(record.id, record);
       }
       this.dispatch({ type: 'booted', me: this.me, servers: this.snapshotServers() });
+      // Every boot, not just onboarding: a grant can be revoked, and a site
+      // refused once may qualify later once the user has engaged with it.
+      this.requestPersistentStorage();
       this.connectRelay();
       this.setupServiceWorker();
       return;
@@ -267,12 +270,7 @@ export class Controller {
   async completeOnboarding(securedLocal = true) {
     await this.db.kvPut('session', { name: this.me, createdAt: Date.now() });
     await this.db.kvPut('securedLocal', securedLocal);
-    // Ask the browser not to evict our keys; best-effort (plan §5.2).
-    try {
-      await navigator.storage?.persist?.();
-    } catch {
-      /* not fatal */
-    }
+    await this.requestPersistentStorage();
     this.dispatch({ type: 'booted', me: this.me, servers: this.snapshotServers() });
     this.connectRelay();
     this.setupServiceWorker();
@@ -2720,6 +2718,45 @@ export class Controller {
 
   async addSystemMessage(serverId, text, channel = 'general') {
     await this.storeMessage({ server: serverId, channel, sender: '', text, ts: Date.now(), system: true });
+  }
+
+  /** Ask the browser not to evict our storage, and say so when it refuses.
+
+      This used to run once, during onboarding, with its result discarded.
+      That is the worst possible handling on WebKit: Safari does not
+      implement persist() at all, so the optional chain silently no-ops, and
+      script-writable storage for a site the user has not installed is
+      cleared after 7 days of no interaction. The identity key mirror in
+      localStorage goes in the same sweep. A user who follows the README —
+      open the link in Safari, use it — is on an undisclosed timer to losing
+      their account and every group ratchet, with nothing on screen.
+
+      Run on every boot (grants can be revoked, and a site that was denied
+      once may qualify later once the user engages with it), check the
+      answer, and surface it. Returns true when storage is durable. */
+  async requestPersistentStorage() {
+    let persisted = false;
+    try {
+      // Already granted? Do not re-prompt.
+      persisted = (await navigator.storage?.persisted?.()) ?? false;
+      if (!persisted) persisted = (await navigator.storage?.persist?.()) ?? false;
+    } catch {
+      persisted = false;
+    }
+    this.storagePersisted = persisted;
+    if (!persisted) {
+      // Distinguish "the browser said no" from "the browser has no opinion":
+      // only the former is a countdown we can name.
+      const evicts = typeof navigator !== 'undefined' && /^((?!chrome|android).)*safari/i.test(navigator.userAgent ?? '');
+      this.dispatch({
+        type: 'storageAtRisk',
+        evicts,
+      });
+      console.warn(
+        `storage is not persistent${evicts ? ' — WebKit clears it after 7 days without interaction' : ''}`
+      );
+    }
+    return persisted;
   }
 
   async persistState(state) {

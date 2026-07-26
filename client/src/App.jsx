@@ -64,6 +64,8 @@ function reducer(state, action) {
     // app behind it to return to — the alternative was an endless splash.
     case 'fatal':
       return { ...state, phase: 'fatal', fatal: action.text };
+    case 'storageAtRisk':
+      return { ...state, storageAtRisk: true, storageEvicts: action.evicts };
     case 'booted': {
       // Land on the first circle's overview page (channel: null), not in a
       // room — the landing zone is the front door.
@@ -606,6 +608,19 @@ export default function App() {
           <button className="button" data-testid="secure-now" onClick={openSecure}>
             secure account
           </button>
+        </div>
+      )}
+      {state.storageAtRisk && state.storageEvicts && !unsecured && (
+        // Only shown where it is a real countdown (WebKit, not installed)
+        // and only once the account is already secured — an unsecured
+        // account has a louder banner of its own, and stacking two nags is
+        // how people learn to dismiss both.
+        <div className="secure-banner" data-testid="storage-banner">
+          <Key size={14} />
+          <span>
+            this browser may delete quorum's data after 7 days without use —{' '}
+            <strong>add it to your home screen</strong> to keep your account and messages
+          </span>
         </div>
       )}
       <div className="app">
