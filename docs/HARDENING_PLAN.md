@@ -14,10 +14,9 @@ analysis; this is the current state.
 - **Phase 1** — §1.1–§1.8.
 - **Phase 2** — §2.1 CI gate · §2.2 `applyEnvelope` + `AccountService` ·
   §2.3 the named coverage gaps · §2.4 image-based deploy with fast rollback ·
-  §2.5 supply chain · §2.6 wasm integrity check and published hashes.
-  The one part of §2.6 *not* delivered is byte-for-byte reproducible builds —
-  listed under *Next* rather than buried here, because the verification story
-  now exists while the thing to verify against does not.
+  §2.5 supply chain · §2.6 wasm integrity check, published hashes, and
+  byte-for-byte reproducible builds enforced per commit across two machines
+  (`docs/VERIFYING.md` is the third-party procedure).
 
 ### Partly done
 
@@ -26,7 +25,7 @@ analysis; this is the current state.
 | **3** | Per-group send locks (global hub mutex gone); hourly history sweep; recorded schema version with a rollback guard; bounded fan-out queues; opt-in blob TTL; published capacity limits | Message-log GC (design in §3.4); disk quotas; measured throughput |
 | **4** | `/healthz`; connect/disconnect/subscribe logging; `deploy/RUNBOOK.md`; actionable WebAuthn config failure; token-gated Prometheus metrics; append-latency histogram; `deploy/alerts.yml` | OpenTelemetry tracing; SLOs |
 | **5** | Dialog semantics + focus management on all overlays; WCAG AA contrast; iOS storage-eviction fix; drawer `aria-expanded`/`aria-controls` + labelled landmarks; 44px touch targets; `prefers-color-scheme` with a system-following default; rail unread badges; local message search; PWA offline shell; update notice; persistent kept-history indicator; voice participant cap | mention badges; iOS add-to-home-screen interstitial; wake lock; visualViewport; popstate |
-| **7** | `SECURITY.md`; `docs/THREAT_MODEL.md` | cargo-fuzz targets on protocol parsing; epoch state-machine simulation harness |
+| **7** | `SECURITY.md`; `docs/THREAT_MODEL.md`; epoch state-machine simulation harness (`relay/tests/epoch_model.rs`) | cargo-fuzz targets on protocol parsing (blocked on a toolchain decision, §7 below); commissioning the external review |
 
 **Phase 6 is dropped** by decision — see *Decisions taken*. Device
 revocation and identity key rotation were pulled out of it and remain open;
@@ -45,11 +44,9 @@ there is still no way to revoke a device short of burning the handle.
 ### Next, in order
 
 1. §1.2's sibling work: device revocation and identity key rotation.
-2. Reproducible builds — the one part of §2.6 still outstanding, and the only
-   real answer to operator-served code (`THREAT_MODEL.md` §6.2).
-3. Recovery for groups that forked *before* §1.1 landed.
-4. Phase 7's fuzzing and simulation harness.
-5. Phase 3's message-log GC (design and its hazard are in §3.4) and Phase 4's
+2. Recovery for groups that forked *before* §1.1 landed.
+3. Phase 7's fuzzing, once the nightly-toolchain question below is answered.
+4. Phase 3's message-log GC (design and its hazard are in §3.4) and Phase 4's
    tracing.
 
 ---
@@ -952,9 +949,47 @@ such — it is not something this plan can discharge.
   full penetration test. Non-negotiable for a security product; schedule after
   Phase 1 so the findings are about design, not known bugs.
 - **Fuzzing** (`cargo-fuzz`) on `proto` parsing and KeyPackage/Welcome/commit
-  deserialization.
-- **Model the epoch state machine** — the concurrent-commit fork (1.1) is the
-  kind of bug an exhaustive simulation harness finds and unit tests do not.
+  deserialization. **Blocked on a decision, not on work.** `cargo-fuzz` needs
+  a nightly compiler for `-Z sanitizer=address`, and this repo now pins
+  `1.94.0` in `rust-toolchain.toml` precisely so that every build uses one
+  compiler — that pin is what makes the reproducible-build check (§2.6) mean
+  anything. Three ways out, in order of preference:
+  1. A separate `fuzz/` workspace with its own `rust-toolchain.toml` on
+     nightly, run in a non-blocking scheduled CI job. Keeps the release pin
+     intact; costs a second toolchain to keep alive.
+  2. `afl.rs` or `honggfuzz`, which run on stable. Weaker coverage guidance
+     than libFuzzer, and neither is as well maintained.
+  3. Structured property tests (`arbitrary` + `proptest`) on the same parsers
+     on stable. Not fuzzing — no coverage feedback, no corpus — but it does
+     run in the existing gate on every commit.
+
+  Recommendation: (1). Do not unpin the toolchain for it; a floating compiler
+  would trade a verifiable release property for a testing convenience.
+- **Model the epoch state machine** — DONE, `relay/tests/epoch_model.rs`.
+  A seeded simulation of the §1.1 protocol: four clients, each holding the
+  state a real one holds (merged epoch, log cursor, staged-but-unacked
+  commit), with a PRNG choosing who acts next. Invariants are asserted after
+  every step, over 64 seeds × 200 steps.
+
+  The load-bearing one is *no client's merged epoch ever runs ahead of what
+  the relay accepted* — that is the fork, stated as an assertion. Alongside
+  it: one winner per epoch, accepted commits form a gapless chain from 1,
+  refused commits leave nothing in the log, the log a client replays has no
+  holes, and an application message may carry a stale epoch but never a
+  future one.
+
+  Two things the sweep cannot do, each with its own test. It cannot prove the
+  CAS is *atomic*, because a sequential interleaving never races — so 32
+  tokio tasks commit at one epoch on a multi-thread runtime and exactly one
+  wins. And a random sweep does not read as the §1.1 acceptance criterion —
+  so that scenario is also written out literally, two admins committing at
+  one epoch and converging with no message loss.
+
+  Why a sequential model is faithful: the relay appends under a per-group
+  send lock, so every real execution *is* some serial order of these steps.
+  The sweep asserts it actually raced (it fails if the run produced no epoch
+  conflicts) and that a seed replays identically, so a CI failure is
+  reproducible from the seed in its message rather than being a lottery.
 - **`SECURITY.md`**, coordinated disclosure policy, and a bug bounty.
 - **SOC 2 Type II readiness** if pursuing enterprise sales — largely a function
   of Phases 2–4 producing evidence (change management, access control,
