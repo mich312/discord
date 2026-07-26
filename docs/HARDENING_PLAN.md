@@ -2,21 +2,24 @@
 
 Status: proposed. Written against `266d974`.
 
-**Progress.** Phase 0 is complete except part of §0.7. §1.1 and the §2.1 CI
-gate are also done. All of it is green in CI.
+**Progress.** Phase 0 is complete apart from one item (the replayable
+`password_login`, which needs the same challenge-response the WS path
+already does). §1.1 and the §2.1 CI gate are also done. All of it is green
+in CI.
 
 Done: §0.1 KeyPackage identity binding · §0.2 key-bound verification ·
 §0.3 auth-challenge binding + `?relay=` allowlist · §0.4 invite gate
 consuming a use · §0.5 blob upload tickets · §0.6 fail-closed
 authorization · §0.8 removal hardening ·
 §1.1 staged commits + relay epoch CAS · §2.1 the CI gate.
-Also from §0.7: game-iframe origin isolation, CORS scoping, IPv6 /64
-rate-limit bucketing, and the X-Forwarded-For hop fix.
+§0.7: game-iframe origin isolation, CORS scoping, IPv6 /64 rate-limit
+bucketing, the X-Forwarded-For hop fix, passkey-wrap cross-user takeover,
+`FetchKp` KeyPackage drain, and `Welcome` targeting arbitrary handles.
 
 Open, in the order I would take them:
-1. §0.7 remainder — passkey-wrap cross-user takeover, `FetchKp` being
-   unauthenticated and destructive, `Welcome` not constraining `to`,
-   replayable `password_login`.
+1. §0.7 remainder — `password_login` is a replayable bearer credential
+   (`account.rs:203-228`): no nonce, no timestamp. Capture one request body
+   and replay it forever to retrieve `wrapped`.
 2. §1.2–§1.8 — atomic persistence, error taxonomy, infrastructure-failure
    handling, voice glare, store conformance, protocol versioning.
 3. Recovery for groups that forked *before* §1.1 landed.
