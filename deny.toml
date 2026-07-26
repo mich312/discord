@@ -1,0 +1,43 @@
+# cargo-deny: supply-chain gate for the Rust side.
+#
+# This is a security product with a cryptographic core, so a known-vulnerable
+# or unmaintained dependency is a release-blocking fact rather than a warning
+# to triage later. Run locally with `cargo deny check`; CI runs it on every
+# push and pull request.
+
+[advisories]
+# Any advisory against anything we build is an error. There are no
+# exceptions listed, and adding one should require saying why in review.
+yanked = "deny"
+
+[bans]
+# Two copies of a crypto crate means two copies of its bug fixes, and the
+# one you audited may not be the one that runs.
+multiple-versions = "warn"
+wildcards = "deny"
+
+[licenses]
+# Permissive only. Copyleft in a client that ships to browsers is a
+# distribution question nobody here has answered, so refuse by default
+# rather than discover it at release.
+allow = [
+    "MIT",
+    "Apache-2.0",
+    "Apache-2.0 WITH LLVM-exception",
+    "BSD-2-Clause",
+    "BSD-3-Clause",
+    "ISC",
+    "Unicode-3.0",
+    "Unicode-DFS-2016",
+    "Zlib",
+    "CC0-1.0",
+    "MPL-2.0",
+]
+confidence-threshold = 0.9
+
+[sources]
+unknown-registry = "deny"
+unknown-git = "deny"
+# crates.io only. A git dependency in a crypto stack is an unpinned,
+# unreviewed input.
+allow-registry = ["https://github.com/rust-lang/crates.io-index"]

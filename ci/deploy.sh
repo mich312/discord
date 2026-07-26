@@ -24,12 +24,16 @@ compose() {
     -f deploy/docker-compose.turn.yml "$@"
 }
 
+# Health means "the relay is up AND can reach its database". This used to
+# fetch "$URL" (the client's index.html, served by ServeDir) and accept any
+# 1xx-4xx — so a 404, a 403, or a relay with a dead Postgres behind it all
+# passed, and a broken deploy was never rolled back.
 healthy() {
   sleep 3   # give the relay a moment to boot + reach postgres
   for _ in $(seq 1 18); do   # ~90s
-    code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 "$URL") || code=000
-    echo "  $URL -> $code"
-    case "$code" in [1-4][0-9][0-9]) return 0 ;; esac   # 000/5xx (e.g. 502) = down
+    code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 "$URL/healthz") || code=000
+    echo "  $URL/healthz -> $code"
+    case "$code" in 2[0-9][0-9]) return 0 ;; esac   # only a real 2xx is healthy
     sleep 5
   done
   return 1

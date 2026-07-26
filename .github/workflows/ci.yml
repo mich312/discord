@@ -66,6 +66,38 @@ jobs:
         continue-on-error: true
         run: cargo clippy --workspace --all-targets -- -D warnings
 
+  supply-chain:
+    name: supply chain
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    steps:
+      - uses: actions/checkout@v4
+
+      # Known-vulnerable, yanked, unmaintained, or non-permissively-licensed
+      # dependencies in a crypto stack are a release-blocking fact, not a
+      # warning to triage later. Config in deny.toml.
+      - uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+
+      # The client has three runtime dependencies, so a high-severity
+      # advisory here is both rare and worth stopping for.
+      - name: npm audit
+        run: npm audit --audit-level=high
+        working-directory: client
+
+      # The lockfile must already satisfy package.json: `npm ci` fails if it
+      # does not, which catches a hand-edited manifest before it ships.
+      - name: lockfile is in sync
+        run: npm ci --ignore-scripts
+        working-directory: client
+
   client:
     name: client tests
     runs-on: ubuntu-latest

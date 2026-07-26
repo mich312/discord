@@ -64,6 +64,11 @@ pub fn router(app: Arc<App>) -> Router {
         // the onboarding UI say "invite-only" up front instead of failing
         // after key generation. The WS handshake enforces it regardless.
         .route("/register/policy", axum::routing::get(register_policy))
+        // Liveness/readiness. The deploy health check used to fetch "/",
+        // which is a static file served by ServeDir — it stayed 200 with a
+        // dead database behind it. This touches the store, so a relay that
+        // cannot reach Postgres reports unhealthy instead of passing.
+        .route("/healthz", axum::routing::get(healthz))
         // Account sign-in (pre-auth: a new device has no identity key yet).
         // Rate-limited per client: these are the online-guessing and
         // username-enumeration surfaces.
@@ -116,6 +121,21 @@ pub fn router(app: Arc<App>) -> Router {
 
 async fn ws_handler(ws: WebSocketUpgrade, State(app): State<Arc<App>>) -> impl IntoResponse {
     ws.on_upgrade(move |socket| server::handle_socket(socket, app))
+}
+
+async fn healthz(State(app): State<Arc<App>>) -> impl IntoResponse {
+    match app.store.user_count().await {
+        Ok(users) => (
+            StatusCode::OK,
+            axum::Json(serde_json::json!({ "ok": true, "users": users })),
+        )
+            .into_response(),
+        Err(e) => (
+            StatusCode::SERVICE_UNAVAILABLE,
+            axum::Json(serde_json::json!({ "ok": false, "error": e.to_string() })),
+        )
+            .into_response(),
+    }
 }
 
 async fn register_policy(State(app): State<Arc<App>>) -> impl IntoResponse {
