@@ -836,6 +836,10 @@ async fn handle_request(
             // Lock order is always send-lock then hub, never the reverse, so
             // the two cannot deadlock.
             let send_lock = { app.hub.lock().await.send_lock(&group) };
+            // Started before the lock is awaited, on purpose: waiting behind
+            // a busy circle is latency the sender feels, and excluding it
+            // would hide exactly the contention this metric exists to find.
+            let started = std::time::Instant::now();
             let _ordered = send_lock.lock().await;
             let seq = {
                 let seq = match app
@@ -845,6 +849,7 @@ async fn handle_request(
                 {
                     Ok(s) => {
                         app.metrics.messages_appended.inc();
+                        app.metrics.append_latency.observe_ms(started.elapsed().as_millis() as u64);
                         s
                     }
                     Err(e) => {

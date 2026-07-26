@@ -59,6 +59,57 @@ pub struct SendRejections {
     pub backend: Counter,
 }
 
+/// Upper bounds, in milliseconds. Chosen around what this path actually does
+/// — a single indexed insert behind a per-group lock — so the interesting
+/// region (1–100ms) has resolution and the tail is still visible.
+const LATENCY_BUCKETS_MS: [u64; 11] =
+    [1, 5, 10, 25, 50, 100, 250, 500, 1_000, 2_500, 5_000];
+
+/// A fixed-bucket histogram.
+///
+/// Prometheus wants *cumulative* buckets, but counting cumulatively on every
+/// observation would mean touching every bucket per sample. So each
+/// observation increments exactly one bucket and `render` accumulates — the
+/// cost lands on the scrape, which happens once every fifteen seconds rather
+/// than once per message.
+#[derive(Default, Debug)]
+pub struct Histogram {
+    /// One per bucket, plus a final slot for everything past the last bound.
+    buckets: [AtomicU64; LATENCY_BUCKETS_MS.len() + 1],
+    sum_ms: AtomicU64,
+    count: AtomicU64,
+}
+
+impl Histogram {
+    pub fn observe_ms(&self, ms: u64) {
+        let idx = LATENCY_BUCKETS_MS
+            .iter()
+            .position(|&b| ms <= b)
+            .unwrap_or(LATENCY_BUCKETS_MS.len());
+        self.buckets[idx].fetch_add(1, Ordering::Relaxed);
+        self.sum_ms.fetch_add(ms, Ordering::Relaxed);
+        self.count.fetch_add(1, Ordering::Relaxed);
+    }
+
+    fn render(&self, out: &mut String, name: &str, help: &str) {
+        out.push_str(&format!("# HELP {name} {help}\n# TYPE {name} histogram\n"));
+        let mut running = 0u64;
+        for (i, bound) in LATENCY_BUCKETS_MS.iter().enumerate() {
+            running += self.buckets[i].load(Ordering::Relaxed);
+            // Seconds, not milliseconds: Prometheus convention is base units,
+            // and every dashboard and alert expression assumes it.
+            let le = *bound as f64 / 1000.0;
+            out.push_str(&format!("{name}_bucket{{le=\"{le}\"}} {running}\n"));
+        }
+        running += self.buckets[LATENCY_BUCKETS_MS.len()].load(Ordering::Relaxed);
+        // +Inf must equal _count, or the series is malformed.
+        out.push_str(&format!("{name}_bucket{{le=\"+Inf\"}} {running}\n"));
+        let sum = self.sum_ms.load(Ordering::Relaxed) as f64 / 1000.0;
+        out.push_str(&format!("{name}_sum {sum}\n"));
+        out.push_str(&format!("{name}_count {}\n", self.count.load(Ordering::Relaxed)));
+    }
+}
+
 #[derive(Debug)]
 pub struct Metrics {
     pub started: Instant,
@@ -83,6 +134,11 @@ pub struct Metrics {
     /// Attachments deleted by the blob sweep. Only moves when BLOB_TTL_DAYS
     /// is set.
     pub blobs_swept: Counter,
+    /// How long an accepted append takes: the Postgres round trip plus any
+    /// wait for this group's send lock. The one number that answers "is the
+    /// relay slow, or is it the network?" — and the reason §3.1 replaced the
+    /// global hub mutex with per-group locks.
+    pub append_latency: Histogram,
     /// Subscribers cut loose for falling too far behind their outbound
     /// queue. Lossless — they reconnect and catch up from the log — but it
     /// looks to the user exactly like a lost message, so it must be visible.
@@ -107,6 +163,7 @@ impl Default for Metrics {
             blob_tickets_refused: Counter::default(),
             history_swept: Counter::default(),
             blobs_swept: Counter::default(),
+            append_latency: Histogram::default(),
             subscribers_dropped: Counter::default(),
         }
     }
@@ -269,6 +326,11 @@ impl Metrics {
              message to the person it happens to.",
             self.subscribers_dropped.get(),
         );
+        self.append_latency.render(
+            &mut out,
+            "quorum_append_duration_seconds",
+            "Time to append one message to the log, including any wait for the group's send lock.",
+        );
         counter(
             &mut out,
             "quorum_blobs_swept_total",
@@ -348,8 +410,55 @@ mod tests {
             .map(|l| l.split(['{', ' ']).next().unwrap_or_default())
             .collect();
         for name in names {
-            assert!(out.contains(&format!("# HELP {name} ")), "{name} has no HELP line");
+            // A histogram documents its family once; _bucket/_sum/_count are
+            // sub-series of it, not metrics in their own right.
+            let family = name
+                .strip_suffix("_bucket")
+                .or_else(|| name.strip_suffix("_sum"))
+                .or_else(|| name.strip_suffix("_count"))
+                .unwrap_or(name);
+            assert!(
+                out.contains(&format!("# HELP {family} ")),
+                "{name} has no HELP line"
+            );
         }
+    }
+
+    #[test]
+    fn a_latency_sample_lands_in_exactly_one_bucket_and_all_above_it() {
+        // Prometheus buckets are cumulative. Getting this wrong produces a
+        // histogram that parses and quietly reports nonsense.
+        let m = Metrics::default();
+        m.append_latency.observe_ms(7);
+        let out = m.render(Snapshot::default());
+        assert!(out.contains("quorum_append_duration_seconds_bucket{le=\"0.005\"} 0"), "{out}");
+        assert!(out.contains("quorum_append_duration_seconds_bucket{le=\"0.01\"} 1"), "{out}");
+        assert!(out.contains("quorum_append_duration_seconds_bucket{le=\"5\"} 1"), "{out}");
+        assert!(out.contains("quorum_append_duration_seconds_bucket{le=\"+Inf\"} 1"), "{out}");
+        assert!(out.contains("quorum_append_duration_seconds_count 1"), "{out}");
+    }
+
+    #[test]
+    fn a_sample_past_the_last_bucket_still_counts() {
+        // The slowest appends are the ones worth alerting on; dropping them
+        // would make the tail look clean precisely when it is not.
+        let m = Metrics::default();
+        m.append_latency.observe_ms(30_000);
+        let out = m.render(Snapshot::default());
+        assert!(out.contains("quorum_append_duration_seconds_bucket{le=\"5\"} 0"), "{out}");
+        assert!(out.contains("quorum_append_duration_seconds_bucket{le=\"+Inf\"} 1"), "{out}");
+        assert!(out.contains("quorum_append_duration_seconds_count 1"), "{out}");
+        // Seconds, not milliseconds: every alert expression assumes base units.
+        assert!(out.contains("quorum_append_duration_seconds_sum 30"), "{out}");
+    }
+
+    #[test]
+    fn an_untouched_histogram_still_publishes_its_series() {
+        // A series that appears only once it is non-zero cannot be graphed or
+        // alerted on before the incident that creates it.
+        let out = body();
+        assert!(out.contains("quorum_append_duration_seconds_count 0"), "{out}");
+        assert!(out.contains("# TYPE quorum_append_duration_seconds histogram"), "{out}");
     }
 
     #[test]

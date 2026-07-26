@@ -1,0 +1,152 @@
+# Prometheus alerting rules for a quorum relay.
+#
+# Load with:
+#   rule_files:
+#     - /etc/prometheus/alerts.yml
+#
+# and scrape with the token (see README's METRICS_TOKEN):
+#   scrape_configs:
+#     - job_name: quorum
+#       authorization:
+#         type: Bearer
+#         credentials_file: /etc/prometheus/quorum-token
+#       static_configs:
+#         - targets: ['relay:80']
+#
+# Every rule here fires on something an operator can actually do something
+# about, and every annotation points at the section of deploy/RUNBOOK.md that
+# says what. Rules that only produce a feeling have been left out.
+#
+# Deliberately absent: an alert on message rate. There is no known-good
+# baseline to compare against — docs/CAPACITY.md is explicit that throughput
+# has never been measured — and an alert with an invented threshold trains
+# people to ignore alerts.
+
+groups:
+  - name: quorum-availability
+    rules:
+      - alert: QuorumRelayDown
+        # `up` is Prometheus's own per-target metric, so this fires even when
+        # the relay is too dead to serve /metrics.
+        expr: up{job="quorum"} == 0
+        for: 2m
+        labels: { severity: page }
+        annotations:
+          summary: "Relay is not answering scrapes"
+          runbook: "deploy/RUNBOOK.md — 'Relay is down'"
+          description: >-
+            Check `docker compose ps` and the last 50 log lines. A crash loop
+            on startup is almost always RP_ID / RP_ORIGIN not matching the
+            origin users load the client from.
+
+      - alert: QuorumRestartLoop
+        # Uptime that keeps resetting is a relay that keeps dying — which the
+        # up==0 alert can miss entirely if it restarts fast enough.
+        expr: quorum_uptime_seconds < 300
+        for: 15m
+        labels: { severity: page }
+        annotations:
+          summary: "Relay has restarted repeatedly for 15 minutes"
+          runbook: "deploy/RUNBOOK.md — 'Relay is down'"
+
+  - name: quorum-delivery
+    rules:
+      - alert: QuorumAppendsSlow
+        # The p95 of the whole append, including the wait for the group's send
+        # lock. A slow disk and a contended circle both land here, which is
+        # the point: the sender feels both the same way.
+        expr: >-
+          histogram_quantile(
+            0.95,
+            sum(rate(quorum_append_duration_seconds_bucket[5m])) by (le)
+          ) > 1
+        for: 10m
+        labels: { severity: warn }
+        annotations:
+          summary: "p95 message append is over 1s"
+          description: >-
+            Look at Postgres first — this timing is dominated by one indexed
+            insert. If the database is healthy, one very busy circle is
+            serialising behind its own send lock, which is by design.
+
+      - alert: QuorumSubscribersBeingDropped
+        # Recoverable — they reconnect and catch up from the log — but to the
+        # person it happens to it is indistinguishable from a lost message.
+        expr: rate(quorum_subscribers_dropped_total[10m]) > 0
+        for: 10m
+        labels: { severity: warn }
+        annotations:
+          summary: "Subscribers are being cut for falling behind"
+          description: >-
+            Their outbound queue passed MAX_QUEUE. Sustained, this usually
+            means one circle is producing faster than clients on poor links
+            can drain. Users will report messages arriving late or in bursts.
+
+      - alert: QuorumWelcomesNotBeingDelivered
+        # A welcome that is always queued means devices are never coming back
+        # online to collect it — invitations silently do not land.
+        expr: >-
+          rate(quorum_welcomes_total{disposition="queued"}[1h]) > 0
+          and rate(quorum_welcomes_total{disposition="delivered"}[1h]) == 0
+        for: 1h
+        labels: { severity: warn }
+        annotations:
+          summary: "Every group invitation this hour was queued, none delivered"
+
+  - name: quorum-security
+    rules:
+      - alert: QuorumHandleEnumeration
+        # Failures against *unknown* handles specifically. Ordinary users fail
+        # with bad_signature after losing a key; nobody legitimately probes
+        # handles that do not exist.
+        expr: rate(quorum_ws_auth_failures_total{reason="unregistered"}[5m]) > 1
+        for: 10m
+        labels: { severity: warn }
+        annotations:
+          summary: "Sustained handshakes against handles that do not exist"
+          description: >-
+            Consistent with someone enumerating handles. The per-client rate
+            limiter caps each source; a distributed attempt will show here
+            before it shows anywhere else.
+
+      - alert: QuorumBlobTicketAbuse
+        expr: rate(quorum_blob_tickets_refused_total[5m]) > 1
+        for: 10m
+        labels: { severity: info }
+        annotations:
+          summary: "Repeated attachment uploads without a valid ticket"
+          description: >-
+            The uploads are being refused. Worth noticing, not worth waking
+            for.
+
+  - name: quorum-maintenance
+    rules:
+      - alert: QuorumPushAllFailing
+        # Push failing entirely is nearly always one thing.
+        expr: >-
+          rate(quorum_push_total{outcome="failed"}[30m]) > 0
+          and rate(quorum_push_total{outcome="sent"}[30m]) == 0
+        for: 30m
+        labels: { severity: warn }
+        annotations:
+          summary: "Every push notification is failing"
+          runbook: "deploy/RUNBOOK.md — 'Push notifications stopped for everyone'"
+          description: >-
+            Almost always a lost VAPID key. Check /data/vapid.key exists. If
+            it is gone and unbacked-up, every existing subscription is
+            addressed to a key you no longer hold.
+
+      - alert: QuorumRetentionSweepStalled
+        # Auto-delete is a promise to users. A sweep that stops running turns
+        # it into a lie, silently, with no other symptom.
+        expr: >-
+          increase(quorum_history_swept_total[24h]) == 0
+          and quorum_uptime_seconds > 86400
+        for: 6h
+        labels: { severity: info }
+        annotations:
+          summary: "No expired history swept in 24 hours"
+          description: >-
+            Expected on a relay where no channel has retention set — confirm
+            that before investigating. Otherwise the hourly sweeper is not
+            running and auto-delete is not being honoured.

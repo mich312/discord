@@ -40,6 +40,10 @@ The three counters worth an alert:
 | `quorum_push_total{outcome="failed"}` | all-failing is a lost VAPID key — see *Push notifications stopped* |
 | `quorum_history_swept_total` | flat at zero forever means the retention sweep is not running |
 
+Ready-made rules for all of these — plus append latency, dropped subscribers,
+and undelivered invitations — are in `deploy/alerts.yml`. Every rule points
+back at the section of this runbook that says what to do.
+
 State that must survive lives in exactly three places, and one of them is
 not where you would look:
 
@@ -149,7 +153,9 @@ Three things grow, and only one of them currently shrinks:
   have long retention or none; that is a per-channel setting only members
   can change.
 - **Messages** — the MLS log. **Never pruned.** Every ciphertext ever sent
-  is still there. There is no retention job yet; this is a known gap.
+  is still there. This is a known gap, and not a simple one: the log carries
+  the MLS commits that define each epoch, and deleting one strands any device
+  that has not yet processed it. See §3.4 of `docs/HARDENING_PLAN.md`.
 - **Attachment blobs** — kept forever *unless* you set `BLOB_TTL_DAYS`.
 
 Immediate relief, in order of preference: raise the volume size; then set
