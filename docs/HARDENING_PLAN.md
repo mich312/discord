@@ -25,7 +25,7 @@ analysis; this is the current state.
 | Phase | Done | Open |
 |---|---|---|
 | **3** | Per-group send locks (global hub mutex gone); hourly history sweep; recorded schema version with a rollback guard; bounded fan-out queues; opt-in blob TTL; published capacity limits | Message-log GC (design in §3.4); disk quotas; measured throughput |
-| **4** | `/healthz`; connect/disconnect/subscribe logging; `deploy/RUNBOOK.md`; actionable WebAuthn config failure; token-gated Prometheus metrics; append-latency histogram; `deploy/alerts.yml` | OpenTelemetry tracing; SLOs |
+| **4** | `/healthz`; connect/disconnect/subscribe logging; `deploy/RUNBOOK.md`; actionable WebAuthn config failure; token-gated Prometheus metrics; append-latency histogram; `deploy/alerts.yml`; three SLOs with error-budget burn alerts (`docs/SLO.md`, `deploy/slo-rules.yml`) | OpenTelemetry tracing (a dependency decision, see §4) |
 | **5** | Dialog semantics + focus management on all overlays; WCAG AA contrast; iOS storage-eviction fix; drawer `aria-expanded`/`aria-controls` + labelled landmarks; 44px touch targets; `prefers-color-scheme` with a system-following default; rail unread badges; local message search; PWA offline shell; update notice; persistent kept-history indicator; voice participant cap | mention badges; iOS add-to-home-screen interstitial; wake lock; visualViewport; popstate |
 | **7** | `SECURITY.md`; `docs/THREAT_MODEL.md`; epoch state-machine simulation harness (`relay/tests/epoch_model.rs`) | cargo-fuzz targets on protocol parsing (blocked on a toolchain decision, §7 below); commissioning the external review |
 
@@ -60,8 +60,9 @@ remains open.
 2. Automatic fork recovery — detection landed in §1.1 part 4; getting a
    current GroupInfo to a stranded device needs the decision recorded there.
 3. Phase 7's fuzzing, once the nightly-toolchain question below is answered.
-4. Phase 3's message-log GC (design and its hazard are in §3.4) and Phase 4's
-   tracing.
+4. Phase 3's message-log GC (design and its hazard are in §3.4). Phase 4's
+   tracing is now a dependency decision rather than open work — options and a
+   recommendation are in §4.
 
 ---
 
@@ -755,6 +756,34 @@ literally nothing to look at.
 - **Metrics** (Prometheus): connections, messages/sec, per-group fan-out size,
   push success rate, DB latency, blob bytes written, error rates by class.
 - **Distributed tracing** (OpenTelemetry) across the WS handler and store.
+  **Not done, and it needs a decision rather than an afternoon.** The crates
+  (`opentelemetry`, `opentelemetry-otlp`, `tracing-opentelemetry`) bring a
+  large transitive tree — tonic, prost, hyper and their dependencies — into a
+  binary whose supply chain is deliberately gated (`deny.toml`, and every
+  advisory against it is release-blocking). That is a real cost to weigh
+  against what tracing buys *here*: the relay is a single process in front of
+  one database, so there are no service hops to correlate. The question
+  "why aren't my messages arriving?" is already answered by the append-latency
+  histogram plus the per-reason rejection counters.
+
+  Three options:
+  1. **Correlation ids in the existing `tracing` spans** — a connection id and
+     `rid` on every event, `tracing-subscriber`'s JSON formatter. No new
+     dependencies; makes one device's session greppable end to end. Covers
+     most of what an operator actually does.
+  2. **Full OTel export.** Right answer the moment a second service exists
+     (a worker, a media server, a read replica). Today it is a large
+     dependency surface for one process.
+  3. Nothing further.
+
+  Recommendation: (1) now, (2) when the topology stops being one box.
+
+- **Service level objectives** — DONE. `docs/SLO.md` and
+  `deploy/slo-rules.yml`: availability 99.5%, send acceptance 99.9%, append
+  latency (under 1s) 99%, each with multi-window burn-rate alerts. The
+  interesting decision is recorded there — `epoch_conflict` is excluded from
+  the error budget, because counting the fork protection's correct refusals as
+  failures would make the objective improve as §1.1 got worse.
 - **`/healthz` and `/readyz`** with a store round-trip and the build SHA.
 - **Runbooks and alerts** for the four realistic incidents: messages not
   arriving, disk full, push delivery failing, cert expiry.

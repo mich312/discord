@@ -44,6 +44,22 @@ Ready-made rules for all of these — plus append latency, dropped subscribers,
 and undelivered invitations — are in `deploy/alerts.yml`. Every rule points
 back at the section of this runbook that says what to do.
 
+`deploy/slo-rules.yml` is the second half: three service level objectives and
+error-budget burn alerts against them. Load both.
+
+```yaml
+rule_files:
+  - /etc/prometheus/alerts.yml
+  - /etc/prometheus/slo-rules.yml
+```
+
+The two answer different questions on purpose. `alerts.yml` fires on *this is
+broken now*; the burn alerts fire on *this is failing often enough to matter
+over a month*, which is what tells you whether an incident was noise or the
+start of a trend. Targets, and why each is the number it is, are in
+`docs/SLO.md`. A `severity: page` burn alert means the month's budget is on
+track to be gone in about two days.
+
 State that must survive lives in exactly three places, and one of them is
 not where you would look:
 

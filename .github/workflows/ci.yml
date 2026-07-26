@@ -172,6 +172,30 @@ jobs:
             -f deploy/docker-compose.edge.yml \
             -f deploy/docker-compose.turn.yml config >/dev/null
 
+      # Prometheus refuses to start on a malformed rule file, so a typo here
+      # takes monitoring down with it — and monitoring is exactly what nobody
+      # is watching when it breaks. `relay/tests/slo_rules.rs` covers the
+      # harder half (that the metric names are real); this covers the half
+      # that stops the file loading at all.
+      - name: the alerting and SLO rules are well-formed
+        run: |
+          python3 - <<'PY'
+          import sys, yaml
+          bad = 0
+          for f in ('deploy/alerts.yml', 'deploy/slo-rules.yml'):
+              for g in yaml.safe_load(open(f))['groups']:
+                  for r in g['rules']:
+                      what = r.get('alert') or r.get('record')
+                      if 'expr' not in r:
+                          print(f'{f}: {what} has no expr'); bad += 1
+                      if 'alert' in r:
+                          if not r.get('annotations', {}).get('summary'):
+                              print(f'{f}: alert {what} has no summary'); bad += 1
+                          if not r.get('labels', {}).get('severity'):
+                              print(f'{f}: alert {what} has no severity'); bad += 1
+          sys.exit(1 if bad else 0)
+          PY
+
       - name: the image ref is overridable, and defaults to a local build
         # deploy.sh switches on QUORUM_IMAGE; if compose stopped honouring it,
         # every deploy would silently keep running the old build-on-server path.
