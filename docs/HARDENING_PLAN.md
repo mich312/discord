@@ -19,7 +19,7 @@ analysis; this is the current state.
 | Phase | Done | Open |
 |---|---|---|
 | **2** | CI gate, supply chain, deploy health gate + pinned host keys | §2.2 extract `applyEnvelope`/`AccountService`; §2.3 coverage for the named risky paths; §2.4 image-based deploy with fast rollback; §2.6 reproducible builds + integrity manifest for worker and wasm |
-| **3** | Per-group send locks (global hub mutex gone); hourly history sweep; schema versioning with downgrade protection | Bounded outbound queues; blob and message GC; publish the ceiling |
+| **3** | Per-group send locks (global hub mutex gone); hourly history sweep | Bounded outbound queues; blob and message GC; schema versioning; publish the ceiling |
 | **4** | `/healthz`; connect/disconnect/subscribe logging; `deploy/RUNBOOK.md`; actionable WebAuthn config failure | Prometheus metrics; OpenTelemetry tracing; alerting |
 | **5** | Dialog semantics + focus management on all overlays; WCAG AA contrast; iOS storage-eviction fix; drawer `aria-expanded`/`aria-controls` + labelled landmarks; 44px touch targets | PWA offline shell; rail unread badges; local search; `prefers-color-scheme` |
 | **7** | `SECURITY.md`; `docs/THREAT_MODEL.md` | cargo-fuzz targets on protocol parsing; epoch state-machine simulation harness |
