@@ -5,7 +5,7 @@
 
 use crate::account::AccountService;
 use crate::blobs::{BlobStore, UploadTickets};
-use crate::proto::{ClientMsg, GroupEntry, MemberEntry, ServerMsg, AUTH_CONTEXT};
+use crate::proto::{ClientMsg, GroupEntry, MemberEntry, ServerMsg, AUTH_CONTEXT, PROTOCOL_VERSION};
 use crate::push::PushService;
 use crate::ratelimit::RateLimiter;
 use crate::store::{
@@ -257,7 +257,14 @@ async fn next_text(socket: &mut WebSocket) -> Option<String> {
 async fn authenticate(socket: &mut WebSocket, app: &App) -> Option<String> {
     let hello = next_text(socket).await?;
     let (user, claimed_key, invite) = match serde_json::from_str::<ClientMsg>(&hello) {
-        Ok(ClientMsg::Hello { user, pubkey, invite }) => (user, pubkey, invite),
+        Ok(ClientMsg::Hello { user, pubkey, invite, v }) => {
+            if let Some(v) = v {
+                if v != PROTOCOL_VERSION {
+                    tracing::debug!(client_version = v, "protocol version skew");
+                }
+            }
+            (user, pubkey, invite)
+        }
         _ => {
             let _ = send_json(socket, &ServerMsg::Error { rid: None, message: "expected hello".into() }).await;
             return None;

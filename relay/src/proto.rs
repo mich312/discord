@@ -18,6 +18,13 @@ pub enum ClientMsg {
         pubkey: String,
         #[serde(default)]
         invite: Option<String>,
+        /// Client wire-protocol version. Optional so an older client still
+        /// parses. Not enforced — it is here so that a skew between a cached
+        /// client and an upgraded relay is diagnosable rather than showing up
+        /// as arbitrary downstream failures. The handshake previously carried
+        /// no version at all.
+        #[serde(default)]
+        v: Option<u32>,
     },
     /// Signature over `AUTH_CONTEXT || nonce || u32be(len(user)) || user`.
     Auth { sig: String },
@@ -239,3 +246,6 @@ pub struct HistoryEntryOut {
 /// captured for one identity was a valid proof for any other, and a hostile
 /// relay could forward the real relay's nonce and replay the answer.
 pub const AUTH_CONTEXT: &[u8] = b"relay-auth-v2";
+
+/// Wire protocol version this relay speaks. See `ClientMsg::Hello::v`.
+pub const PROTOCOL_VERSION: u32 = 1;
