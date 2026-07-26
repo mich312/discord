@@ -70,12 +70,16 @@ jobs:
     name: supply chain
     runs-on: ubuntu-latest
     timeout-minutes: 20
-    # Non-blocking ONLY because of one outstanding advisory that cannot be
-    # fixed from this repository (libcrux-sha3 0.0.8, pinned by hpke-rs) and
-    # which is assessed as unreachable for our ciphersuite — the reasoning is
-    # in deny.toml. The job still runs on every push and its findings are
-    # visible; make it blocking again once openmls_rust_crypto bumps.
-    continue-on-error: true
+    # This job is BLOCKING again. It was marked `continue-on-error` at the job
+    # level to tolerate the outstanding libcrux-sha3 advisories, and that was
+    # the wrong lever: job-level tolerance still lets a failing step SKIP every
+    # step after it. The result was that `npm audit` and the lockfile-sync
+    # check silently stopped running altogether while the run stayed green —
+    # one un-fixable Rust advisory quietly disabled the client's supply-chain
+    # checks too.
+    #
+    # The tolerance now sits on the single step that needs it, so everything
+    # downstream still runs and still gates.
     steps:
       - uses: actions/checkout@v4
 
@@ -87,7 +91,14 @@ jobs:
       # tree has never been audited on either axis, so failing on them now
       # would be red for reasons unrelated to the change under review. Same
       # staging as clippy above.
-      - uses: EmbarkStudios/cargo-deny-action@v2
+      # Tolerated at the STEP, not the job: the two outstanding libcrux-sha3
+      # advisories cannot be fixed from this repository (hpke-rs pins ^0.0.8)
+      # and the reasoning — including what is and is not established about
+      # reachability — is in deny.toml. Findings stay visible in the log on
+      # every run. Drop this line once the upstream bump lands.
+      - name: cargo-deny advisories and sources (tolerated, see deny.toml)
+        continue-on-error: true
+        uses: EmbarkStudios/cargo-deny-action@v2
         with:
           command: check advisories sources
 
@@ -96,6 +107,20 @@ jobs:
         uses: EmbarkStudios/cargo-deny-action@v2
         with:
           command: check licenses bans
+
+      # Evidence for the two outstanding libcrux-sha3 advisories, printed on
+      # every run so the exception argument in deny.toml can be checked
+      # against the resolver rather than taken on trust. `-e features` is the
+      # point: it shows which feature actually pulls the crate in, which a
+      # plain lockfile read cannot — and misreading exactly that is how the
+      # earlier version of that argument went wrong. Never blocking; this
+      # step exists to inform a decision, not to gate one.
+      - name: why is libcrux-sha3 in the tree (evidence, advisory)
+        continue-on-error: true
+        run: |
+          cargo tree -i libcrux-sha3 -e features || true
+          echo '--- forward, from hpke-rs ---'
+          cargo tree -p hpke-rs -e features --depth 1 || true
 
       - uses: actions/setup-node@v4
         with:
