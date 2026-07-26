@@ -30,7 +30,7 @@ on the /64, not the address, so one allocation cannot mint fresh quota.
 
 | Limit | Where it bites | Status |
 |---|---|---|
-| Voice participants | ~6–8 | **Unenforced.** Calls are a full mesh: every browser holds a connection to every other, so cost grows with the square of the party. Audio-only holds up to roughly 8; each video track makes it worse. There is no cap and no warning — it degrades into unusable audio |
+| Voice participants | 8 (`MESH_LIMIT`) | **Enforced client-side, advisory.** Calls are a full mesh: every browser holds a connection to every other, so cost grows with the square of the party, and each video track makes it worse. The join is refused before the mic is captured and the button reads "full". Media is peer-to-peer with no authority to ask, so two simultaneous joins can both see room — this turns the common case from a silent collapse into a clear refusal, not a guarantee |
 | Members per circle | unknown | MLS tree operations grow with group size, and every membership change is a commit fanned out to everyone. Untested past small groups |
 | Circles per relay | unbounded | Per-group send locks mean circles do not contend with each other; Postgres connection count is the real ceiling |
 | Message log growth | unbounded | Nothing prunes `messages`. See §3.4 of the hardening plan for why naive pruning is unsafe |

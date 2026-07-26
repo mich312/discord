@@ -97,7 +97,7 @@ Everything else in this document is secondary to whether that holds.
 | | Threat | Status |
 |---|---|---|
 | **I** | Every call peer learns every other peer's IP | **OPEN.** No `iceTransportPolicy: 'relay'` option, and nothing in the UI says so. |
-| **D** | Mesh collapse past ~8 participants | **Open.** No cap, no warning. |
+| **D** | Mesh collapse past ~8 participants | **Narrowed.** `MESH_LIMIT` refuses the ninth join before capturing the mic, and the button reads "full". Client-side and so advisory — media is peer-to-peer and simultaneous joins can both see room. |
 
 ## 5. Explicitly accepted risks
 

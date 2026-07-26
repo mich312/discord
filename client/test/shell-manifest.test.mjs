@@ -132,3 +132,24 @@ test('the worker deletes older shell caches on activate', () => {
   assert.match(sw, /caches\.delete/);
   assert.match(sw, /quorum-shell-/);
 });
+
+/* ------------------------------------------------ announcing an update -- */
+
+const { UPDATE_TEXT, updatePrompt } = await import('../src/lib/controller.js');
+
+test('a first install is not announced as an update', () => {
+  // The first visit takes control for the first time, firing the same
+  // controllerchange event. Greeting a new install with "a new version is
+  // ready" is nonsense.
+  assert.equal(updatePrompt(null), false);
+  assert.equal(updatePrompt(undefined), false);
+});
+
+test('a controller swap on an already-controlled page is an update', () => {
+  assert.equal(updatePrompt({}), true);
+});
+
+test('the update notice tells you what to do and does not do it for you', () => {
+  // A tab that reloads itself mid-sentence is worse than a stale one.
+  assert.match(UPDATE_TEXT, /reload/i);
+});

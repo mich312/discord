@@ -21,7 +21,7 @@ analysis; this is the current state.
 | **2** | CI gate, supply chain, deploy health gate + pinned host keys | §2.2 extract `applyEnvelope`/`AccountService`; §2.3 coverage for the named risky paths; §2.4 image-based deploy with fast rollback; §2.6 reproducible builds + integrity manifest for worker and wasm |
 | **3** | Per-group send locks (global hub mutex gone); hourly history sweep; recorded schema version with a rollback guard; bounded fan-out queues; opt-in blob TTL; published capacity limits | Message-log GC (design in §3.4); disk quotas; measured throughput |
 | **4** | `/healthz`; connect/disconnect/subscribe logging; `deploy/RUNBOOK.md`; actionable WebAuthn config failure; token-gated Prometheus metrics | Latency histograms; OpenTelemetry tracing; alert rules |
-| **5** | Dialog semantics + focus management on all overlays; WCAG AA contrast; iOS storage-eviction fix; drawer `aria-expanded`/`aria-controls` + labelled landmarks; 44px touch targets; `prefers-color-scheme` with a system-following default; rail unread badges; local message search; PWA offline shell | update prompt; mention badges; kept-history room indicator; voice participant cap |
+| **5** | Dialog semantics + focus management on all overlays; WCAG AA contrast; iOS storage-eviction fix; drawer `aria-expanded`/`aria-controls` + labelled landmarks; 44px touch targets; `prefers-color-scheme` with a system-following default; rail unread badges; local message search; PWA offline shell; update notice; persistent kept-history indicator; voice participant cap | mention badges; iOS add-to-home-screen interstitial; wake lock; visualViewport; popstate |
 | **7** | `SECURITY.md`; `docs/THREAT_MODEL.md` | cargo-fuzz targets on protocol parsing; epoch state-machine simulation harness |
 
 **Phase 6 is dropped** by decision — see *Decisions taken*. Device
@@ -645,8 +645,17 @@ repo. `client/test/sw-fetch.test.mjs` drives the worker's own handlers in a
 `vm` against a stubbed Cache API. The new code-delivery surface is recorded in
 `docs/THREAT_MODEL.md`.
 
-Still open here: an update prompt when a new shell is waiting; an iOS
-Add-to-Home-Screen interstitial explaining that the install is required both
+The **update notice is done**: a deploy swaps the shell underneath a running
+page (the worker calls `skipWaiting`), so the new cache takes over while the
+tab is still executing the previous bundle and any chunk it loads lazily from
+then on is one the new shell no longer has. `controllerchange` now raises a
+notice — guarded so a *first* install, which fires the same event, is not
+greeted with news of a version it just installed. It tells you to reload
+rather than reloading for you: a tab that reloads itself mid-sentence is a
+worse outcome than a stale one, and only the person typing can judge when it
+is safe.
+
+Still open here: an iOS Add-to-Home-Screen interstitial explaining that the install is required both
 for notifications and for keys to survive; wake lock + Media Session so calls
 survive screen lock; `visualViewport` handling so the composer is not covered
 by the keyboard; `popstate` so the back button closes a drawer rather than
@@ -682,11 +691,27 @@ at this scale the scan is the cheaper correctness story. The palette footer
 states the real limit: **search covers this device only**, because the relay
 holds ciphertext and cannot index it.
 
-A persistent kept-history indicator in the room
-(the forward-secrecy trade is announced once in a chip that scrolls away, which
-falsifies the README's central UX claim). A voice participant cap with a clear
-message instead of a silent mesh meltdown past ~8. An escape hatch on the
-recovery-download gate.
+The **kept-history indicator is done**. The forward-secrecy trade was
+announced once, in a system chip that scrolled out of view — so the README's
+"clearly-labeled trade" was true only for whoever happened to be looking. A
+room whose `chanMeta.hid` is set now carries a standing note in its header:
+*history kept — new members can read back*, with the full trade in its
+tooltip. It is the one item in that strip that is not grey, because it is the
+one that changes what the encryption guarantees.
+
+The **voice participant cap is done**. `MESH_LIMIT` is 8, checked *before* the
+microphone is captured — refusing a call is bad, refusing it having just
+turned on someone's mic is worse — and the join button says "full" rather than
+letting the click fail. The refusal names the reason: calls are peer-to-peer,
+so every extra person costs everyone else bandwidth. It is enforced
+client-side and therefore **advisory**; media is peer-to-peer, there is no
+authority to ask, and two simultaneous joins can both see room. It converts
+the common case from a silent collapse into a clear refusal, which is all a
+client-side check can honestly claim.
+
+Still open here: an escape hatch on the recovery-download gate, and mention
+badges (deliberately — there is no `@handle` affordance in the composer, so a
+matcher would be half a feature).
 
 `prefers-color-scheme` is **done**. The stored preference is now tri-state —
 `'paper' | 'carbon' | null`, where null means follow the system — and a fresh

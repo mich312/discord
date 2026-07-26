@@ -218,6 +218,16 @@ export const Clock = (p) => (
   </Svg>
 );
 
+// Kept history: a stack of pages that stays. Deliberately not a padlock —
+// this room is the one where the forward-secrecy trade has been taken.
+export const Archive = (p) => (
+  <Svg {...p}>
+    <rect x="2.5" y="3" width="11" height="3" />
+    <path d="M3.6 6v6.5h8.8V6" />
+    <path d="M6.5 8.6h3" />
+  </Svg>
+);
+
 export const Reply = (p) => (
   <Svg {...p}>
     <path d="M6.5 4 3 7.3l3.5 3.3" />

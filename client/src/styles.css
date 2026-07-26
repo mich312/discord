@@ -1142,6 +1142,11 @@ kbd {
   white-space: nowrap;
 }
 .retention-note svg { vertical-align: -1.5px; }
+.kept-note svg { vertical-align: -1.5px; }
+/* The forward-secrecy trade is the one thing in this strip that changes what
+   the encryption guarantees, so it is the one thing that is not grey. */
+.kept-note { color: var(--ink-dim); }
+.note-sep { margin: 0 6px; color: var(--ink-mute); }
 
 .scroll { flex: 1; overflow-y: auto; padding: 4px 20px 12px; }
 

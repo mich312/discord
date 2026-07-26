@@ -2590,6 +2590,19 @@ export class Controller {
             this.dispatch({ type: 'select', server: data.group, channel: null });
           }
         });
+        // A deploy swaps the shell underneath a running page: the worker
+        // calls skipWaiting, so the new cache takes over while this tab is
+        // still executing the previous bundle. Anything it loads lazily from
+        // here on is a chunk the new shell no longer has.
+        //
+        // Say so rather than reloading. A tab reloading itself mid-sentence
+        // is a worse outcome than a stale one, and only the person typing
+        // can judge when it is safe.
+        if (updatePrompt(navigator.serviceWorker.controller)) {
+          navigator.serviceWorker.addEventListener('controllerchange', () => {
+            this.dispatch({ type: 'toast', text: UPDATE_TEXT });
+          });
+        }
       }
       return this.swReg;
     } catch (e) {
@@ -2865,6 +2878,20 @@ export class Controller {
 export function messageTs(claimed, now = Date.now()) {
   const t = Number(claimed);
   return Number.isFinite(t) && t > 0 ? t : now;
+}
+
+export const UPDATE_TEXT = 'a new version is ready — reload when you get a moment';
+
+/**
+ * Should a controller change be announced as an update?
+ *
+ * Only when this page was *already* controlled. The very first visit takes
+ * control for the first time, which fires the same event and is not an
+ * update — announcing it would greet every new install with a notice about a
+ * version they just installed.
+ */
+export function updatePrompt(currentController) {
+  return currentController != null;
 }
 
 /** How far back "unread" reaches in a room this device has never opened.

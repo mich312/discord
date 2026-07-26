@@ -34,6 +34,31 @@ import { frameRms, levelFromRms, nextSpeaking } from './meter.js';
 
 const DEFAULT_ICE = [{ urls: 'stun:stun.l.google.com:19302' }];
 
+/// How many people may be in one call.
+///
+/// This is a full mesh: every browser holds a peer connection to every other,
+/// so the connection count grows with the square of the party and each
+/// participant uploads their audio once per peer. Past roughly this many it
+/// does not fail cleanly — it degrades into unusable audio while everyone
+/// blames their own network.
+///
+/// Enforced client-side and therefore **advisory**: media is peer-to-peer,
+/// there is no authority to ask, and two people joining at the same instant
+/// can both see room. It turns the common case from a silent collapse into a
+/// clear refusal, which is all a client-side check can honestly claim.
+export const MESH_LIMIT = 8;
+
+/** Is a call of `count` people already at the mesh ceiling? */
+export function meshFull(count) {
+  return (Number(count) || 0) >= MESH_LIMIT;
+}
+
+/** What to tell someone who cannot get in. Names the real reason — the
+ *  alternative is a refusal that reads as a bug. */
+export function meshFullMessage() {
+  return `this call is full (${MESH_LIMIT} people). calls are peer-to-peer, so every extra person costs everyone else bandwidth`;
+}
+
 // Opus fmtp knobs we stamp onto every offer/answer. DTX stops the encoder
 // sending steady packets through silence (big win in a mesh, where every
 // participant is a separate uplink); the bitrate cap keeps a mono voice
@@ -495,6 +520,11 @@ export class VoiceManager {
 
   async join(server, channel) {
     if (this.active) await this.leave();
+    // Before the mic, not after: refusing a call is bad, and refusing it
+    // having just turned on someone's microphone is worse.
+    if (meshFull(this.participants(server, channel).length)) {
+      throw new Error(meshFullMessage());
+    }
     const stream = await this.captureAudio();
     this.muted = false; // every call starts open-mic; muting is a per-call act
     // Joining an *empty* group room starts a call: push-wake the roster so
