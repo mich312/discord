@@ -164,7 +164,22 @@ pub enum ClientMsg {
         credential: String,
         salt: String,
         wrapped: String,
+        /// Human name for the device. Optional so an older client still
+        /// enrolls; absent becomes "" and the UI falls back to the date.
+        #[serde(default)]
+        label: Option<String>,
     },
+    /// This account's enrolled devices. Metadata only — never the wraps.
+    PasskeyWrapList { rid: u64 },
+    /// Revoke one enrolled device, by credential id.
+    ///
+    /// Forward-only, and the client says so in as many words: it stops that
+    /// passkey unlocking the identity from here on. It cannot reach into a
+    /// device that already holds the identity locally. What it does defeat is
+    /// the case that matters for a *synced* passkey — iCloud Keychain, Google
+    /// Password Manager — where the credential outlives the hardware and
+    /// would otherwise keep pulling the identity down forever.
+    PasskeyWrapDel { rid: u64, cred_id: String },
     /// Is this account secured, and how?
     VaultStatus { rid: u64 },
     /// WebAuthn registration ceremony (authenticated side).
@@ -220,6 +235,18 @@ pub enum ServerMsg {
     VaultStatus { rid: u64, kind: Option<String> },
     /// WebAuthn ceremony payloads (JSON passthrough).
     Passkey { rid: u64, payload: String },
+    /// The caller's enrolled devices, newest first.
+    PasskeyDevices { rid: u64, devices: Vec<PasskeyDeviceOut> },
+}
+
+/// One enrolled device as it goes over the wire. `wrapped` and `credential`
+/// are absent by construction, not by omission — see `store::PasskeyDevice`.
+#[derive(Debug, Clone, Serialize)]
+pub struct PasskeyDeviceOut {
+    pub cred_id: String,
+    pub label: String,
+    /// Unix seconds.
+    pub created_at: i64,
 }
 
 #[derive(Debug, Clone, Serialize)]

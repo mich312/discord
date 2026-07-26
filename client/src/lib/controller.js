@@ -2052,8 +2052,16 @@ export class Controller {
     return this.accounts.secureWithPasskey();
   }
 
-  enrollDevicePasskey() {
-    return this.accounts.enrollDevicePasskey();
+  enrollDevicePasskey(label) {
+    return this.accounts.enrollDevicePasskey(label);
+  }
+
+  listDevices() {
+    return this.accounts.listDevices();
+  }
+
+  revokeDevice(credId) {
+    return this.accounts.revokeDevice(credId);
   }
 
   accountKind(user) {

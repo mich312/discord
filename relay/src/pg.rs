@@ -3,8 +3,8 @@
 //! plan. Uses runtime queries (no compile-time DB dependency).
 
 use crate::store::{
-    HistoryEntry, InviteRecord, PasskeyWrap, RegisterOutcome, Store, StoreError, StoredMessage,
-    StoredWelcome, VaultRecord,
+    HistoryEntry, InviteRecord, PasskeyDevice, PasskeyWrap, RegisterOutcome, Store, StoreError,
+    StoredMessage, StoredWelcome, VaultRecord,
 };
 use async_trait::async_trait;
 use sqlx::{postgres::PgPoolOptions, PgPool, Row};
@@ -139,6 +139,18 @@ impl PgStore {
                 wrapped bytea NOT NULL,
                 created_at timestamptz NOT NULL DEFAULT now()
             );
+            -- Device revocation needs a list a human can act on, so each wrap
+            -- carries a name and an enrolment time. Both additive, so an
+            -- older relay keeps working against this shape and SCHEMA_VERSION
+            -- does not move.
+            --
+            -- `enrolled_at` duplicates `created_at` as plain unix seconds on
+            -- purpose: sqlx here is built without the chrono/time features,
+            -- so decoding timestamptz would mean adding a dependency to a
+            -- crypto stack for the sake of one column. `created_at` stays for
+            -- an operator reading the table by hand.
+            ALTER TABLE passkey_wraps ADD COLUMN IF NOT EXISTS label text NOT NULL DEFAULT '';
+            ALTER TABLE passkey_wraps ADD COLUMN IF NOT EXISTS enrolled_at bigint NOT NULL DEFAULT 0;
             CREATE TABLE IF NOT EXISTS push_subscriptions (
                 user_id text NOT NULL,
                 endpoint text NOT NULL,
@@ -628,10 +640,10 @@ impl Store for PgStore {
         // of device recovery. Updating is allowed only for rows the caller
         // already owns.
         let updated = sqlx::query(
-            "INSERT INTO passkey_wraps (cred_id, user_id, credential, salt, wrapped)
-             VALUES ($1, $2, $3, $4, $5)
+            "INSERT INTO passkey_wraps (cred_id, user_id, credential, salt, wrapped, label, enrolled_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)
              ON CONFLICT (cred_id) DO UPDATE SET
-               credential = $3, salt = $4, wrapped = $5
+               credential = $3, salt = $4, wrapped = $5, label = $6, enrolled_at = $7
              WHERE passkey_wraps.user_id = $2",
         )
         .bind(cred_id)
@@ -639,6 +651,8 @@ impl Store for PgStore {
         .bind(&wrap.credential)
         .bind(&wrap.salt)
         .bind(&wrap.wrapped)
+        .bind(&wrap.label)
+        .bind(wrap.created_at)
         .execute(&self.pool)
         .await
         .map_err(backend)?;
@@ -650,7 +664,8 @@ impl Store for PgStore {
 
     async fn get_passkey_wrap(&self, cred_id: &str) -> Result<Option<PasskeyWrap>, StoreError> {
         let row = sqlx::query(
-            "SELECT user_id, credential, salt, wrapped FROM passkey_wraps WHERE cred_id = $1",
+            "SELECT user_id, credential, salt, wrapped, label, enrolled_at
+             FROM passkey_wraps WHERE cred_id = $1",
         )
         .bind(cred_id)
         .fetch_optional(&self.pool)
@@ -661,7 +676,41 @@ impl Store for PgStore {
             credential: r.get("credential"),
             salt: r.get("salt"),
             wrapped: r.get("wrapped"),
+            label: r.get("label"),
+            created_at: r.get("enrolled_at"),
         }))
+    }
+
+    async fn list_passkey_wraps(&self, user: &str) -> Result<Vec<PasskeyDevice>, StoreError> {
+        let rows = sqlx::query(
+            "SELECT cred_id, label, enrolled_at FROM passkey_wraps
+             WHERE user_id = $1 ORDER BY enrolled_at DESC, cred_id ASC",
+        )
+        .bind(user)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(backend)?;
+        Ok(rows
+            .into_iter()
+            .map(|r| PasskeyDevice {
+                cred_id: r.get("cred_id"),
+                label: r.get("label"),
+                created_at: r.get("enrolled_at"),
+            })
+            .collect())
+    }
+
+    async fn delete_passkey_wrap(&self, cred_id: &str, user: &str) -> Result<bool, StoreError> {
+        // `user_id = $2` is in the WHERE clause, not a prior check: a
+        // read-then-delete would let a request race a re-enrolment, and the
+        // whole value of this call is that it cannot touch another account.
+        let done = sqlx::query("DELETE FROM passkey_wraps WHERE cred_id = $1 AND user_id = $2")
+            .bind(cred_id)
+            .bind(user)
+            .execute(&self.pool)
+            .await
+            .map_err(backend)?;
+        Ok(done.rows_affected() > 0)
     }
 
     async fn list_passkey_vaults(&self) -> Result<Vec<(String, VaultRecord)>, StoreError> {

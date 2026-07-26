@@ -6,7 +6,10 @@
 use crate::account::AccountService;
 use crate::blobs::{BlobStore, UploadTickets};
 use crate::metrics::{Metrics, Snapshot};
-use crate::proto::{ClientMsg, GroupEntry, MemberEntry, ServerMsg, AUTH_CONTEXT, PROTOCOL_VERSION};
+use crate::proto::{
+    ClientMsg, GroupEntry, MemberEntry, PasskeyDeviceOut, ServerMsg, AUTH_CONTEXT,
+    PROTOCOL_VERSION,
+};
 use crate::push::PushService;
 use crate::ratelimit::RateLimiter;
 use crate::store::{
@@ -166,6 +169,12 @@ impl IceConfig {
 /// used to grow its queue without limit, so a single suspended laptop in a
 /// busy circle was an unbounded allocation on the server.
 pub const MAX_QUEUE: usize = 512;
+
+/// Characters (not bytes) kept from a device label. Counted in `chars` so a
+/// truncation cannot split a UTF-8 sequence, and bounded because the value is
+/// client-supplied, stored per account, and rendered back into the screen the
+/// user revokes devices from.
+pub const MAX_DEVICE_LABEL: usize = 64;
 
 /// A connection's outbound queue, plus how much is sitting in it.
 ///
@@ -1190,7 +1199,7 @@ async fn handle_request(
             }
         }
 
-        ClientMsg::PasskeyWrapAdd { rid, cred_id, credential, salt, wrapped } => {
+        ClientMsg::PasskeyWrapAdd { rid, cred_id, credential, salt, wrapped, label } => {
             let (Ok(salt), Ok(wrapped)) = (decode_b64(&salt), decode_b64(&wrapped)) else {
                 return err(rid, "invalid base64");
             };
@@ -1199,9 +1208,47 @@ async fn handle_request(
                 credential,
                 salt,
                 wrapped,
+                // Bounded here rather than trusted: it is stored per account
+                // and rendered back into a security screen.
+                label: label.unwrap_or_default().chars().take(MAX_DEVICE_LABEL).collect(),
+                // Server clock, not the client's. This timestamp is what a
+                // user reads when choosing which device to revoke, so a
+                // device must not get to claim it is the older one.
+                created_at: now_unix() as i64,
             };
             match app.store.add_passkey_wrap(&cred_id, wrap).await {
                 Ok(()) => Some(ServerMsg::Ok { rid, seq: None }),
+                Err(e) => err(rid, e),
+            }
+        }
+
+        ClientMsg::PasskeyWrapList { rid } => match app.store.list_passkey_wraps(user).await {
+            Ok(devices) => Some(ServerMsg::PasskeyDevices {
+                rid,
+                devices: devices
+                    .into_iter()
+                    .map(|d| PasskeyDeviceOut {
+                        cred_id: d.cred_id,
+                        label: d.label,
+                        created_at: d.created_at,
+                    })
+                    .collect(),
+            }),
+            Err(e) => err(rid, e),
+        },
+
+        ClientMsg::PasskeyWrapDel { rid, cred_id } => {
+            // `user` here is the authenticated session, so the delete is
+            // scoped to the caller's own account by construction. A missing
+            // row and someone else's row are answered identically on
+            // purpose: distinguishing them would turn this into an oracle
+            // for whether a given credential id is enrolled elsewhere.
+            match app.store.delete_passkey_wrap(&cred_id, user).await {
+                Ok(true) => {
+                    tracing::info!(%user, %cred_id, "revoked a device passkey");
+                    Some(ServerMsg::Ok { rid, seq: None })
+                }
+                Ok(false) => err(rid, "no such device"),
                 Err(e) => err(rid, e),
             }
         }

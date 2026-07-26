@@ -34,6 +34,10 @@ import {
     the threat model, and this is the floor under it. */
 export const MIN_PASSWORD = 8;
 
+/** Kept in step with `MAX_DEVICE_LABEL` in relay/src/server.rs, which is the
+    one that actually enforces it. */
+export const DEVICE_LABEL_MAX = 64;
+
 /** Guidance when a browser won't produce the passkey PRF secret the vault is
     encrypted under — common on Chromium (Edge/Chrome) on macOS, where Safari
     does support it. */
@@ -212,7 +216,7 @@ export class AccountService {
       unlocks the same identity, without touching the primary vault or any
       other device's passkey. Each device seals the identity under its own PRF
       secret; the relay keys the wrap by credential id. */
-  async enrollDevicePasskey() {
+  async enrollDevicePasskey(label = '') {
     const { credential, payload, secret } = await this.registerCredential();
     const wrapped = await encryptBlob(secret, this.identityBytes());
     await this.request({
@@ -221,8 +225,41 @@ export class AccountService {
       credential: payload,
       salt: b64.enc(VAULT_PRF_SALT),
       wrapped: b64.enc(wrapped),
+      // Bounded again server-side; this is only so an over-long paste never
+      // makes the round trip.
+      label: String(label ?? '').slice(0, DEVICE_LABEL_MAX).trim(),
     });
     await this.markSecuredLocal();
+  }
+
+  /* --- device revocation (forward-only) --------------------------------- */
+
+  /** The devices enrolled against this identity, newest first. Metadata only
+      — the relay has no endpoint that hands back a wrap. */
+  async listDevices() {
+    const reply = await this.request({ t: 'passkey_wrap_list' });
+    return (reply.devices ?? []).map((d) => ({
+      credId: d.cred_id,
+      label: d.label ?? '',
+      createdAt: Number(d.created_at) * 1000,
+    }));
+  }
+
+  /**
+   * Revoke one device's passkey.
+   *
+   * Forward-only, and worth being exact about because the word "revoke"
+   * promises more than this delivers: it stops that passkey unlocking the
+   * identity from now on. It does NOT reach into a device that already holds
+   * the identity in local storage — nothing running on this relay can.
+   *
+   * What it does defeat is the case where the credential outlives the
+   * hardware, which for a *synced* passkey (iCloud Keychain, Google Password
+   * Manager) is the normal case rather than the exotic one: without this, a
+   * recovered or cloned keychain keeps pulling the identity down forever.
+   */
+  async revokeDevice(credId) {
+    await this.request({ t: 'passkey_wrap_del', cred_id: credId });
   }
 
   /* --- unlocking on a new device ---------------------------------------- */

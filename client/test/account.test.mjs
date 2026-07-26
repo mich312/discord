@@ -6,6 +6,7 @@ import test from 'node:test';
 import assert from 'node:assert/strict';
 import {
   AccountService,
+  DEVICE_LABEL_MAX,
   MIN_PASSWORD,
   accountError,
   isNoAccount,
@@ -235,4 +236,69 @@ test('a vault this device cannot open is distinguished from a corrupt one', asyn
   const e = unlockableHereError();
   assert.equal(e.linkFallback, true);
   assert.match(e.message, /can't unlock/);
+});
+
+/* ------------------------------------------------- device revocation -- */
+
+test('listing devices normalizes the wire shape and keeps nothing else', () => {
+  // The relay answers with metadata only; this asserts the client does not
+  // invent a place to put a wrap even if one were ever added to the reply.
+  const { svc } = service({
+    relay: async (msg) =>
+      msg.t === 'passkey_wrap_list'
+        ? {
+            devices: [
+              { cred_id: 'c1', label: 'laptop', created_at: 1700, wrapped: 'SEALED' },
+              { cred_id: 'c2', label: '', created_at: 1600 },
+            ],
+          }
+        : {},
+  });
+  return svc.listDevices().then((devices) => {
+    assert.deepEqual(devices, [
+      { credId: 'c1', label: 'laptop', createdAt: 1700_000 },
+      { credId: 'c2', label: '', createdAt: 1600_000 },
+    ]);
+    assert.ok(
+      !JSON.stringify(devices).includes('SEALED'),
+      'a wrap in the reply must not survive into client state'
+    );
+  });
+});
+
+test('an empty device list is a list, not a crash', async () => {
+  const { svc } = service({ relay: async () => ({}) });
+  assert.deepEqual(await svc.listDevices(), []);
+});
+
+test('revoking sends the credential id and nothing else', async () => {
+  const { svc, requested } = service({ relay: async () => ({}) });
+  await svc.revokeDevice('cred-abc');
+  assert.deepEqual(requested, [{ t: 'passkey_wrap_del', cred_id: 'cred-abc' }]);
+});
+
+test('a device label is bounded and trimmed before it is sent', async () => {
+  // The relay bounds it too — this only stops an over-long paste making the
+  // round trip, and keeps the stored value from carrying stray whitespace.
+  const { svc, requested } = service({ relay: async () => ({}) });
+  svc.registerCredential = async () => ({
+    credential: { rawId: new Uint8Array([1, 2, 3]) },
+    payload: '{}',
+    secret: new Uint8Array(32).fill(4),
+  });
+  await svc.enrollDevicePasskey(`  ${'x'.repeat(200)}  `);
+  const sent = requested.find((m) => m.t === 'passkey_wrap_add');
+  assert.equal(sent.label.length, DEVICE_LABEL_MAX - 2, 'sliced first, then trimmed');
+  assert.ok(!sent.label.includes(' '));
+});
+
+test('enrolling without a label sends an empty one rather than undefined', async () => {
+  const { svc, requested } = service({ relay: async () => ({}) });
+  svc.registerCredential = async () => ({
+    credential: { rawId: new Uint8Array([1, 2, 3]) },
+    payload: '{}',
+    secret: new Uint8Array(32).fill(4),
+  });
+  await svc.enrollDevicePasskey();
+  assert.equal(requested.find((m) => m.t === 'passkey_wrap_add').label, '');
 });

@@ -70,6 +70,27 @@ pub struct PasskeyWrap {
     pub salt: Vec<u8>,
     /// The identity bundle sealed under this passkey's PRF secret. Opaque.
     pub wrapped: Vec<u8>,
+    /// Client-supplied name for the device ("work laptop"). Cosmetic, and
+    /// bounded by the server — a credential id is unusable in a UI, and a
+    /// revocation list nobody can read is a revocation list nobody uses.
+    pub label: String,
+    /// Unix seconds, assigned by the server rather than the client: it is
+    /// shown to a user deciding which device to revoke, so a client-chosen
+    /// value would let a stolen device disguise itself as the old one.
+    pub created_at: i64,
+}
+
+/// One enrolled device, as shown to its owner.
+///
+/// Deliberately NOT a `PasskeyWrap`: listing devices must never hand back
+/// `wrapped` or `credential`. Those are the sealed identity and the material
+/// for answering a challenge with it, and the whole point of revocation is to
+/// stop a device obtaining them.
+#[derive(Debug, Clone, PartialEq)]
+pub struct PasskeyDevice {
+    pub cred_id: String,
+    pub label: String,
+    pub created_at: i64,
 }
 
 /// The two membership roles. Admins manage the (weak, server-side) ACL:
@@ -213,6 +234,13 @@ pub trait Store: Send + Sync {
     async fn add_passkey_wrap(&self, cred_id: &str, wrap: PasskeyWrap) -> Result<(), StoreError>;
     /// The per-device passkey enrolled under `cred_id`, if any.
     async fn get_passkey_wrap(&self, cred_id: &str) -> Result<Option<PasskeyWrap>, StoreError>;
+    /// This user's enrolled devices, newest first. Metadata only.
+    async fn list_passkey_wraps(&self, user: &str) -> Result<Vec<PasskeyDevice>, StoreError>;
+    /// Revoke one device. Scoped to `user` in the query itself rather than
+    /// checked beforehand, so there is no window between the check and the
+    /// delete and no path where a caller removes somebody else's device.
+    /// `false` means nothing matched — unknown id, or not the caller's.
+    async fn delete_passkey_wrap(&self, cred_id: &str, user: &str) -> Result<bool, StoreError>;
 
     // --- push subscriptions ---
     async fn put_push_subscription(
@@ -538,6 +566,34 @@ impl Store for MemoryStore {
     async fn get_passkey_wrap(&self, cred_id: &str) -> Result<Option<PasskeyWrap>, StoreError> {
         let inner = self.inner.lock().unwrap();
         Ok(inner.passkey_wraps.get(cred_id).cloned())
+    }
+
+    async fn list_passkey_wraps(&self, user: &str) -> Result<Vec<PasskeyDevice>, StoreError> {
+        let inner = self.inner.lock().unwrap();
+        let mut out: Vec<PasskeyDevice> = inner
+            .passkey_wraps
+            .iter()
+            .filter(|(_, w)| w.user == user)
+            .map(|(cred_id, w)| PasskeyDevice {
+                cred_id: cred_id.clone(),
+                label: w.label.clone(),
+                created_at: w.created_at,
+            })
+            .collect();
+        // Newest first, then by id so equal timestamps still order stably —
+        // a HashMap's iteration order would otherwise reshuffle the list on
+        // every poll.
+        out.sort_by(|a, b| b.created_at.cmp(&a.created_at).then(a.cred_id.cmp(&b.cred_id)));
+        Ok(out)
+    }
+
+    async fn delete_passkey_wrap(&self, cred_id: &str, user: &str) -> Result<bool, StoreError> {
+        let mut inner = self.inner.lock().unwrap();
+        if inner.passkey_wraps.get(cred_id).is_none_or(|w| w.user != user) {
+            return Ok(false);
+        }
+        inner.passkey_wraps.remove(cred_id);
+        Ok(true)
     }
 
     async fn put_push_subscription(
