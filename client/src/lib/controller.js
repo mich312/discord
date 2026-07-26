@@ -106,6 +106,7 @@ import {
   upsertNotice,
 } from './overview.js';
 import { freshPresence, normalizeGameRef, normalizePresence, normalizeWant } from './games.js';
+import { MIN_QUERY, rankHits } from './search.js';
 
 /** How many superseded kept-history keys a channel carries for reading.
     Each removal adds one; the cap stops the metadata growing without bound
@@ -1277,6 +1278,35 @@ export class Controller {
       out[record.id] = unread;
     }
     return out;
+  }
+
+  /** Search every message this device holds, across every circle.
+      Necessarily device-local: the relay stores ciphertext and cannot index
+      it, so the answer is exactly what this device has decrypted and kept —
+      a phone that joined last week will not find last year. That limit is
+      stated in the UI rather than hidden.
+
+      A linear scan, deliberately: an inverted index would have to live in
+      the same IndexedDB as the plaintext it indexes, buying speed at the
+      cost of a second copy of every message to keep consistent and to purge
+      on retention and on leave. At the scale this app is for, the scan is
+      the cheaper correctness story. */
+  async searchMessages(query, opts = {}) {
+    if (String(query ?? '').trim().length < MIN_QUERY) return { hits: [], truncated: false };
+    const rows = [];
+    for (const record of this.servers.values()) {
+      for (const channel of record.channels) {
+        for (const message of await this.db.msgsFor(record.id, channel)) {
+          rows.push({ server: record.id, channel, message });
+        }
+      }
+    }
+    const { hits, truncated } = rankHits(rows, query, opts);
+    // The palette shows circle and room names, not ids.
+    return {
+      hits: hits.map((h) => ({ ...h, serverName: this.servers.get(h.server)?.name ?? h.server })),
+      truncated,
+    };
   }
 
   /** Local half of auto-delete: drop this device's copies past retention. */

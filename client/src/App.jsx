@@ -401,6 +401,13 @@ export default function App() {
     };
   }, [server, channel, state.messagesRev, state.messages]);
 
+  // Must be stable: the palette re-runs its scan whenever this identity
+  // changes, so an inline arrow would rescan on every keystroke it causes.
+  const searchMessages = useCallback(
+    (q) => controllerRef.current?.searchMessages(q) ?? { hits: [], truncated: false },
+    [],
+  );
+
   // Cross-circle activity for the rail badges. Same seen markers as the
   // per-channel pills, rolled up per circle — without it nothing on screen
   // says a circle you are not looking at has moved.
@@ -1078,6 +1085,7 @@ export default function App() {
             servers={state.servers}
             active={server}
             actions={paletteActions}
+            onSearch={searchMessages}
             onNavigate={(srv, ch) => {
               dispatch({ type: 'select', server: srv, channel: ch });
               setStage(false);

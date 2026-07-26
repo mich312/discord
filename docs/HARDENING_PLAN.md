@@ -21,7 +21,7 @@ analysis; this is the current state.
 | **2** | CI gate, supply chain, deploy health gate + pinned host keys | §2.2 extract `applyEnvelope`/`AccountService`; §2.3 coverage for the named risky paths; §2.4 image-based deploy with fast rollback; §2.6 reproducible builds + integrity manifest for worker and wasm |
 | **3** | Per-group send locks (global hub mutex gone); hourly history sweep; recorded schema version with a rollback guard | Bounded outbound queues; blob and message GC; publish the ceiling |
 | **4** | `/healthz`; connect/disconnect/subscribe logging; `deploy/RUNBOOK.md`; actionable WebAuthn config failure | Prometheus metrics; OpenTelemetry tracing; alerting |
-| **5** | Dialog semantics + focus management on all overlays; WCAG AA contrast; iOS storage-eviction fix; drawer `aria-expanded`/`aria-controls` + labelled landmarks; 44px touch targets; `prefers-color-scheme` with a system-following default; rail unread badges | PWA offline shell; local search; mention badges; kept-history room indicator; voice participant cap |
+| **5** | Dialog semantics + focus management on all overlays; WCAG AA contrast; iOS storage-eviction fix; drawer `aria-expanded`/`aria-controls` + labelled landmarks; 44px touch targets; `prefers-color-scheme` with a system-following default; rail unread badges; local message search | PWA offline shell; mention badges; kept-history room indicator; voice participant cap |
 | **7** | `SECURITY.md`; `docs/THREAT_MODEL.md` | cargo-fuzz targets on protocol parsing; epoch state-machine simulation harness |
 
 **Phase 6 is dropped** by decision — see *Decisions taken*. Device
@@ -579,8 +579,22 @@ which joining a circle counts its whole backfilled history as unread.
 **Mention** badges are still open, and deliberately: there is no `@handle`
 affordance in the composer, so a matcher would be half a feature.
 
-Local message search (there is none, and no copy explains why). A persistent
-kept-history indicator in the room
+Local message search is **done**, in the ⌘K palette rather than on a new
+surface — search has to live somewhere, and a second overlay is a worse
+answer than the keystroke people already press. Message hits rank below the
+room and action rows (navigation is what the palette is for) and are matched
+by `client/src/lib/search.js`: AND across terms, quoted phrases, attachment
+filenames, newest-first, capped at 40 with the truncation reported rather
+than implied.
+
+The scan is linear over IndexedDB, deliberately. An inverted index would have
+to live in the same store as the plaintext it indexes — a second copy of
+every message to keep consistent and to purge on retention and on leave — and
+at this scale the scan is the cheaper correctness story. The palette footer
+states the real limit: **search covers this device only**, because the relay
+holds ciphertext and cannot index it.
+
+A persistent kept-history indicator in the room
 (the forward-secrecy trade is announced once in a chip that scrolls away, which
 falsifies the README's central UX claim). A voice participant cap with a clear
 message instead of a silent mesh meltdown past ~8. An escape hatch on the

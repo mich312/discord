@@ -2028,7 +2028,36 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
 }
 .palette-item.selected { background: var(--active); color: var(--ink); border-left-color: var(--accent); }
 .palette-item.selected .glyph { color: var(--accent-ink); }
+
+/* A message hit: sender, then the line it was found in. One line, clipped —
+   the palette is a jump list, not a reader. */
+.palette-snippet {
+  min-width: 0;
+  flex: 1;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  color: var(--ink-mute);
+}
+.palette-snippet mark {
+  background: var(--accent-soft);
+  color: var(--accent-ink);
+  border-radius: 3px;
+  padding: 0 1px;
+}
+.palette-item.selected .palette-snippet { color: var(--ink-dim); }
+/* A message row's sender must not be squeezed out by a long snippet. */
+.palette-item .palette-snippet + .hint { flex-shrink: 0; }
+
 .palette-empty { padding: 18px; text-align: center; color: var(--ink-mute); font-size: 13px; }
+.palette-note {
+  padding: 7px 14px;
+  border-top: 1px solid var(--hairline);
+  font-size: var(--text-xs);
+  color: var(--ink-mute);
+}
+/* Pushed to the right of the key hints: a standing caveat, not a shortcut. */
+.palette-scope { margin-left: auto; }
 .palette-foot {
   display: flex;
   gap: 14px;
