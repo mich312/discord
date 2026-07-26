@@ -187,19 +187,6 @@ pub trait Store: Send + Sync {
     /// channel's expired ciphertext lived forever — the auto-delete promise
     /// held only for rooms someone still opened. Returns rows removed.
     async fn sweep_expired_history(&self, now: u64) -> Result<u64, StoreError>;
-    async fn sweep_expired_history(&self, now: u64) -> Result<u64, StoreError> {
-        let mut inner = self.inner.lock().unwrap();
-        let mut removed = 0u64;
-        for group in inner.groups.values_mut() {
-            for log in group.history.values_mut() {
-                let before = log.entries.len();
-                log.entries.retain(|e| !e.expires_at.is_some_and(|t| t < now));
-                removed += (before - log.entries.len()) as u64;
-            }
-        }
-        Ok(removed)
-    }
-
     async fn history_after(
         &self,
         group: &str,
@@ -467,6 +454,19 @@ impl Store for MemoryStore {
         let seq = log.last_seq;
         log.entries.push(HistoryEntry { seq, ts, expires_at, payload });
         Ok(seq)
+    }
+
+    async fn sweep_expired_history(&self, now: u64) -> Result<u64, StoreError> {
+        let mut inner = self.inner.lock().unwrap();
+        let mut removed = 0u64;
+        for group in inner.groups.values_mut() {
+            for log in group.history.values_mut() {
+                let before = log.entries.len();
+                log.entries.retain(|e| !e.expires_at.is_some_and(|t| t < now));
+                removed += (before - log.entries.len()) as u64;
+            }
+        }
+        Ok(removed)
     }
 
     async fn history_after(
