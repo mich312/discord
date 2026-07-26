@@ -48,6 +48,33 @@ export function activitySrc(url) {
   return null;
 }
 
+/** Does this activity src load from the app's own origin?
+
+    It matters because of the iframe sandbox. A cross-origin game wants
+    `allow-same-origin` — that just means "keep your own origin", so it can
+    use its own storage, and it can touch nothing of ours. A SAME-origin
+    frame with that token is a different thing entirely: it shares our
+    origin, which means the identity key in localStorage and the MLS state
+    in IndexedDB. The game registry travels inside MLS metadata and is
+    authored by any admin, so it is untrusted input; a bundled demo under
+    /games/ is legitimate but still must not inherit our origin.
+
+    Covers the absolute form too — on https://example.com, a registry entry
+    of "https://example.com/evil" is same-origin however it is spelled. */
+export function isSameOriginSrc(src, selfOrigin) {
+  if (!src) return false;
+  const origin =
+    selfOrigin ?? (typeof location !== 'undefined' ? location.origin : undefined);
+  // A relative path is same-origin by construction.
+  if (/^\/[^/\\]/.test(src)) return true;
+  if (!origin) return false; // no origin to compare against: treat as cross
+  try {
+    return new URL(src, origin).origin === new URL(origin).origin;
+  } catch {
+    return false;
+  }
+}
+
 /** Display host for the honesty line: where this game actually lives. */
 export function gameHost(game) {
   if (game.kind === 'server') return game.url;

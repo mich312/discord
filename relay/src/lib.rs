@@ -52,7 +52,14 @@ pub fn router(app: Arc<App>) -> Router {
         // client-generated random capability; the file key travels inside
         // the MLS message. CORS is open — content is ciphertext and ids are
         // unguessable.
-        .route("/blobs/{id}", axum::routing::put(put_blob).get(get_blob))
+        // Permissive CORS belongs here and ONLY here: blobs are opaque
+        // ciphertext under unguessable ids. Applying it to the whole router
+        // also blanketed the account endpoints, letting any origin drive
+        // sign-in requests from a victim's browser.
+        .route(
+            "/blobs/{id}",
+            axum::routing::put(put_blob).get(get_blob).layer(CorsLayer::permissive()),
+        )
         // Can a fresh identity register without an invite right now? Lets
         // the onboarding UI say "invite-only" up front instead of failing
         // after key generation. The WS handshake enforces it regardless.
@@ -78,7 +85,6 @@ pub fn router(app: Arc<App>) -> Router {
     }
     router
         .layer(DefaultBodyLimit::max(blobs::MAX_BLOB_BYTES + 1024))
-        .layer(CorsLayer::permissive())
         // Security headers on everything the relay serves — including the
         // client, the worker, and the service worker in single-container
         // mode. Caddy proxies these through untouched, so every deploy
