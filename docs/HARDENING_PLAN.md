@@ -47,8 +47,26 @@ Open, in the order I would take them:
    dropped Phase 6). There is currently no way to revoke a device short of
    burning the handle.
 3. Recovery for groups that forked *before* §1.1 landed.
-4. Phases 2.2–2.6, then 3 (single-relay scope), 4, 5, and Phase 7's
-   in-repo preparation.
+4. Phase 2 remainder: §2.2 (extract `applyEnvelope` as a pure reducer and
+   `AccountService`, so the protocol core becomes testable without a relay
+   and a worker), §2.3 coverage for the named risky paths, §2.4's image-based
+   deploy with second-scale rollback, §2.6 reproducible builds and an
+   integrity manifest covering the worker and wasm.
+5. Phase 3 at the agreed single-relay scope: remove the DB round-trip from
+   inside the global hub mutex, bound the outbound queues, add the GC that
+   currently does not exist (blobs are never deleted; history expiry is
+   lazy), add schema versioning, and publish the real ceiling.
+6. Phase 4 observability — the relay emits six log statements and has no
+   metrics; this is the largest single remaining chunk.
+7. Phase 5 client quality — accessibility (no modal is a dialog), the iOS
+   7-day storage eviction, the PWA offline shell.
+8. Phase 7's remaining in-repo preparation: the STRIDE threat model,
+   cargo-fuzz targets on protocol parsing, and an epoch state-machine
+   simulation harness.
+
+**Also done:** §2.5 supply-chain gate (cargo-deny + npm audit + lockfile
+sync), a real `/healthz` that round-trips the store with the deploy gate
+now requiring 2xx from it, pinned deploy host keys, and `SECURITY.md`.
 
 **Phase 1 §1.1–§1.8 are done:** §1.1 staged commits + epoch CAS · §1.2
 receive-path write ordering (ratchet last, closing the message-loss
