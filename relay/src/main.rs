@@ -39,7 +39,10 @@ async fn main() -> anyhow::Result<()> {
                     .unwrap_or(0);
                 match app.store.sweep_expired_history(now).await {
                     Ok(0) => {}
-                    Ok(n) => tracing::info!("retention sweep removed {n} expired history entries"),
+                    Ok(n) => {
+                        app.metrics.history_swept.add(n);
+                        tracing::info!("retention sweep removed {n} expired history entries");
+                    }
                     Err(e) => tracing::warn!("retention sweep failed: {e}"),
                 }
             }

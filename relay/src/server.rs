@@ -5,6 +5,7 @@
 
 use crate::account::AccountService;
 use crate::blobs::{BlobStore, UploadTickets};
+use crate::metrics::{Metrics, Snapshot};
 use crate::proto::{ClientMsg, GroupEntry, MemberEntry, ServerMsg, AUTH_CONTEXT, PROTOCOL_VERSION};
 use crate::push::PushService;
 use crate::ratelimit::RateLimiter;
@@ -47,6 +48,9 @@ pub struct App {
     /// Voice ICE configuration, rendered per client (TURN credentials are
     /// minted fresh and short-lived on each `ice_info`).
     pub ice: IceConfig,
+    /// Scrape counters. Always collected; only *served* when METRICS_TOKEN
+    /// is set (see `lib.rs`), because every number here is metadata.
+    pub metrics: Metrics,
 }
 
 pub struct Limits {
@@ -173,6 +177,18 @@ impl Hub {
     fn send_lock(&mut self, group: &str) -> Arc<Mutex<()>> {
         self.send_locks.entry(group.to_string()).or_default().clone()
     }
+
+    /// Live counts for a scrape. Read from the hub rather than tracked
+    /// alongside it: a gauge kept in step by hand drifts on every early
+    /// return, and these are cheap.
+    pub fn snapshot(&self) -> Snapshot {
+        Snapshot {
+            clients_online: self.online.len() as u64,
+            // Only circles someone is actually listening to — an entry that
+            // has emptied out is not a subscribed group.
+            groups_subscribed: self.subscribers.values().filter(|s| !s.is_empty()).count() as u64,
+        }
+    }
 }
 
 impl App {
@@ -223,6 +239,7 @@ impl App {
                 .is_ok_and(|v| v == "1" || v.eq_ignore_ascii_case("true")),
             admins,
             ice: IceConfig::from_env(),
+            metrics: Metrics::default(),
         })
     }
 
@@ -236,11 +253,16 @@ impl App {
         let body = payload.to_string().into_bytes();
         for (endpoint, subscription) in subs {
             match self.push.send(&subscription, &body).await {
-                Ok(true) => {}
+                Ok(true) => self.metrics.push_sent.inc(),
                 Ok(false) => {
+                    // Gone: the subscription is dead, not the push system.
+                    // Counting it as a failure would page on ordinary churn.
                     let _ = self.store.delete_push_subscription(user, &endpoint).await;
                 }
-                Err(e) => tracing::warn!("push to {user} failed: {e}"),
+                Err(e) => {
+                    self.metrics.push_failed.inc();
+                    tracing::warn!("push to {user} failed: {e}");
+                }
             }
         }
     }
@@ -322,12 +344,14 @@ async fn authenticate(socket: &mut WebSocket, app: &App) -> Option<String> {
     signed.extend_from_slice(&(user.len() as u32).to_be_bytes());
     signed.extend_from_slice(user.as_bytes());
     if !verify_sig(&expected_key, &signed, &sig) {
+        app.metrics.auth_failures.bad_signature.inc();
         let _ = send_json(socket, &ServerMsg::Error { rid: None, message: "auth failed".into() }).await;
         return None;
     }
 
     if pinned.is_none() {
         if !registration_allowed(app, &user, invite.as_deref()).await {
+            app.metrics.auth_failures.unregistered.inc();
             let _ = send_json(
                 socket,
                 &ServerMsg::Error {
@@ -339,11 +363,12 @@ async fn authenticate(socket: &mut WebSocket, app: &App) -> Option<String> {
             return None;
         }
         match app.store.register_user(&user, &claimed_key).await {
-            Ok(RegisterOutcome::Registered) => {}
+            Ok(RegisterOutcome::Registered) => app.metrics.registrations.inc(),
             // Raced with another connection registering a different key:
             // re-verify against whatever actually got pinned.
             Ok(RegisterOutcome::Existing(k)) if k == claimed_key => {}
             _ => {
+                app.metrics.auth_failures.credential_taken.inc();
                 let _ = send_json(socket, &ServerMsg::Error { rid: None, message: "auth failed".into() }).await;
                 return None;
             }
@@ -416,6 +441,7 @@ pub async fn handle_socket(mut socket: WebSocket, app: Arc<App>) {
         // already holds, but it is still metadata, so this is INFO on a
         // deployment's own logs rather than anything exported.
         tracing::info!(user = %user, online = hub.online.len(), "client connected");
+        app.metrics.ws_connections.inc();
         if let Ok(welcomes) = app.store.take_welcomes(&user).await {
             for w in welcomes {
                 let _ = tx.send(ServerMsg::Welcome {
@@ -724,11 +750,15 @@ async fn handle_request(
 
         ClientMsg::Send { rid, group, epoch, payload, commit } => {
             if let Err(e) = require_member(app, &group, user).await {
+                app.metrics.send_rejections.not_a_member.inc();
                 return err(rid, e);
             }
             let payload = match decode_b64(&payload) {
                 Ok(b) => b,
-                Err(e) => return err(rid, e),
+                Err(e) => {
+                    app.metrics.send_rejections.malformed.inc();
+                    return err(rid, e);
+                }
             };
             // Append and fan out under this GROUP's send lock, so seq order
             // still equals delivery order for its subscribers.
@@ -748,8 +778,14 @@ async fn handle_request(
                     .append_message(&group, epoch, user, payload.clone(), commit)
                     .await
                 {
-                    Ok(s) => s,
-                    Err(e) => return err(rid, e),
+                    Ok(s) => {
+                        app.metrics.messages_appended.inc();
+                        s
+                    }
+                    Err(e) => {
+                        app.metrics.note_send_rejection(&e);
+                        return err(rid, e);
+                    }
                 };
                 let mut hub = app.hub.lock().await;
                 if let Some(subs) = hub.subscribers.get_mut(&group) {
@@ -838,6 +874,11 @@ async fn handle_request(
             // Welcome be neither delivered nor drained.
             let hub = app.hub.lock().await;
             let delivered = hub.online.get(&to).is_some_and(|ch| ch.send(out.clone()).is_ok());
+            if delivered {
+                app.metrics.welcomes_delivered.inc();
+            } else {
+                app.metrics.welcomes_queued.inc();
+            }
             if !delivered {
                 let stored =
                     StoredWelcome { from: user.to_string(), group: group.clone(), after, payload };

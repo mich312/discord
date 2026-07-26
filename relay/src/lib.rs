@@ -1,5 +1,6 @@
 pub mod account;
 pub mod blobs;
+pub mod metrics;
 pub mod pg;
 pub mod proto;
 pub mod push;
@@ -69,6 +70,9 @@ pub fn router(app: Arc<App>) -> Router {
         // dead database behind it. This touches the store, so a relay that
         // cannot reach Postgres reports unhealthy instead of passing.
         .route("/healthz", axum::routing::get(healthz))
+        // Prometheus scrape. 404s unless METRICS_TOKEN is configured — see
+        // the handler for why this is not open.
+        .route("/metrics", axum::routing::get(metrics_scrape))
         // Account sign-in (pre-auth: a new device has no identity key yet).
         // Rate-limited per client: these are the online-guessing and
         // username-enumeration surfaces.
@@ -138,6 +142,47 @@ async fn healthz(State(app): State<Arc<App>>) -> impl IntoResponse {
     }
 }
 
+/// Prometheus scrape endpoint.
+///
+/// Off unless `METRICS_TOKEN` is set, and behind a bearer token when it is.
+/// Every number here is metadata — who is online, how many circles exist,
+/// how fast they are talking — and metadata is the one thing this design
+/// concedes to the operator. Serving it to the open internet would hand that
+/// concession to everyone else too.
+///
+/// A missing token answers 404 rather than 401: an unconfigured relay should
+/// look like it has no such endpoint, not like it has one worth attacking.
+async fn metrics_scrape(State(app): State<Arc<App>>, headers: HeaderMap) -> Response {
+    let Ok(expected) = std::env::var("METRICS_TOKEN") else {
+        return StatusCode::NOT_FOUND.into_response();
+    };
+    if expected.is_empty() {
+        return StatusCode::NOT_FOUND.into_response();
+    }
+    let presented = headers
+        .get(header::AUTHORIZATION)
+        .and_then(|v| v.to_str().ok())
+        .and_then(|v| v.strip_prefix("Bearer "))
+        .unwrap_or_default();
+    // Constant time, and length-checked first: `ct_eq` on differing lengths
+    // is not defined to be constant time.
+    let ok = presented.len() == expected.len()
+        && bool::from(subtle::ConstantTimeEq::ct_eq(
+            presented.as_bytes(),
+            expected.as_bytes(),
+        ));
+    if !ok {
+        return StatusCode::UNAUTHORIZED.into_response();
+    }
+    let snapshot = app.hub.lock().await.snapshot();
+    (
+        StatusCode::OK,
+        [(header::CONTENT_TYPE, "text/plain; version=0.0.4; charset=utf-8")],
+        app.metrics.render(snapshot),
+    )
+        .into_response()
+}
+
 async fn register_policy(State(app): State<Arc<App>>) -> impl IntoResponse {
     let open = server::registration_open_without_invite(&app).await;
     axum::Json(serde_json::json!({ "invite_required": !open }))
@@ -162,6 +207,7 @@ async fn limit_account(State(app): State<Arc<App>>, req: Request, next: Next) ->
 
 async fn limit_ws(State(app): State<Arc<App>>, req: Request, next: Next) -> Response {
     if !app.limits.ws.allow(limit_key(&app, &req)) {
+        app.metrics.auth_failures.rate_limited.inc();
         return (StatusCode::TOO_MANY_REQUESTS, "rate limited — try again shortly").into_response();
     }
     next.run(req).await
@@ -181,10 +227,15 @@ async fn put_blob(
     // per request until the data volume — shared with Postgres — filled up.
     let ticket = headers.get(UPLOAD_TICKET_HEADER).and_then(|v| v.to_str().ok()).unwrap_or("");
     if !app.blob_tickets.redeem(ticket, &id) {
+        app.metrics.blob_tickets_refused.inc();
         return (StatusCode::FORBIDDEN, "missing or invalid upload ticket".to_string());
     }
     match app.blobs.put(&id, &body).await {
-        Ok(()) => (StatusCode::CREATED, String::new()),
+        Ok(()) => {
+            app.metrics.blobs_uploaded.inc();
+            app.metrics.blob_bytes.add(body.len() as u64);
+            (StatusCode::CREATED, String::new())
+        }
         Err(e) => (StatusCode::BAD_REQUEST, e),
     }
 }
