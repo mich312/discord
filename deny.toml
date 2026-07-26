@@ -32,6 +32,25 @@ ignore = [
     # Re-check this if push signing ever gains an RS256 path, or if web-push
     # changes its JWT backend.
     "RUSTSEC-2023-0071",
+
+    # RUSTSEC-2026-0202 — libcrux-sha3 0.0.8: the AVX2 SHAKE-256 path panics
+    # on output lengths > 32 that are not divisible by 8. Fixed in 0.0.10.
+    #
+    # BLOCKED UPSTREAM, verified: hpke-rs 0.6.1 requires
+    # libcrux-sha3 = "^0.0.8", and 0.0.x releases are semver-incompatible
+    # with each other, so `cargo update -p libcrux-sha3 --precise 0.0.10`
+    # is refused by resolution. The chain is
+    # libcrux-sha3 -> hpke-rs -> openmls_rust_crypto -> crypto-core. Fixing
+    # it needs hpke-rs or openmls_rust_crypto to widen or bump that
+    # requirement; nothing in this repository can.
+    #
+    # Impact is a panic (availability), not key compromise. NOT yet verified
+    # whether the MLS ciphersuite in use ever calls SHAKE-256 with a
+    # qualifying length — treat as reachable until someone checks.
+    #
+    # Remove this the moment openmls_rust_crypto ships against
+    # libcrux-sha3 >= 0.0.10. Re-test with the --precise command above.
+    "RUSTSEC-2026-0202",
 ]
 
 [bans]

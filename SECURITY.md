@@ -81,6 +81,13 @@ Tracked openly rather than quietly, in `docs/HARDENING_PLAN.md`:
   The fix requires a design decision, laid out in the plan.
 - There is no device revocation and no identity key rotation.
 - Groups that forked before the epoch compare-and-swap landed stay forked.
+- **RUSTSEC-2026-0202** — `libcrux-sha3` 0.0.8, reached through
+  `hpke-rs -> openmls_rust_crypto`, panics in its AVX2 SHAKE-256 path on
+  output lengths > 32 not divisible by 8. Fixed upstream in 0.0.10, but
+  `hpke-rs` 0.6.1 pins `^0.0.8` and 0.0.x releases are semver-incompatible,
+  so the bump is blocked until `openmls_rust_crypto` moves. Impact is a
+  panic, not key compromise. Whether our ciphersuite ever calls SHAKE-256
+  with a qualifying length is unverified — assume reachable.
 
 ## No bug bounty
 
