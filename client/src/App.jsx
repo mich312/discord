@@ -401,6 +401,21 @@ export default function App() {
     };
   }, [server, channel, state.messagesRev, state.messages]);
 
+  // Cross-circle activity for the rail badges. Same seen markers as the
+  // per-channel pills, rolled up per circle — without it nothing on screen
+  // says a circle you are not looking at has moved.
+  const [circleUnreads, setCircleUnreads] = useState({});
+  useEffect(() => {
+    let alive = true;
+    controllerRef.current
+      ?.circleUnreads()
+      .then((u) => alive && setCircleUnreads(u))
+      .catch(() => {});
+    return () => {
+      alive = false;
+    };
+  }, [server, channel, state.messagesRev, state.messages, state.servers]);
+
   // Auto-dismiss toasts.
   useEffect(() => {
     if (!state.toast) return;
@@ -652,6 +667,7 @@ export default function App() {
           <Rail
             servers={state.servers}
             active={server}
+            unreads={circleUnreads}
             onSelect={(id) =>
               withViewTransition(() => {
                 // Picking a circle lands on its game hub, not a room.

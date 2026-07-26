@@ -1242,8 +1242,7 @@ export class Controller {
       const msgs = (await this.db.msgsFor(serverId, channel))
         .filter((m) => !m.system)
         .sort((a, b) => a.ts - b.ts);
-      const seen = record.seen?.[channel] ?? record.joinedAt ?? 0;
-      const unread = msgs.filter((m) => m.ts > seen && m.sender !== this.me).length;
+      const unread = countUnread(msgs, seenFloor(record, channel), this.me);
       const last = msgs.at(-1);
       out.push({
         channel,
@@ -1256,6 +1255,26 @@ export class Controller {
             }
           : null,
       });
+    }
+    return out;
+  }
+
+  /** Unread totals per circle, for the rail. Without this the rail is pure
+      identity: nothing on screen says a circle you are not looking at has
+      moved, so anyone in more than two circles has to click through them to
+      find out — which is what made the multi-circle model unusable.
+
+      One pass over every circle rather than one call per tile: the read is
+      device-local IndexedDB, but it is O(channels) transactions and the
+      callers refresh it on every arriving message. */
+  async circleUnreads() {
+    const out = {};
+    for (const record of this.servers.values()) {
+      let unread = 0;
+      for (const channel of record.channels) {
+        unread += countUnread(await this.db.msgsFor(record.id, channel), seenFloor(record, channel), this.me);
+      }
+      out[record.id] = unread;
     }
     return out;
   }
@@ -2816,6 +2835,27 @@ export class Controller {
 export function messageTs(claimed, now = Date.now()) {
   const t = Number(claimed);
   return Number.isFinite(t) && t > 0 ? t : now;
+}
+
+/** How far back "unread" reaches in a room this device has never opened.
+    Falling back to 0 would count a circle's entire backfilled history as
+    unread the moment you join it; `joinedAt` scopes it to what arrived after
+    you did. */
+export function seenFloor(record, channel) {
+  return record?.seen?.[channel] ?? record?.joinedAt ?? 0;
+}
+
+/** Messages that arrived after this device last looked. Your own messages
+    never count — they are read by definition, and a sender clock running
+    ahead of the device that sent them would otherwise leave them unread
+    forever. `system` chips are chrome, not conversation. */
+export function countUnread(msgs, seen, me) {
+  let n = 0;
+  for (const m of msgs ?? []) {
+    if (m.system || m.sender === me) continue;
+    if ((Number(m.ts) || 0) > seen) n += 1;
+  }
+  return n;
 }
 
 /** A call's conversation thread lives under `voice:<room>` — real E2EE chat

@@ -12,7 +12,11 @@ function monogram(name) {
   return mark.toUpperCase();
 }
 
-export default function Rail({ servers, active, onSelect, onCreate }) {
+// Counts past this read as "a lot" rather than as a number, and a four-digit
+// badge would blow out the tile anyway.
+const OVERFLOW = 99;
+
+export default function Rail({ servers, active, unreads, onSelect, onCreate }) {
   const [adding, setAdding] = useState(false);
   const [name, setName] = useState('');
 
@@ -21,11 +25,18 @@ export default function Rail({ servers, active, onSelect, onCreate }) {
       <ul className="circle-list">
         {servers.map((s) => {
           const hue = nameHue(s.name);
+          // The circle you are looking at is being read right now; a count on
+          // it would flicker up and back down as the seen marker catches up.
+          const unread = s.id === active ? 0 : (unreads?.[s.id] ?? 0);
           return (
-            <li key={s.id}>
+            <li key={s.id} className="rail-slot" data-unread={unread > 0 ? '' : undefined}>
               <button
                 className={s.id === active ? 'circle-tile active' : 'circle-tile'}
-                title={s.name}
+                // The count belongs in the accessible name, not only in a
+                // visual badge — the tile's own label is a two-letter
+                // monogram, which tells a screen reader nothing.
+                title={unread > 0 ? `${s.name} — ${unread} unread` : s.name}
+                aria-label={unread > 0 ? `${s.name}, ${unread} unread` : s.name}
                 data-testid={`rail-${s.name}`}
                 style={{
                   background: `linear-gradient(135deg, hsl(${hue} 60% 42%), hsl(${(hue + 42) % 360} 68% 58%))`,
@@ -34,6 +45,17 @@ export default function Rail({ servers, active, onSelect, onCreate }) {
               >
                 {monogram(s.name)}
               </button>
+              {unread > 0 && (
+                <span
+                  className="unread-badge rail-unread"
+                  data-testid={`rail-unread-${s.name}`}
+                  // The button already says it; announcing it twice is worse
+                  // than not announcing it.
+                  aria-hidden="true"
+                >
+                  {unread > OVERFLOW ? `${OVERFLOW}+` : unread}
+                </span>
+              )}
             </li>
           );
         })}

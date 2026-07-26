@@ -21,7 +21,7 @@ analysis; this is the current state.
 | **2** | CI gate, supply chain, deploy health gate + pinned host keys | §2.2 extract `applyEnvelope`/`AccountService`; §2.3 coverage for the named risky paths; §2.4 image-based deploy with fast rollback; §2.6 reproducible builds + integrity manifest for worker and wasm |
 | **3** | Per-group send locks (global hub mutex gone); hourly history sweep; recorded schema version with a rollback guard | Bounded outbound queues; blob and message GC; publish the ceiling |
 | **4** | `/healthz`; connect/disconnect/subscribe logging; `deploy/RUNBOOK.md`; actionable WebAuthn config failure | Prometheus metrics; OpenTelemetry tracing; alerting |
-| **5** | Dialog semantics + focus management on all overlays; WCAG AA contrast; iOS storage-eviction fix; drawer `aria-expanded`/`aria-controls` + labelled landmarks; 44px touch targets; `prefers-color-scheme` with a system-following default | PWA offline shell; rail unread badges; local search |
+| **5** | Dialog semantics + focus management on all overlays; WCAG AA contrast; iOS storage-eviction fix; drawer `aria-expanded`/`aria-controls` + labelled landmarks; 44px touch targets; `prefers-color-scheme` with a system-following default; rail unread badges | PWA offline shell; local search; mention badges; kept-history room indicator; voice participant cap |
 | **7** | `SECURITY.md`; `docs/THREAT_MODEL.md` | cargo-fuzz targets on protocol parsing; epoch state-machine simulation harness |
 
 **Phase 6 is dropped** by decision — see *Decisions taken*. Device
@@ -566,9 +566,21 @@ button closes a drawer rather than exiting the app.
 
 ### 5.3 UX gaps that block adoption
 
-Rail unread/mention badges — without a cross-circle activity signal the
-multi-circle model is unusable past two circles. Local message search (there is
-none, and no copy explains why). A persistent kept-history indicator in the room
+Rail unread badges are **done**. The per-channel seen markers already existed
+(`markSeen`, `channelDigest`); what was missing was the roll-up, so nothing on
+screen said a circle you were not looking at had moved. `circleUnreads()` now
+totals them per circle and the rail renders a badge — brightening the tile as
+well, since an inactive tile sits at 0.62 opacity and a badge over a dimmed
+tile reads as contradiction. The counting rules moved out of `channelDigest`
+into exported `countUnread`/`seenFloor` and are covered by
+`client/test/unread.test.mjs`; the sharp edge is the `joinedAt` floor, without
+which joining a circle counts its whole backfilled history as unread.
+
+**Mention** badges are still open, and deliberately: there is no `@handle`
+affordance in the composer, so a matcher would be half a feature.
+
+Local message search (there is none, and no copy explains why). A persistent
+kept-history indicator in the room
 (the forward-secrecy trade is announced once in a chip that scrolls away, which
 falsifies the README's central UX claim). A voice participant cap with a clear
 message instead of a silent mesh meltdown past ~8. An escape hatch on the

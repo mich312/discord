@@ -509,6 +509,22 @@ kbd {
   opacity: 1;
 }
 .circle-tile.add:hover { color: var(--ink); border-color: var(--ink-mute); }
+
+.rail-slot { position: relative; display: flex; }
+/* An inactive tile sits at 0.62 — which reads as "nothing here". A circle
+   with unread messages has to come forward, or the badge is arguing with the
+   tile underneath it. */
+.rail-slot[data-unread] .circle-tile { opacity: 1; }
+.rail-unread {
+  position: absolute;
+  top: -4px;
+  right: -5px;
+  /* The badge is decoration; the count is in the button's aria-label, and
+     clicks belong to the tile it overlaps. */
+  pointer-events: none;
+  /* Punch it out of the rail background so it reads against any circle hue. */
+  box-shadow: 0 0 0 2px var(--well);
+}
 .rail-add-slot { position: relative; }
 .rail-form {
   position: absolute;
