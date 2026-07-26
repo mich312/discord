@@ -984,3 +984,276 @@ async fn a_connection_keeps_receiving_past_the_queue_bound() {
     );
     assert_eq!(app.metrics.messages_appended.get() as usize, total + 1, "commit + {total} messages");
 }
+
+/// Two admins committing against the same epoch is the exact race that used to
+/// fork a group irrecoverably — both sides advancing to a different epoch N+1,
+/// after which neither can read the other. §1.1 made commits stage until the
+/// relay's compare-and-swap accepts them; `memory_store.rs` covers the CAS
+/// itself, but nothing covered what a *real MLS client* does when it loses.
+///
+/// The recovery loop is the part that matters: the loser must discard its
+/// staged commit, process the winner's, and be able to commit again. Without
+/// that last step the fork is merely deferred.
+#[tokio::test]
+async fn a_losing_commit_is_refused_and_the_loser_recovers() {
+    let addr = spawn_relay().await;
+
+    let mut carol =
+        TestClient::connect(addr, ChatClient::new("carol").unwrap(), "carol").await.unwrap();
+    carol.publish_kps(2).await;
+    let mut dave =
+        TestClient::connect(addr, ChatClient::new("dave").unwrap(), "dave").await.unwrap();
+    dave.publish_kps(2).await;
+
+    // alice creates the circle and brings bob in, so both can commit.
+    let mut alice =
+        TestClient::connect(addr, ChatClient::new("alice").unwrap(), "alice").await.unwrap();
+    alice.mls.create_group("g1").unwrap();
+    alice.request(json!({"t": "create_group", "group": "g1"})).await;
+    let mut bob = TestClient::connect(addr, ChatClient::new("bob").unwrap(), "bob").await.unwrap();
+    bob.publish_kps(1).await;
+
+    let kp = alice.request(json!({"t": "fetch_kp", "user": "bob"})).await;
+    let add_bob = alice
+        .mls
+        .add_member(
+            "g1",
+            &B64.decode(kp["payload"].as_str().unwrap()).unwrap(),
+            "bob",
+            &B64.decode(kp["pubkey"].as_str().unwrap()).unwrap(),
+        )
+        .unwrap();
+    alice.mls.merge_staged_commit("g1").unwrap();
+    let reply = alice
+        .request(json!({
+            "t": "send", "group": "g1", "epoch": alice.mls.epoch("g1").unwrap(),
+            "payload": B64.encode(&add_bob.commit), "commit": true,
+        }))
+        .await;
+    assert_eq!(reply["t"], "ok", "the establishing commit: {reply}");
+    let commit_seq = reply["seq"].as_u64().unwrap();
+    alice.request(json!({"t": "allow", "group": "g1", "user": "bob"})).await;
+    alice
+        .request(json!({
+            "t": "welcome", "to": "bob", "group": "g1",
+            "after": commit_seq, "payload": B64.encode(&add_bob.welcome),
+        }))
+        .await;
+    let welcome = bob.recv_until(|m| m["t"] == "welcome").await;
+    bob.mls
+        .join_from_welcome(&B64.decode(welcome["payload"].as_str().unwrap()).unwrap())
+        .unwrap();
+
+    let shared_epoch = alice.mls.epoch("g1").unwrap();
+    assert_eq!(bob.mls.epoch("g1").unwrap(), shared_epoch, "both start level");
+
+    // --- the race -----------------------------------------------------------
+    // Both stage a commit against the same epoch, neither merged yet. This is
+    // the state §1.1 introduced: staged, not applied, until the log says so.
+    let kp_c = alice.request(json!({"t": "fetch_kp", "user": "carol"})).await;
+    let alice_add = alice
+        .mls
+        .add_member(
+            "g1",
+            &B64.decode(kp_c["payload"].as_str().unwrap()).unwrap(),
+            "carol",
+            &B64.decode(kp_c["pubkey"].as_str().unwrap()).unwrap(),
+        )
+        .unwrap();
+    let kp_d = bob.request(json!({"t": "fetch_kp", "user": "dave"})).await;
+    let bob_add = bob
+        .mls
+        .add_member(
+            "g1",
+            &B64.decode(kp_d["payload"].as_str().unwrap()).unwrap(),
+            "dave",
+            &B64.decode(kp_d["pubkey"].as_str().unwrap()).unwrap(),
+        )
+        .unwrap();
+
+    let next = shared_epoch + 1;
+    let winner = alice
+        .request(json!({
+            "t": "send", "group": "g1", "epoch": next,
+            "payload": B64.encode(&alice_add.commit), "commit": true,
+        }))
+        .await;
+    assert_eq!(winner["t"], "ok", "the first commit for an epoch wins: {winner}");
+    alice.mls.merge_staged_commit("g1").unwrap();
+
+    let loser = bob
+        .request(json!({
+            "t": "send", "group": "g1", "epoch": next,
+            "payload": B64.encode(&bob_add.commit), "commit": true,
+        }))
+        .await;
+    assert_eq!(loser["t"], "error", "the second commit for the same epoch must be refused");
+    assert!(
+        loser["message"].as_str().unwrap_or_default().contains("epoch"),
+        "the refusal must say why, so the client knows to retry rather than give up: {loser}"
+    );
+
+    // --- recovery -----------------------------------------------------------
+    // Discard the commit that lost, apply the one that won, and try again.
+    bob.mls.discard_staged_commit("g1").unwrap();
+    bob.request(json!({"t": "subscribe", "group": "g1", "after": commit_seq})).await;
+    let msg = bob.recv_until(|m| m["t"] == "msg").await;
+    bob.mls
+        .process_incoming(&B64.decode(msg["payload"].as_str().unwrap()).unwrap())
+        .unwrap();
+
+    assert_eq!(
+        bob.mls.epoch("g1").unwrap(),
+        alice.mls.epoch("g1").unwrap(),
+        "after processing the winner both sides are on the same epoch — no fork"
+    );
+    let mut both = bob.mls.members("g1").unwrap();
+    both.sort();
+    assert_eq!(both, vec!["alice", "bob", "carol"], "the loser adopted the winner's membership");
+
+    // And the retry now succeeds against the epoch that actually exists.
+    let kp_d2 = bob.request(json!({"t": "fetch_kp", "user": "dave"})).await;
+    let retry = bob
+        .mls
+        .add_member(
+            "g1",
+            &B64.decode(kp_d2["payload"].as_str().unwrap()).unwrap(),
+            "dave",
+            &B64.decode(kp_d2["pubkey"].as_str().unwrap()).unwrap(),
+        )
+        .unwrap();
+    let accepted = bob
+        .request(json!({
+            "t": "send", "group": "g1", "epoch": bob.mls.epoch("g1").unwrap() + 1,
+            "payload": B64.encode(&retry.commit), "commit": true,
+        }))
+        .await;
+    assert_eq!(accepted["t"], "ok", "the retry lands: {accepted}");
+}
+
+/// A commit that skips an epoch must be refused for the same reason a
+/// duplicate one is: applying it would leave every other member unable to
+/// derive the keys for the epochs in between.
+#[tokio::test]
+async fn a_commit_that_skips_an_epoch_is_refused() {
+    let addr = spawn_relay().await;
+    let mut alice =
+        TestClient::connect(addr, ChatClient::new("alice").unwrap(), "alice").await.unwrap();
+    alice.mls.create_group("g1").unwrap();
+    alice.request(json!({"t": "create_group", "group": "g1"})).await;
+
+    let reply = alice
+        .request(json!({
+            "t": "send", "group": "g1", "epoch": 99,
+            "payload": B64.encode("not-a-real-commit"), "commit": true,
+        }))
+        .await;
+    assert_eq!(reply["t"], "error", "a commit from the future is refused: {reply}");
+
+    // An ordinary message is NOT epoch-checked, so the same epoch number on a
+    // non-commit send still goes through — the gate is on commits alone.
+    let ordinary = alice
+        .request(json!({
+            "t": "send", "group": "g1", "epoch": 99, "payload": B64.encode("chatter"),
+        }))
+        .await;
+    assert_eq!(ordinary["t"], "ok", "non-commits are not epoch-gated: {ordinary}");
+}
+
+/// Reconnect resync losslessness. `reconnect_race.rs` proves a subscription
+/// survives an overlapping socket teardown; it does not prove that a client
+/// which was *gone* for a while gets back everything it missed. That is the
+/// property the whole ordered-log design exists to provide, and the one a
+/// user notices immediately when it breaks.
+#[tokio::test]
+async fn nothing_is_lost_across_a_disconnect() {
+    let addr = spawn_relay().await;
+
+    let mut bob = TestClient::connect(addr, ChatClient::new("bob").unwrap(), "bob").await.unwrap();
+    bob.publish_kps(1).await;
+    let mut alice =
+        TestClient::connect(addr, ChatClient::new("alice").unwrap(), "alice").await.unwrap();
+    alice.mls.create_group("g1").unwrap();
+    alice.request(json!({"t": "create_group", "group": "g1"})).await;
+    let kp = alice.request(json!({"t": "fetch_kp", "user": "bob"})).await;
+    let add = alice
+        .mls
+        .add_member(
+            "g1",
+            &B64.decode(kp["payload"].as_str().unwrap()).unwrap(),
+            "bob",
+            &B64.decode(kp["pubkey"].as_str().unwrap()).unwrap(),
+        )
+        .unwrap();
+    alice.mls.merge_staged_commit("g1").unwrap();
+    let reply = alice
+        .request(json!({
+            "t": "send", "group": "g1", "epoch": alice.mls.epoch("g1").unwrap(),
+            "payload": B64.encode(&add.commit), "commit": true,
+        }))
+        .await;
+    let commit_seq = reply["seq"].as_u64().unwrap();
+    alice.request(json!({"t": "allow", "group": "g1", "user": "bob"})).await;
+    alice
+        .request(json!({
+            "t": "welcome", "to": "bob", "group": "g1",
+            "after": commit_seq, "payload": B64.encode(&add.welcome),
+        }))
+        .await;
+    let welcome = bob.recv_until(|m| m["t"] == "welcome").await;
+    bob.mls
+        .join_from_welcome(&B64.decode(welcome["payload"].as_str().unwrap()).unwrap())
+        .unwrap();
+
+    // Bob subscribes, reads two, then vanishes mid-conversation.
+    bob.request(json!({"t": "subscribe", "group": "g1", "after": commit_seq})).await;
+    for text in ["one", "two"] {
+        alice.send_group("g1", text).await;
+        let msg = bob.recv_until(|m| m["t"] == "msg").await;
+        TestClient::assert_message(
+            bob.mls.process_incoming(&B64.decode(msg["payload"].as_str().unwrap()).unwrap()).unwrap(),
+            "alice",
+            text,
+        );
+    }
+    let mut cursor = 0;
+    let bob_mls = bob.mls;
+    drop(bob.ws);
+
+    // Twenty messages arrive while he is away — comfortably more than a single
+    // frame's worth, so a truncated catch-up would show up here.
+    let missed: Vec<String> = (0..20).map(|i| format!("missed-{i}")).collect();
+    for text in &missed {
+        cursor = alice.send_group("g1", text).await;
+    }
+
+    // He comes back with the last seq he actually processed.
+    let mut bob = TestClient::connect(addr, bob_mls, "bob").await.unwrap();
+    bob.request(json!({"t": "subscribe", "group": "g1", "after": commit_seq + 2})).await;
+
+    let mut seen = Vec::new();
+    let mut seqs = Vec::new();
+    for _ in 0..missed.len() {
+        let msg = bob.recv_until(|m| m["t"] == "msg").await;
+        seqs.push(msg["seq"].as_u64().unwrap());
+        match bob
+            .mls
+            .process_incoming(&B64.decode(msg["payload"].as_str().unwrap()).unwrap())
+            .unwrap()
+        {
+            Event::Message { text, .. } => seen.push(text),
+            other => panic!("expected a message, got {other:?}"),
+        }
+    }
+
+    assert_eq!(seen, missed, "every message sent while away arrives, in order");
+    assert!(seqs.windows(2).all(|w| w[0] < w[1]), "and seqs ascend: {seqs:?}");
+    assert_eq!(*seqs.last().unwrap(), cursor, "up to and including the newest");
+
+    // Re-subscribing from the new cursor yields nothing: catch-up is not
+    // replay-everything, or every reconnect would duplicate the whole log.
+    bob.request(json!({"t": "subscribe", "group": "g1", "after": cursor})).await;
+    alice.send_group("g1", "after").await;
+    let msg = bob.recv_until(|m| m["t"] == "msg").await;
+    assert_eq!(msg["seq"].as_u64().unwrap(), cursor + 1, "only the new one");
+}
