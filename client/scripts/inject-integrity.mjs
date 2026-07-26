@@ -56,8 +56,14 @@ writeFileSync(workerPath, worker.replace('__WASM_INTEGRITY__', wasmHash));
 // The worker is hashed AFTER the substitution above, so the manifest describes
 // the bytes actually served rather than the template.
 const files = manifestFiles(paths);
+// The commit is what makes the manifest self-describing: without it a
+// verifier knows the hashes but not which source to rebuild, which is most of
+// the point. Passed in rather than read from git, because the Docker build
+// has no .git — omitted rather than guessed when absent.
+const commit = process.env.SOURCE_COMMIT?.trim() || null;
 const manifest = {
   algorithm: 'sha384',
+  commit,
   wasm,
   files: Object.fromEntries(files.map((p) => [p, hashOf(p)])),
 };

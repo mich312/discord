@@ -530,9 +530,18 @@ flags.
 
 **What is not:** a different OS, architecture, libc or container base. Nobody
 has yet rebuilt this on hardware GitHub does not own, which is the only test
-that fully answers §6.2. The machinery to check it now exists — publish a
-commit's manifest, hand someone the source, compare — but the check itself is
-still bounded by one runner image.
+that fully answers §6.2. The check itself is still bounded by one runner image.
+
+`docs/VERIFYING.md` is the procedure for a third party to do it: fetch
+`/integrity.json`, hash the served files against it, then rebuild the named
+commit and diff. The manifest now records its own `commit`, without which a
+verifier would know the hashes but not which source to build — most of the
+point. It is stamped from `SOURCE_COMMIT` rather than read from git, because
+the Docker build has no `.git`, and omitted rather than guessed when absent.
+
+**The remaining gap is social, not technical.** A mechanism nobody exercises
+detects nothing. Someone outside CI has to actually run that procedure, on
+hardware GitHub does not own, for the guarantee to mean anything.
 
 ---
 

@@ -32,6 +32,11 @@ RUN WASM_REQUIRE_OPT=1 bash crypto-core/build-wasm.sh
 
 # --- stage 2: node — client bundle ------------------------------------------
 FROM node:22-bookworm AS client-build
+# Stamped into dist/integrity.json so the served manifest names the commit it
+# was built from. Unset in a local `docker build` — the field is then omitted
+# rather than guessed.
+ARG SOURCE_COMMIT=""
+ENV SOURCE_COMMIT=$SOURCE_COMMIT
 WORKDIR /src/client
 COPY client/package.json client/package-lock.json ./
 RUN npm ci

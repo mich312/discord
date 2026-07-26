@@ -207,6 +207,9 @@ jobs:
       - name: rebuild independently and compare
         env:
           WASM_REQUIRE_OPT: '1'
+          # Must match the build job's, or the manifests differ for a reason
+          # that has nothing to do with reproducibility.
+          SOURCE_COMMIT: ${{ github.sha }}
           # Paths would leak into the binary through panic messages and debug
           # info. `build` does NOT set this, so a match proves they are not in
           # the artifact at all — which is what lets a third party rebuild at
@@ -323,6 +326,10 @@ jobs:
       # stamped) and scripts/inject-integrity.mjs (non-zero if the wasm is
       # missing, ambiguous, or the worker's placeholder has been renamed).
       - name: vite build + SRI
+        env:
+          # Stamps the manifest with the commit it describes, so a verifier
+          # knows which source to rebuild.
+          SOURCE_COMMIT: ${{ github.sha }}
         run: npm run build
         working-directory: client
 

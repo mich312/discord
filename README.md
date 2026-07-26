@@ -23,6 +23,12 @@ does not protect), **[docs/CAPACITY.md](docs/CAPACITY.md)** (the limits, and
 which of them have never been measured), and
 **[deploy/RUNBOOK.md](deploy/RUNBOOK.md)** (what to do when it breaks).
 
+And if you are *using* someone else's relay rather than running one:
+**[docs/VERIFYING.md](docs/VERIFYING.md)** shows how to rebuild the source and
+check it matches the code you were actually served. Web-delivered encryption
+means the operator ships the software that holds your keys; that check is the
+only thing that makes the claim falsifiable.
+
 ## What works
 
 - **Text channels** inside E2EE servers — channel structure and server

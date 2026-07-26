@@ -62,6 +62,8 @@ jobs:
         with:
           context: .
           push: true
+          build-args: |
+            SOURCE_COMMIT=${{ github.sha }}
           tags: |
             ${{ steps.meta.outputs.ref }}
             ${{ steps.meta.outputs.latest }}
