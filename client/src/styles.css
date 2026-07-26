@@ -3121,14 +3121,21 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
   .composer-note { align-items: flex-start; }
   .composer-note svg { margin-top: 2px; }
 
-  /* comfortable touch targets */
-  .icon-btn { width: 36px; height: 36px; }
+  /* Touch targets. Everything interactive clears 44px, which is the iOS
+     minimum and above Android's 48dp only where the control is genuinely
+     secondary. These were 36px, ~32px and ~21px respectively — small
+     enough that the roster's role toggle and the voice join pill were
+     routinely mis-tapped. Padding alone is not enough for the inline
+     controls, so they get an explicit min-height. */
+  .icon-btn { width: 44px; height: 44px; }
   .rail { width: 64px; }
   .circle-tile { width: 44px; height: 44px; }
-  .channel { padding: 8px; }
-  .member { padding: 8px 6px; }
-  .voice-join { padding: 5px 12px; }
-  .role-toggle { padding: 4px 6px; }
+  .channel { padding: 11px 8px; min-height: 44px; }
+  .member { padding: 11px 6px; min-height: 44px; }
+  .voice-join { padding: 12px 14px; min-height: 44px; }
+  .role-toggle { padding: 12px 10px; min-height: 44px; }
+  .msg-act { min-width: 44px; min-height: 44px; }
+  .ghost { min-height: 44px; }
 
   /* 16px inputs: anything smaller makes iOS zoom the page on focus */
   .composer input[type='text'],
