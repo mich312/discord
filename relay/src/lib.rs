@@ -119,7 +119,7 @@ async fn ws_handler(ws: WebSocketUpgrade, State(app): State<Arc<App>>) -> impl I
 }
 
 async fn register_policy(State(app): State<Arc<App>>) -> impl IntoResponse {
-    let open = server::registration_allowed(&app, None).await;
+    let open = server::registration_open_without_invite(&app).await;
     axum::Json(serde_json::json!({ "invite_required": !open }))
 }
 

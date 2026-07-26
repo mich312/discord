@@ -344,6 +344,14 @@ async fn authenticate(socket: &mut WebSocket, app: &App) -> Option<String> {
 /// link could register unlimited accounts. Claiming is idempotent per
 /// (invite, user), so the same joiner presenting the link again in
 /// `RedeemInvite` does not burn a second use.
+/// Can a fresh handle register with NO invite at all? A pure query, used by
+/// the onboarding UI to say "invite-only" up front. Deliberately separate
+/// from the gate below, which spends a use — asking must never consume.
+pub async fn registration_open_without_invite(app: &App) -> bool {
+    app.open_registration
+        || app.store.user_count().await.map(|n| n == 0).unwrap_or(false)
+}
+
 pub async fn registration_allowed(app: &App, user: &str, invite: Option<&str>) -> bool {
     if app.open_registration {
         return true;
