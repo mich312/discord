@@ -141,6 +141,15 @@ impl PgStore {
                 payload bytea NOT NULL,
                 updated_at timestamptz NOT NULL DEFAULT now()
             );
+            -- (invite, user) pairs that have already counted a use. The
+            -- join flow presents an invite twice (Hello, then RedeemInvite),
+            -- so uses are counted per claimant, not per presentation.
+            CREATE TABLE IF NOT EXISTS invite_claims (
+                invite_id text NOT NULL,
+                user_id text NOT NULL,
+                claimed_at timestamptz NOT NULL DEFAULT now(),
+                PRIMARY KEY (invite_id, user_id)
+            );
             CREATE TABLE IF NOT EXISTS invites (
                 invite_id text PRIMARY KEY,
                 group_id text NOT NULL REFERENCES groups(group_id),
@@ -826,37 +835,77 @@ impl Store for PgStore {
         Ok(())
     }
 
-    async fn redeem_invite(&self, invite: &str, now: u64) -> Result<(String, Vec<u8>), StoreError> {
-        // Atomic check-and-count so concurrent redemptions can't exceed
-        // max_uses.
-        let row = sqlx::query(
-            "UPDATE invites SET uses = uses + 1
-             WHERE invite_id = $1
-               AND (expires_at IS NULL OR expires_at >= $2)
-               AND (max_uses IS NULL OR uses < max_uses)
-             RETURNING group_id, payload",
+    async fn redeem_invite(
+        &self,
+        invite: &str,
+        user: &str,
+        now: u64,
+    ) -> Result<(String, Vec<u8>), StoreError> {
+        let mut tx = self.pool.begin().await.map_err(backend)?;
+
+        // Has this handle already spent a use of this link? The join flow
+        // presents the invite twice, so the second presentation must not
+        // count again.
+        let claimed = sqlx::query("SELECT 1 FROM invite_claims WHERE invite_id = $1 AND user_id = $2")
+            .bind(invite)
+            .bind(user)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(backend)?
+            .is_some();
+
+        let row = if claimed {
+            // Expiry still applies; the use count does not.
+            sqlx::query(
+                "SELECT group_id, payload FROM invites
+                 WHERE invite_id = $1 AND (expires_at IS NULL OR expires_at >= $2)",
+            )
+            .bind(invite)
+            .bind(now as i64)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(backend)?
+        } else {
+            // Atomic check-and-count so concurrent claims can't exceed
+            // max_uses.
+            sqlx::query(
+                "UPDATE invites SET uses = uses + 1
+                 WHERE invite_id = $1
+                   AND (expires_at IS NULL OR expires_at >= $2)
+                   AND (max_uses IS NULL OR uses < max_uses)
+                 RETURNING group_id, payload",
+            )
+            .bind(invite)
+            .bind(now as i64)
+            .fetch_optional(&mut *tx)
+            .await
+            .map_err(backend)?
+        };
+        let row = row.ok_or(StoreError::InviteInvalid)?;
+
+        sqlx::query(
+            "INSERT INTO invite_claims (invite_id, user_id) VALUES ($1, $2)
+             ON CONFLICT DO NOTHING",
         )
         .bind(invite)
-        .bind(now as i64)
-        .fetch_optional(&self.pool)
+        .bind(user)
+        .execute(&mut *tx)
         .await
-        .map_err(backend)?
-        .ok_or(StoreError::InviteInvalid)?;
+        .map_err(backend)?;
+        tx.commit().await.map_err(backend)?;
         Ok((row.get("group_id"), row.get("payload")))
     }
 
-    async fn invite_usable(&self, invite: &str, now: u64) -> Result<bool, StoreError> {
-        let row = sqlx::query(
-            "SELECT 1 FROM invites
-             WHERE invite_id = $1
-               AND (expires_at IS NULL OR expires_at >= $2)
-               AND (max_uses IS NULL OR uses < max_uses)",
-        )
-        .bind(invite)
-        .bind(now as i64)
-        .fetch_optional(&self.pool)
-        .await
-        .map_err(backend)?;
-        Ok(row.is_some())
+    async fn claim_invite_for_registration(
+        &self,
+        invite: &str,
+        user: &str,
+        now: u64,
+    ) -> Result<bool, StoreError> {
+        match self.redeem_invite(invite, user, now).await {
+            Ok(_) => Ok(true),
+            Err(StoreError::InviteInvalid) => Ok(false),
+            Err(e) => Err(e),
+        }
     }
 }

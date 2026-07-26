@@ -138,19 +138,19 @@ async fn invites_enforce_expiry_uses_and_atomic_counting() {
     let inv = unique("inv");
     s.create_invite(&inv, record(None, None)).await.unwrap();
     assert_eq!(s.invite_group(&inv).await.unwrap(), Some(group.clone()));
-    let (g, payload) = s.redeem_invite(&inv, 1000).await.unwrap();
+    let (g, payload) = s.redeem_invite(&inv, "claimant1", 1000).await.unwrap();
     assert_eq!((g.as_str(), payload.as_slice()), (group.as_str(), b"blob-v1".as_slice()));
     s.update_invite(&inv, b"blob-v2".to_vec()).await.unwrap();
-    let (_, payload) = s.redeem_invite(&inv, 1000).await.unwrap();
+    let (_, payload) = s.redeem_invite(&inv, "claimant2", 1000).await.unwrap();
     assert_eq!(payload, b"blob-v2");
 
     // Expiry.
     let expired = unique("inv");
     s.create_invite(&expired, record(None, Some(500))).await.unwrap();
-    assert!(s.redeem_invite(&expired, 1000).await.is_err());
+    assert!(s.redeem_invite(&expired, "claimant3", 1000).await.is_err());
     assert!(s.invite_usable(&expired, 1000).await.unwrap() == false);
     assert!(s.invite_usable(&expired, 400).await.unwrap(), "not yet expired at t=400");
-    assert!(s.redeem_invite(&expired, 400).await.is_ok(), "not yet expired at t=400");
+    assert!(s.redeem_invite(&expired, "claimant4", 400).await.is_ok(), "not yet expired at t=400");
 
     // max_uses is atomic: two redemptions of a 1-use invite can't both win.
     let once = unique("inv");
@@ -158,7 +158,7 @@ async fn invites_enforce_expiry_uses_and_atomic_counting() {
     // The registration gate's check does NOT consume a use.
     assert!(s.invite_usable(&once, 100).await.unwrap());
     assert!(s.invite_usable(&once, 100).await.unwrap(), "usability checks must not count uses");
-    let (a, b) = tokio::join!(s.redeem_invite(&once, 100), s.redeem_invite(&once, 100));
+    let (a, b) = tokio::join!(s.redeem_invite(&once, "claimant5", 100), s.redeem_invite(&once, "claimant6", 100));
     assert_eq!(
         [a.is_ok(), b.is_ok()].iter().filter(|x| **x).count(),
         1,
@@ -170,7 +170,7 @@ async fn invites_enforce_expiry_uses_and_atomic_counting() {
 
     // Revoke.
     s.revoke_invite(&inv).await.unwrap();
-    assert!(s.redeem_invite(&inv, 1000).await.is_err());
+    assert!(s.redeem_invite(&inv, "claimant7", 1000).await.is_err());
     assert!(!s.invite_usable(&inv, 1000).await.unwrap());
     assert_eq!(s.invite_group(&inv).await.unwrap(), None);
 

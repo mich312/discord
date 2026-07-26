@@ -307,7 +307,7 @@ async fn authenticate(socket: &mut WebSocket, app: &App) -> Option<String> {
     }
 
     if pinned.is_none() {
-        if !registration_allowed(app, invite.as_deref()).await {
+        if !registration_allowed(app, &user, invite.as_deref()).await {
             let _ = send_json(
                 socket,
                 &ServerMsg::Error {
@@ -339,7 +339,12 @@ async fn authenticate(socket: &mut WebSocket, app: &App) -> Option<String> {
 /// bootstrap user (empty relay) pass; everyone else needs an invite id
 /// that would currently redeem. The use itself is only spent when the
 /// joiner actually redeems after authenticating.
-pub async fn registration_allowed(app: &App, invite: Option<&str>) -> bool {
+/// May `user` register right now? For an invite-gated relay this CLAIMS the
+/// invite — it used to be a pure read, so one never-redeemed `max_uses: 1`
+/// link could register unlimited accounts. Claiming is idempotent per
+/// (invite, user), so the same joiner presenting the link again in
+/// `RedeemInvite` does not burn a second use.
+pub async fn registration_allowed(app: &App, user: &str, invite: Option<&str>) -> bool {
     if app.open_registration {
         return true;
     }
@@ -347,7 +352,11 @@ pub async fn registration_allowed(app: &App, invite: Option<&str>) -> bool {
         return true;
     }
     match invite {
-        Some(id) => app.store.invite_usable(id, now_unix()).await.unwrap_or(false),
+        Some(id) => app
+            .store
+            .claim_invite_for_registration(id, user, now_unix())
+            .await
+            .unwrap_or(false),
         None => false,
     }
 }
@@ -835,7 +844,7 @@ async fn handle_request(
         }
 
         ClientMsg::RedeemInvite { rid, invite } => {
-            match app.store.redeem_invite(&invite, now_unix()).await {
+            match app.store.redeem_invite(&invite, user, now_unix()).await {
                 Ok((group, payload)) => {
                     // The link is a bearer token: holding it grants relay-level
                     // membership. Whether the joiner can READ anything is

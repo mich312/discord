@@ -4,7 +4,7 @@
 //! the real deployment target.
 
 use async_trait::async_trait;
-use std::collections::HashMap;
+use std::collections::{HashMap, HashSet};
 use std::sync::Mutex;
 
 #[derive(Debug, thiserror::Error)]
@@ -219,10 +219,30 @@ pub trait Store: Send + Sync {
     async fn update_invite(&self, invite: &str, payload: Vec<u8>) -> Result<(), StoreError>;
     async fn revoke_invite(&self, invite: &str) -> Result<(), StoreError>;
     /// Validate expiry/uses at `now`, count a use, return (group, payload).
-    async fn redeem_invite(&self, invite: &str, now: u64) -> Result<(String, Vec<u8>), StoreError>;
-    /// Would `invite` be redeemable at `now`? Does NOT count a use — the
-    /// registration gate checks this; the use is only spent on redeem.
-    async fn invite_usable(&self, invite: &str, now: u64) -> Result<bool, StoreError>;
+    /// Claim `invite` for `user`, returning the group and blob.
+    ///
+    /// Idempotent per (invite, user): a use is counted the FIRST time a
+    /// given handle claims a link, and not again. That matters because the
+    /// join flow presents the same invite twice — once in `Hello` to pass
+    /// the registration gate, once in `RedeemInvite` to fetch the blob —
+    /// so counting naively would burn two uses of a `max_uses: 1` link and
+    /// break the ordinary path.
+    async fn redeem_invite(
+        &self,
+        invite: &str,
+        user: &str,
+        now: u64,
+    ) -> Result<(String, Vec<u8>), StoreError>;
+    /// Claim `invite` for `user` at the registration gate. Same accounting
+    /// as `redeem_invite` — this used to be a pure read, which is why one
+    /// never-redeemed `max_uses: 1` link could register unlimited accounts
+    /// on an "invite-only" relay.
+    async fn claim_invite_for_registration(
+        &self,
+        invite: &str,
+        user: &str,
+        now: u64,
+    ) -> Result<bool, StoreError>;
 }
 
 #[derive(Default)]
@@ -232,6 +252,9 @@ struct MemoryInner {
     groups: HashMap<String, GroupData>,
     welcomes: HashMap<String, Vec<StoredWelcome>>,
     invites: HashMap<String, InviteRecord>,
+    /// (invite, user) pairs that have already counted a use, so the same
+    /// joiner presenting the link twice spends it once.
+    invite_claims: HashSet<(String, String)>,
     /// user -> endpoint -> subscription json
     push_subs: HashMap<String, HashMap<String, String>>,
     vaults: HashMap<String, VaultRecord>,
@@ -585,23 +608,41 @@ impl Store for MemoryStore {
         Ok(())
     }
 
-    async fn redeem_invite(&self, invite: &str, now: u64) -> Result<(String, Vec<u8>), StoreError> {
+    async fn redeem_invite(
+        &self,
+        invite: &str,
+        user: &str,
+        now: u64,
+    ) -> Result<(String, Vec<u8>), StoreError> {
         let mut inner = self.inner.lock().unwrap();
+        let already = inner.invite_claims.contains(&(invite.to_string(), user.to_string()));
         let record = inner.invites.get_mut(invite).ok_or(StoreError::InviteInvalid)?;
-        if record.expires_at.is_some_and(|t| now > t)
-            || record.max_uses.is_some_and(|m| record.uses >= m)
-        {
+        if record.expires_at.is_some_and(|t| now > t) {
             return Err(StoreError::InviteInvalid);
         }
-        record.uses += 1;
-        Ok((record.group.clone(), record.payload.clone()))
+        // A handle that already claimed this link may finish its join even
+        // if the link has since reached max_uses on its account.
+        if !already {
+            if record.max_uses.is_some_and(|m| record.uses >= m) {
+                return Err(StoreError::InviteInvalid);
+            }
+            record.uses += 1;
+        }
+        let out = (record.group.clone(), record.payload.clone());
+        inner.invite_claims.insert((invite.to_string(), user.to_string()));
+        Ok(out)
     }
 
-    async fn invite_usable(&self, invite: &str, now: u64) -> Result<bool, StoreError> {
-        let inner = self.inner.lock().unwrap();
-        Ok(inner.invites.get(invite).is_some_and(|record| {
-            !record.expires_at.is_some_and(|t| now > t)
-                && !record.max_uses.is_some_and(|m| record.uses >= m)
-        }))
+    async fn claim_invite_for_registration(
+        &self,
+        invite: &str,
+        user: &str,
+        now: u64,
+    ) -> Result<bool, StoreError> {
+        match self.redeem_invite(invite, user, now).await {
+            Ok(_) => Ok(true),
+            Err(StoreError::InviteInvalid) => Ok(false),
+            Err(e) => Err(e),
+        }
     }
 }

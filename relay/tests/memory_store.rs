@@ -119,28 +119,28 @@ async fn invite_expiry_boundary_and_use_counting() {
 
     // Expiry is inclusive of the exact second: expired only when now > expires_at.
     s.create_invite("timed", rec(None, Some(500))).await.unwrap();
-    assert!(s.redeem_invite("timed", 499).await.is_ok(), "before expiry");
-    assert!(s.redeem_invite("timed", 500).await.is_ok(), "exactly at expiry is still valid");
-    assert!(s.redeem_invite("timed", 501).await.is_err(), "one second past expiry is invalid");
+    assert!(s.redeem_invite("timed", "claimant1", 499).await.is_ok(), "before expiry");
+    assert!(s.redeem_invite("timed", "claimant2", 500).await.is_ok(), "exactly at expiry is still valid");
+    assert!(s.redeem_invite("timed", "claimant3", 501).await.is_err(), "one second past expiry is invalid");
 
     // max_uses counts and then refuses.
     s.create_invite("twice", rec(Some(2), None)).await.unwrap();
-    assert!(s.redeem_invite("twice", 0).await.is_ok());
-    assert!(s.redeem_invite("twice", 0).await.is_ok());
-    assert!(s.redeem_invite("twice", 0).await.is_err(), "third redemption exceeds max_uses");
+    assert!(s.redeem_invite("twice", "claimant4", 0).await.is_ok());
+    assert!(s.redeem_invite("twice", "claimant5", 0).await.is_ok());
+    assert!(s.redeem_invite("twice", "claimant6", 0).await.is_err(), "third redemption exceeds max_uses");
 
     // update swaps the blob under the same id; revoke removes it entirely.
     s.create_invite("live", rec(None, None)).await.unwrap();
     s.update_invite("live", b"blob-v2".to_vec()).await.unwrap();
-    assert_eq!(s.redeem_invite("live", 0).await.unwrap().1, b"blob-v2");
+    assert_eq!(s.redeem_invite("live", "claimant7", 0).await.unwrap().1, b"blob-v2");
     assert_eq!(s.invite_group("live").await.unwrap().as_deref(), Some("g1"));
     s.revoke_invite("live").await.unwrap();
     assert!(s.invite_group("live").await.unwrap().is_none());
-    assert!(matches!(s.redeem_invite("live", 0).await, Err(StoreError::InviteInvalid)));
+    assert!(matches!(s.redeem_invite("live", "claimant8", 0).await, Err(StoreError::InviteInvalid)));
 
     // Operations on a missing invite are InviteInvalid, not a panic.
     assert!(matches!(s.update_invite("ghost", b"x".to_vec()).await, Err(StoreError::InviteInvalid)));
-    assert!(matches!(s.redeem_invite("ghost", 0).await, Err(StoreError::InviteInvalid)));
+    assert!(matches!(s.redeem_invite("ghost", "claimant9", 0).await, Err(StoreError::InviteInvalid)));
     // Revoking something already gone is a no-op success.
     assert!(s.revoke_invite("ghost").await.is_ok());
 }
@@ -282,4 +282,39 @@ async fn commits_compare_and_swap_the_epoch() {
     // The refused commits left no trace in the log.
     let log = s.messages_after("g", 0).await.unwrap();
     assert_eq!(log.len(), 3, "only the accepted appends are in the log");
+}
+
+/// The registration gate used to be a pure read, so a `max_uses: 1` link
+/// that nobody had redeemed could register unlimited accounts. Claims are
+/// now counted — but per claimant, because the join flow presents the same
+/// invite twice (Hello, then RedeemInvite).
+#[tokio::test]
+async fn invite_uses_are_counted_once_per_claimant() {
+    let s = store();
+    s.create_group("g", "alice").await.unwrap();
+    s.create_invite(
+        "single",
+        InviteRecord {
+            group: "g".into(),
+            payload: b"blob".to_vec(),
+            expires_at: None,
+            max_uses: Some(1),
+            uses: 0,
+        },
+    )
+    .await
+    .unwrap();
+
+    // The registration gate now spends the use.
+    assert!(s.claim_invite_for_registration("single", "bob", 0).await.unwrap());
+    // A DIFFERENT handle is refused: the single use is gone.
+    assert!(!s.claim_invite_for_registration("single", "mallory", 0).await.unwrap());
+    // But bob finishing his own join must still work — same link, same
+    // handle, already counted.
+    assert!(s.redeem_invite("single", "bob", 0).await.is_ok(), "bob's own redeem is idempotent");
+    // And mallory still cannot redeem.
+    assert!(matches!(
+        s.redeem_invite("single", "mallory", 0).await,
+        Err(StoreError::InviteInvalid)
+    ));
 }
