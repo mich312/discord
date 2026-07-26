@@ -2,122 +2,53 @@
 
 Status: proposed. Written against `266d974`.
 
-**Progress.** Phase 0 is complete apart from one item (the replayable
-`password_login`, which needs the same challenge-response the WS path
-already does). §1.1 and the §2.1 CI gate are also done. All of it is green
-in CI.
+## Status
 
-Done: §0.1 KeyPackage identity binding · §0.2 key-bound verification ·
-§0.3 auth-challenge binding + `?relay=` allowlist · §0.4 invite gate
-consuming a use · §0.5 blob upload tickets · §0.6 fail-closed
-authorization · §0.8 removal hardening ·
-§1.1 staged commits + relay epoch CAS · §2.1 the CI gate.
-§0.7: game-iframe origin isolation, CORS scoping, IPv6 /64 rate-limit
-bucketing, the X-Forwarded-For hop fix, passkey-wrap cross-user takeover,
-`FetchKp` KeyPackage drain, and `Welcome` targeting arbitrary handles.
+Everything below is green in CI. Sections further down keep the original
+analysis; this is the current state.
 
-Open, in the order I would take them:
-1. §0.7 remainder — `password_login` is a replayable bearer credential
-   (`account.rs:203-228`): no nonce, no timestamp. Capture one request body
-   and replay it forever to retrieve `wrapped`.
+### Complete
 
-   **This one needs a decision, not just an implementation.** Adding a
-   server nonce does NOT fix it. The client sends `auth_key`; the server
-   stores only `verifier = SHA256(auth_key)`. A nonce-bound proof would
-   have to be something like `SHA256(auth_key ‖ nonce)`, which the server
-   cannot check without holding `auth_key` itself. So the options are:
+- **Phase 0** — all of §0.1–§0.8 except the `password_login` replay, which
+  needs a decision rather than an implementation (see *Needs a decision*).
+- **Phase 1** — §1.1–§1.8.
+- **§2.1** the CI test gate · **§2.5** the supply-chain gate.
 
-   a. **Store `auth_key` rather than its hash**, and verify a nonce-bound
-      proof. Kills replay. Costs little against a database attacker — they
-      already hold `wrapped`, and the vault's confidentiality rests on the
-      *wrap* half, which never reaches the server. But it does mean the
-      server holds a value that grants retrieval, which the current design
-      deliberately avoids.
-   b. **Adopt a real PAKE (OPAQUE or SRP).** The correct answer, and the
-      only one that gives mutual authentication and no server-side
-      retrieval secret. Substantially more work and a new dependency.
-   c. **Accept it and scope it honestly.** The exposure is retrieving
-      `wrapped`, which is still Argon2id-sealed under the wrap half, so a
-      replay yields ciphertext rather than an account. Rate limiting
-      already applies. Document it in the README's limitations list.
+### Partly done
 
-   My recommendation is (c) now and (b) when the account system is next
-   touched — (a) trades a documented property for a modest gain.
-2. Device revocation and identity key rotation (moved here from the
-   dropped Phase 6). There is currently no way to revoke a device short of
-   burning the handle.
+| Phase | Done | Open |
+|---|---|---|
+| **2** | CI gate, supply chain, deploy health gate + pinned host keys | §2.2 extract `applyEnvelope`/`AccountService`; §2.3 coverage for the named risky paths; §2.4 image-based deploy with fast rollback; §2.6 reproducible builds + integrity manifest for worker and wasm |
+| **3** | Per-group send locks (global hub mutex gone); hourly history sweep | Bounded outbound queues; blob and message GC; schema versioning; publish the ceiling |
+| **4** | `/healthz`; connect/disconnect/subscribe logging; `deploy/RUNBOOK.md`; actionable WebAuthn config failure | Prometheus metrics; OpenTelemetry tracing; alerting |
+| **5** | Dialog semantics + focus management on all overlays; WCAG AA contrast; iOS storage-eviction fix | Drawer focus and `aria-expanded`; 44px hit targets; PWA offline shell; rail unread badges; local search |
+| **7** | `SECURITY.md`; `docs/THREAT_MODEL.md` | cargo-fuzz targets on protocol parsing; epoch state-machine simulation harness |
+
+**Phase 6 is dropped** by decision — see *Decisions taken*. Device
+revocation and identity key rotation were pulled out of it and remain open;
+there is still no way to revoke a device short of burning the handle.
+
+### Needs a decision, not engineering
+
+1. **`password_login` replay.** A server nonce does not fix it; the three
+   real options and a recommendation are in §0.7 below.
+2. **Commissioning the cryptographic review and penetration test.** Phase 7
+   prepared the materials; engaging a firm needs a human and a budget.
+3. **`libcrux-sha3` (RUSTSEC-2026-0208).** Blocked upstream: `hpke-rs`
+   pins `^0.0.8`. Assessed as unreachable for this ciphersuite — reasoning
+   in `deny.toml`. Restore the supply-chain job to blocking once it lifts.
+
+### Next, in order
+
+1. §1.2's sibling work: device revocation and identity key rotation.
+2. §2.2 — extracting `applyEnvelope` as a pure reducer is the highest-value
+   refactor in the codebase; it makes the protocol's semantic core testable
+   without a relay and a worker.
 3. Recovery for groups that forked *before* §1.1 landed.
-4. Phase 2 remainder: §2.2 (extract `applyEnvelope` as a pure reducer and
-   `AccountService`, so the protocol core becomes testable without a relay
-   and a worker), §2.3 coverage for the named risky paths, §2.4's image-based
-   deploy with second-scale rollback, §2.6 reproducible builds and an
-   integrity manifest covering the worker and wasm.
-5. Phase 3 at the agreed single-relay scope: remove the DB round-trip from
-   inside the global hub mutex, bound the outbound queues, add the GC that
-   currently does not exist (blobs are never deleted; history expiry is
-   lazy), add schema versioning, and publish the real ceiling.
-6. Phase 4 observability — the relay emits six log statements and has no
-   metrics; this is the largest single remaining chunk.
-7. Phase 5 client quality — accessibility (no modal is a dialog), the iOS
-   7-day storage eviction, the PWA offline shell.
-8. Phase 7's remaining in-repo preparation: the STRIDE threat model,
-   cargo-fuzz targets on protocol parsing, and an epoch state-machine
-   simulation harness.
+4. Phase 4's metrics, then Phase 5's remaining client work.
+5. Phase 7's fuzzing and simulation harness.
 
-**Phase 3 (agreed single-relay scope):** the global hub mutex is gone —
-sends serialize per group, so the database round-trip no longer sits behind
-one lock shared by every circle — and expired history is swept hourly
-rather than only when someone opens the room.
-
-**Phase 4 started:** connect/disconnect at INFO with the online count,
-subscribe at DEBUG, `/healthz` that round-trips the store, and
-`deploy/RUNBOOK.md` covering the five realistic incidents. Still open:
-Prometheus metrics, OpenTelemetry tracing, and config validation at boot
-(WebAuthn misconfiguration still panics into a restart loop).
-
-**Phase 7 started:** `SECURITY.md` and `docs/THREAT_MODEL.md` (STRIDE per
-component, with the three places the guarantee is weakest ranked). Still
-open: cargo-fuzz targets on protocol parsing, and an epoch state-machine
-simulation harness.
-
-**Phase 5 started:** all three overlays are real dialogs with focus
-management (`useDialog`), and `--ink-mute` now clears WCAG AA in both
-themes. Still open: drawer focus, hit targets, the PWA offline shell. The iOS 7-day
-storage eviction is fixed — persistence is requested every boot, checked,
-and surfaced with a home-screen prompt where it actually evicts.
-
-**Also done:** §2.5 supply-chain gate (cargo-deny + npm audit + lockfile
-sync), a real `/healthz` that round-trips the store with the deploy gate
-now requiring 2xx from it, pinned deploy host keys, and `SECURITY.md`.
-
-**Phase 1 §1.1–§1.8 are done:** §1.1 staged commits + epoch CAS · §1.2
-receive-path write ordering (ratchet last, closing the message-loss
-window) · §1.3 decrypt and apply split into separate catches · §1.4
-worker/IndexedDB failure surfaces instead of hanging on the splash ·
-§1.5 glare re-offer · §1.6 store impls aligned, SQLSTATE instead of
-string-matching · §1.7 request timeout + protocol version · §1.8 unread
-clock skew and view-transition collisions.
-
-**Decisions taken** (these were the open forks; the plan below is now
-scoped to them):
-
-- **Phase 6 is dropped.** quorum stays a privacy product for small groups.
-  No SSO/SCIM, no compliance surface, no escrow member. The effort goes to
-  Phases 3–5 instead. Note this also drops the *compatible* items that were
-  parked there — device revocation and key rotation. Those are real gaps
-  (there is currently no way to revoke a device short of burning the
-  handle), so they move into Phase 1 rather than disappearing.
-- **Phase 3 targets a single relay with a documented ceiling.** Remove the
-  global send lock, add backpressure and GC, add schema versioning, and
-  publish the real capacity (~hundreds of concurrent sockets on a small
-  VPS). No multi-instance fan-out, no HA — the stated product is
-  self-hosted clubs, and that shape fits it.
-- **Phase 7 is in-repo preparation only.** Threat model, SECURITY.md and
-  disclosure policy, cargo-fuzz targets on protocol parsing, and an epoch
-  state-machine simulation harness. Commissioning the independent
-  cryptographic review and penetration test is the owner's to do — it needs
-  a human and a budget, and the findings are worth most against a settled
-  codebase.
+---
 
 This plan takes quorum from "impressive MLS learning project" to software you
 could responsibly put in front of paying users. It is ordered by risk, not by
