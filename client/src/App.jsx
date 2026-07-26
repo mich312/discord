@@ -30,6 +30,7 @@ import { Key, ShieldCheck, LinkGlyph, Sun, QuorumGlyph, Gear, LogOut } from './c
 import { markPlayed, bumpPlayCount } from './lib/games.js';
 import { withViewTransition } from './lib/viewTransition.js';
 import { hasTurn, loadRelayOnly, saveRelayOnly } from './lib/voice.js';
+import { deviceLabel } from './lib/account.js';
 import {
   readPref,
   writePref,
@@ -410,6 +411,13 @@ export default function App() {
   // changes, so an inline arrow would rescan on every keystroke it causes.
   const searchMessages = useCallback(
     (q) => controllerRef.current?.searchMessages(q) ?? { hits: [], truncated: false },
+    [],
+  );
+
+  // Also must be stable: the security panel loads the device list in an
+  // effect keyed on this, so an inline arrow would refetch on every render.
+  const listDevices = useCallback(
+    () => controllerRef.current?.listDevices() ?? Promise.resolve([]),
     [],
   );
 
@@ -1052,9 +1060,16 @@ export default function App() {
               await controllerRef.current.sendIdentityToDevice(blobId, pub);
             }}
             onEnrollDevice={async () => {
-              await controllerRef.current.enrollDevicePasskey();
+              await controllerRef.current.enrollDevicePasskey(
+                deviceLabel(navigator.userAgent)
+              );
               dispatch({ type: 'modal', modal: null });
               dispatch({ type: 'toast', text: 'this device can now sign in with one tap' });
+            }}
+            onListDevices={listDevices}
+            onRevokeDevice={async (credId) => {
+              await controllerRef.current.revokeDevice(credId);
+              dispatch({ type: 'toast', text: 'device revoked — it can no longer sign in' });
             }}
             onVerify={async (srv, peer) => {
               await controllerRef.current.markVerified(srv, peer);

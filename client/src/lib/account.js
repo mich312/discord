@@ -38,6 +38,39 @@ export const MIN_PASSWORD = 8;
     one that actually enforces it. */
 export const DEVICE_LABEL_MAX = 64;
 
+/**
+ * A default name for the device being enrolled, e.g. "Firefox on Windows".
+ *
+ * Only ever a convenience: the user is choosing which device to cut off from
+ * this list, so the label has to be recognisable, and a bare credential id
+ * never is. Deliberately coarse — the alternative is fingerprinting the
+ * browser to produce a prettier string, which is not a trade this app should
+ * make for a cosmetic field. Falls back to "this device" rather than
+ * guessing, because a confidently wrong name is worse than no name when the
+ * decision is "revoke that one".
+ */
+export function deviceLabel(userAgent = '') {
+  const ua = String(userAgent);
+  const os =
+    /iPhone|iPad|iPod/i.test(ua) ? 'iOS'
+    : /Android/i.test(ua) ? 'Android'
+    : /Mac OS X|Macintosh/i.test(ua) ? 'macOS'
+    : /Windows/i.test(ua) ? 'Windows'
+    : /CrOS/i.test(ua) ? 'ChromeOS'
+    : /Linux/i.test(ua) ? 'Linux'
+    : null;
+  // Order matters: every Chromium UA also says Safari, and Edge says both.
+  const browser =
+    /Edg\//i.test(ua) ? 'Edge'
+    : /OPR\//i.test(ua) ? 'Opera'
+    : /Firefox\//i.test(ua) ? 'Firefox'
+    : /Chrome\//i.test(ua) ? 'Chrome'
+    : /Safari\//i.test(ua) ? 'Safari'
+    : null;
+  if (browser && os) return `${browser} on ${os}`;
+  return browser ?? os ?? 'this device';
+}
+
 /** Guidance when a browser won't produce the passkey PRF secret the vault is
     encrypted under — common on Chromium (Edge/Chrome) on macOS, where Safari
     does support it. */

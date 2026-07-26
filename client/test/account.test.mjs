@@ -7,6 +7,7 @@ import assert from 'node:assert/strict';
 import {
   AccountService,
   DEVICE_LABEL_MAX,
+  deviceLabel,
   MIN_PASSWORD,
   accountError,
   isNoAccount,
@@ -301,4 +302,35 @@ test('enrolling without a label sends an empty one rather than undefined', async
   });
   await svc.enrollDevicePasskey();
   assert.equal(requested.find((m) => m.t === 'passkey_wrap_add').label, '');
+});
+
+test('a device label names something the user would recognize', () => {
+  const chromeMac =
+    'Mozilla/5.0 (Macintosh; Intel Mac OS X 10_15_7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0 Safari/537.36';
+  assert.equal(deviceLabel(chromeMac), 'Chrome on macOS');
+  assert.equal(
+    deviceLabel('Mozilla/5.0 (iPhone; CPU iPhone OS 17_0 like Mac OS X) Version/17.0 Safari/604.1'),
+    'Safari on iOS',
+    'iOS must win over the "Mac OS X" that every iPhone UA also contains'
+  );
+});
+
+test('Chromium-family browsers are not all reported as Safari or Chrome', () => {
+  // Every Chromium UA also claims Safari, and Edge claims both — matching in
+  // the wrong order labels three different browsers identically, which is
+  // exactly the confusion this list exists to prevent.
+  const edge =
+    'Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0 Safari/537.36 Edg/131.0';
+  assert.equal(deviceLabel(edge), 'Edge on Windows');
+  const opera =
+    'Mozilla/5.0 (X11; Linux x86_64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/131.0 Safari/537.36 OPR/117.0';
+  assert.equal(deviceLabel(opera), 'Opera on Linux');
+});
+
+test('an unrecognized agent gets an honest placeholder, not a guess', () => {
+  // A confidently wrong name is worse than no name when the decision it
+  // informs is "cut that device off".
+  assert.equal(deviceLabel(''), 'this device');
+  assert.equal(deviceLabel(undefined), 'this device');
+  assert.equal(deviceLabel('curl/8.4.0'), 'this device');
 });
