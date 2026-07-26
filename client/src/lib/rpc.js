@@ -1,6 +1,11 @@
 // RPC client for the crypto worker.
-export function createCrypto() {
-  const worker = new Worker('/worker.js', { type: 'module' });
+//
+// `WorkerImpl` is injected so the failure paths can be driven in a test. They
+// are the ones worth covering: a worker that never starts used to leave
+// `boot()` awaiting forever, so the user sat on the splash screen with no
+// error and no way back — the failure mode you cannot debug from a bug report.
+export function createCrypto({ WorkerImpl = globalThis.Worker } = {}) {
+  const worker = new WorkerImpl('/worker.js', { type: 'module' });
   let nextId = 1;
   const pending = new Map();
   // Set once the worker or its wasm fails to load. Every in-flight call is

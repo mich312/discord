@@ -861,3 +861,183 @@ function stubNavigator(value) {
     else delete globalThis.navigator;
   };
 }
+
+/* ============================================================ §2.3 gaps == */
+
+// senderIsAdmin's fail-OPEN path. Only the closed path was tested. The two
+// directions are deliberately different: an advisory envelope must survive
+// roles that have not synced yet, while a destructive one must not — and a
+// regression in either direction is invisible until someone loses a channel.
+
+test('an advisory envelope from an unknown sender is applied — fail open', async () => {
+  // A legitimate action racing role sync must not be dropped. The relay's
+  // ACL is advisory anyway; MLS is what actually gates membership.
+  const { c } = makeController({
+    relayHandler: (msg) =>
+      msg.t === 'members' ? Promise.resolve({ members: [] }) : Promise.resolve({ seq: 1 }),
+  });
+  const r = record({ roles: {} });
+  c.servers.set('srv', r);
+
+  assert.equal(await c.senderIsAdmin(r, 'stranger'), true, 'advisory: unknown role passes');
+  await c.onContent(r, 'stranger', JSON.stringify({ k: 'chan', ch: 'design' }));
+  assert.ok(r.channels.includes('design'), 'the channel was created');
+  clearTimeout(c.backupTimer);
+});
+
+test('a destructive envelope from an unknown sender is dropped — fail closed', async () => {
+  // This one reaches db.msgsDelete. Applying it from a sender whose role we
+  // cannot establish is a security downgrade, so it fails the other way.
+  const { c } = makeController({
+    relayHandler: (msg) =>
+      msg.t === 'members' ? Promise.resolve({ members: [] }) : Promise.resolve({ seq: 1 }),
+  });
+  const r = record({ channels: ['general', 'design'], roles: {} });
+  c.servers.set('srv', r);
+
+  assert.equal(await c.senderIsAdmin(r, 'stranger', { destructive: true }), false);
+  await c.onContent(r, 'stranger', JSON.stringify({ k: 'chan-del', ch: 'design' }));
+  assert.deepEqual(r.channels, ['general', 'design'], 'the channel survives');
+  clearTimeout(c.backupTimer);
+});
+
+test('an established non-admin is refused in BOTH directions', async () => {
+  // Once the role is known, "member" is authoritative — fail-open only ever
+  // applies to not-yet-known, never to known-and-not-admin.
+  const { c } = makeController({
+    relayHandler: (msg) =>
+      msg.t === 'members'
+        ? Promise.resolve({ members: [{ user: 'mallory', role: 'member' }] })
+        : Promise.resolve({ seq: 1 }),
+  });
+  const r = record({ roles: {} });
+  c.servers.set('srv', r);
+
+  assert.equal(await c.senderIsAdmin(r, 'mallory'), false, 'advisory');
+  assert.equal(await c.senderIsAdmin(r, 'mallory', { destructive: true }), false, 'destructive');
+  clearTimeout(c.backupTimer);
+});
+
+test('a cached admin is trusted without a round trip', async () => {
+  // Otherwise every admin envelope costs an ACL fetch.
+  let acl = 0;
+  const { c } = makeController({
+    relayHandler: (msg) => {
+      if (msg.t === 'members') acl += 1;
+      return Promise.resolve({ members: [] });
+    },
+  });
+  const r = record({ roles: { bob: 'admin' } });
+  c.servers.set('srv', r);
+  assert.equal(await c.senderIsAdmin(r, 'bob', { destructive: true }), true);
+  assert.equal(acl, 0, 'no ACL refresh was needed');
+  clearTimeout(c.backupTimer);
+});
+
+test('an ACL fetch that fails leaves the advisory gate open and the destructive one shut', async () => {
+  // Offline is exactly when roles cannot be established, so this is the
+  // realistic version of "unknown" rather than an exotic one.
+  const { c } = makeController({
+    relayHandler: (msg) =>
+      msg.t === 'members' ? Promise.reject(new Error('offline')) : Promise.resolve({ seq: 1 }),
+  });
+  const r = record({ roles: {} });
+  c.servers.set('srv', r);
+  assert.equal(await c.senderIsAdmin(r, 'ghost'), true);
+  assert.equal(await c.senderIsAdmin(r, 'ghost', { destructive: true }), false);
+  clearTimeout(c.backupTimer);
+});
+
+/* --- channelDigest: the home base's unread counts ------------------------ */
+
+test('channelDigest counts only what arrived after this device last looked', async () => {
+  const { c } = makeController();
+  const r = record({ channels: ['general', 'design'], seen: { general: 150 }, joinedAt: 100 });
+  c.servers.set('srv', r);
+  for (const m of [
+    { server: 'srv', channel: 'general', sender: 'bob', ts: 120, text: 'before' },
+    { server: 'srv', channel: 'general', sender: 'bob', ts: 200, text: 'after' },
+    { server: 'srv', channel: 'general', sender: 'alice', ts: 300, text: 'mine' },
+    { server: 'srv', channel: 'design', sender: 'bob', ts: 110, text: 'since joining' },
+  ]) {
+    await c.db.msgAdd(m);
+  }
+
+  const digest = await c.channelDigest('srv');
+  const general = digest.find((d) => d.channel === 'general');
+  assert.equal(general.unread, 1, 'only the one past the seen marker, and not my own');
+  assert.equal(general.last.text, 'mine', 'the preview is the newest line regardless');
+
+  const design = digest.find((d) => d.channel === 'design');
+  assert.equal(design.unread, 1, 'a never-opened room counts from joinedAt');
+});
+
+test('channelDigest reports an empty room rather than omitting it', async () => {
+  // The home base lists every room; a missing entry would render as a gap.
+  const { c } = makeController();
+  const r = record({ channels: ['general'] });
+  c.servers.set('srv', r);
+  const [only] = await c.channelDigest('srv');
+  assert.equal(only.channel, 'general');
+  assert.equal(only.unread, 0);
+  assert.equal(only.last, null);
+});
+
+test('channelDigest ignores system chips', async () => {
+  // "carol joined" must not light up the home base.
+  const { c } = makeController();
+  const r = record({ seen: {}, joinedAt: 0 });
+  c.servers.set('srv', r);
+  await c.db.msgAdd({ server: 'srv', channel: 'general', sender: 'x', ts: 500, text: 'joined', system: true });
+  const [general] = await c.channelDigest('srv');
+  assert.equal(general.unread, 0);
+  assert.equal(general.last, null, 'and it is not the preview either');
+});
+
+test('channelDigest on an unknown circle is empty, not an exception', async () => {
+  const { c } = makeController();
+  assert.deepEqual(await c.channelDigest('gone'), []);
+});
+
+/* --- storage failure: a full or evicted quota ---------------------------- */
+
+test('a storage quota failure surfaces instead of silently dropping the message', async () => {
+  // The exact failure iOS produces under eviction pressure. A message that
+  // vanishes with no error is the worst outcome; the receive path must say so.
+  const { c, dispatched } = makeController();
+  const r = record();
+  c.servers.set('srv', r);
+  c.db.msgAdd = async () => {
+    const e = new Error('The quota has been exceeded.');
+    e.name = 'QuotaExceededError';
+    throw e;
+  };
+
+  await assert.rejects(
+    () => c.onContent(r, 'bob', JSON.stringify({ k: 'chat', ch: 'general', text: 'hi' })),
+    /quota/i,
+    'the failure propagates to the caller that logs and toasts it'
+  );
+  assert.equal(
+    dispatched.some((d) => d.type === 'newMessage'),
+    false,
+    'and nothing is announced to the UI as stored'
+  );
+  clearTimeout(c.backupTimer);
+});
+
+test('a storage failure on one envelope does not corrupt the record', async () => {
+  // The record is written by the caller after onContent; a throw must leave
+  // it in a state the next attempt can still work from.
+  const { c } = makeController();
+  const r = record();
+  c.servers.set('srv', r);
+  c.db.msgAdd = async () => {
+    throw new Error('disk is full');
+  };
+  await assert.rejects(() =>
+    c.onContent(r, 'bob', JSON.stringify({ k: 'chat', ch: 'design', text: 'hi' }))
+  );
+  assert.ok(r.channels.includes('design'), 'the channel the message named still exists');
+  clearTimeout(c.backupTimer);
+});
