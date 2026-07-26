@@ -25,8 +25,26 @@ Open, in the order I would take them:
 3. Recovery for groups that forked *before* §1.1 landed.
 4. Phases 2.2–2.6, then 3–5.
 
-Phases 6 and 7 are gated on decisions and on external parties
-respectively — see "The three decisions I cannot make for you".
+**Decisions taken** (these were the open forks; the plan below is now
+scoped to them):
+
+- **Phase 6 is dropped.** quorum stays a privacy product for small groups.
+  No SSO/SCIM, no compliance surface, no escrow member. The effort goes to
+  Phases 3–5 instead. Note this also drops the *compatible* items that were
+  parked there — device revocation and key rotation. Those are real gaps
+  (there is currently no way to revoke a device short of burning the
+  handle), so they move into Phase 1 rather than disappearing.
+- **Phase 3 targets a single relay with a documented ceiling.** Remove the
+  global send lock, add backpressure and GC, add schema versioning, and
+  publish the real capacity (~hundreds of concurrent sockets on a small
+  VPS). No multi-instance fan-out, no HA — the stated product is
+  self-hosted clubs, and that shape fits it.
+- **Phase 7 is in-repo preparation only.** Threat model, SECURITY.md and
+  disclosure policy, cargo-fuzz targets on protocol parsing, and an epoch
+  state-machine simulation harness. Commissioning the independent
+  cryptographic review and penetration test is the owner's to do — it needs
+  a human and a budget, and the findings are worth most against a settled
+  codebase.
 
 This plan takes quorum from "impressive MLS learning project" to software you
 could responsibly put in front of paying users. It is ordered by risk, not by
@@ -556,9 +574,27 @@ one-sentence fix.
 
 ---
 
-## Phase 6 — Enterprise product surface ⚠ requires product decisions
+## Phase 6 — Enterprise product surface — DROPPED
 
-**Target: highly variable. Do not start before Phases 0–2.**
+**Decision taken: not building this.** quorum stays a privacy product for
+small groups rather than chasing enterprise procurement, so the whole
+conflict below is moot. Kept for the record, and because it documents
+precisely which enterprise asks are impossible rather than merely unbuilt.
+
+**Two items from the "compatible" list are NOT dropped** — they were only
+here because this section collected them, and they are ordinary security
+work that the product needs regardless:
+
+- **Device revocation.** `add_passkey_wrap` has no delete
+  (`server.rs:974`) and pubkeys cannot rotate (`store.rs:114`), so
+  "revoke a device" currently means burning the handle.
+- **Key rotation** for the identity key, for the same reason.
+
+Both move to Phase 1.
+
+---
+
+### (record only — not being built)
 
 ### Compatible with E2EE — build these
 
@@ -597,9 +633,11 @@ roster — a silent version would be the single worst thing this project could d
 
 ---
 
-## Phase 7 — Assurance
+## Phase 7 — Assurance (in-repo preparation)
 
-**Target: 6–10 weeks elapsed, mostly external.**
+**Decision taken: prepare the materials here; the owner commissions the
+external work.** Everything below that needs an outside party is marked as
+such — it is not something this plan can discharge.
 
 - **Written threat model in-repo** (STRIDE per component), reviewed each release.
   The BUILD_PLAN sections are good prose but not a maintained artifact.
