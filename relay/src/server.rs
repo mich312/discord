@@ -410,6 +410,12 @@ pub async fn handle_socket(mut socket: WebSocket, app: Arc<App>) {
         // stranding it until our next reconnect.
         let mut hub = app.hub.lock().await;
         hub.online.insert(user.clone(), tx.clone());
+        // Connect/disconnect is the single most useful line an operator has
+        // when someone reports "messages aren't arriving": it answers
+        // whether the client is even here. The handle is metadata the relay
+        // already holds, but it is still metadata, so this is INFO on a
+        // deployment's own logs rather than anything exported.
+        tracing::info!(user = %user, online = hub.online.len(), "client connected");
         if let Ok(welcomes) = app.store.take_welcomes(&user).await {
             for w in welcomes {
                 let _ = tx.send(ServerMsg::Welcome {
@@ -489,6 +495,7 @@ pub async fn handle_socket(mut socket: WebSocket, app: Arc<App>) {
     if hub.online.get(&user).is_some_and(|t| t.same_channel(&tx)) {
         hub.online.remove(&user);
     }
+    tracing::info!(user = %user, online = hub.online.len(), "client disconnected");
     drop(hub);
     writer.abort();
 }
@@ -555,7 +562,8 @@ async fn handle_request(
             match app.store.create_group(&group, user).await {
                 Ok(()) => {
                     let mut hub = app.hub.lock().await;
-                    hub.subscribers.entry(group).or_default().insert(user.to_string(), tx.clone());
+                    hub.subscribers.entry(group.clone()).or_default().insert(user.to_string(), tx.clone());
+            tracing::debug!(user = %user, %group, "subscribed");
                     Some(ServerMsg::Ok { rid, seq: None })
                 }
                 Err(e) => err(rid, e),
@@ -699,7 +707,8 @@ async fn handle_request(
                 Ok(b) => b,
                 Err(e) => return err(rid, e),
             };
-            hub.subscribers.entry(group).or_default().insert(user.to_string(), tx.clone());
+            hub.subscribers.entry(group.clone()).or_default().insert(user.to_string(), tx.clone());
+            tracing::debug!(user = %user, %group, "subscribed");
             let _ = tx.send(ServerMsg::Ok { rid, seq: None });
             for m in backlog {
                 let _ = tx.send(ServerMsg::Msg {
