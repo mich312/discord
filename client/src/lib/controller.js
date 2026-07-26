@@ -563,10 +563,26 @@ export class Controller {
     // MLS tolerates the skipped generation, so the next message still
     // decrypts. Order matters more than atomicity here.
     let ratchet = null;
+    // Decryption and content handling get SEPARATE catches. They used to
+    // share one, so an IndexedDB quota error, a JSON edge case, or a bug in
+    // the reaction/edit handler all surfaced as "undecryptable blob seq N" —
+    // a line whose own comment says it is expected. That is why storage
+    // failures were invisible.
+    let event = null;
     try {
-      const { event, state } = await this.crypto('receive', { bytes: b64.dec(msg.payload) });
-      ratchet = state;
-      if (event.kind === 'message') {
+      const decrypted = await this.crypto('receive', { bytes: b64.dec(msg.payload) });
+      event = decrypted.event;
+      ratchet = decrypted.state;
+    } catch (e) {
+      // Genuinely expected: our own commits replayed by catch-up, and blobs
+      // from an epoch this device never held.
+      console.warn(`undecryptable blob seq ${msg.seq} in ${msg.group}: ${e.message}`);
+    }
+
+    try {
+      if (!event) {
+        // nothing to apply
+      } else if (event.kind === 'message') {
         await this.onContent(record, event.sender, event.text);
       } else if (event.kind === 'membershipChange') {
         // Were we the one dropped? A re-key that no longer lists us means we
@@ -616,8 +632,11 @@ export class Controller {
         this.voice.membershipChanged(record.id, event.members);
       }
     } catch (e) {
-      // Expected for own commits replayed by catch-up; log and move on.
-      console.warn(`undecryptable blob seq ${msg.seq} in ${msg.group}: ${e.message}`);
+      // A decrypted message we then failed to APPLY. Not expected, and not
+      // the same as an undecryptable blob: the likely causes are storage
+      // (quota, eviction) or a defect in a content handler. Surface it.
+      console.error(`failed to apply seq ${msg.seq} in ${msg.group}: ${e.message}`);
+      this.toast(`a message could not be saved: ${e.message}`);
     }
     // Cursor first, ratchet second — see the note above.
     await this.db.serverPut(record);

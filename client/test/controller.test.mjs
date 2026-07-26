@@ -781,3 +781,25 @@ test('a received message is durable before the ratchet snapshot is', async () =>
   assert.ok(cursorAt !== -1 && cursorAt < ratchetAt, 'and so does the cursor');
   clearTimeout(c.backupTimer);
 });
+
+test('a storage failure while applying a message is reported, not laundered as undecryptable', async () => {
+  // Both failures shared one catch, so a quota error read exactly like our
+  // own commit echoing back on catch-up — a case whose comment calls it
+  // expected. Storage problems were therefore invisible.
+  const { c, dispatched } = makeController();
+  const baseDb = c.db;
+  c.db = { ...baseDb, msgAdd: async () => { throw new Error('QuotaExceededError'); } };
+  c.crypto = async (cmd) =>
+    cmd === 'receive'
+      ? { event: { kind: 'message', sender: 'bob', text: 'hello', epoch: 1 }, state: null }
+      : {};
+  c.servers.set('srv', record());
+
+  await c.onGroupMessage({ group: 'srv', seq: 3, epoch: 1, sender: 'bob', payload: 'AAAA' });
+
+  assert.ok(
+    dispatched.some((a) => a.type === 'toast' && /could not be saved/.test(a.text)),
+    'the user is told the message could not be stored'
+  );
+  clearTimeout(c.backupTimer);
+});
