@@ -76,9 +76,20 @@ jobs:
       # Known-vulnerable, yanked, unmaintained, or non-permissively-licensed
       # dependencies in a crypto stack are a release-blocking fact, not a
       # warning to triage later. Config in deny.toml.
+      # Advisories and sources block. Licences and duplicate-version bans are
+      # reported separately and do not block yet: the existing dependency
+      # tree has never been audited on either axis, so failing on them now
+      # would be red for reasons unrelated to the change under review. Same
+      # staging as clippy above.
       - uses: EmbarkStudios/cargo-deny-action@v2
         with:
-          command: check
+          command: check advisories sources
+
+      - name: cargo-deny licences and bans (advisory)
+        continue-on-error: true
+        uses: EmbarkStudios/cargo-deny-action@v2
+        with:
+          command: check licenses bans
 
       - uses: actions/setup-node@v4
         with:

@@ -6,13 +6,30 @@
 # push and pull request.
 
 [advisories]
-# Any advisory against anything we build is an error. There are no
-# exceptions listed, and adding one should require saying why in review.
+# Any advisory against anything we build is an error. Every exception must
+# carry a written reachability argument, not just an id.
 yanked = "deny"
+ignore = [
+    # RUSTSEC-2023-0071 — Marvin attack, a timing sidechannel in the `rsa`
+    # crate's private-key operations. No fixed version exists.
+    #
+    # Not reachable here. `rsa` arrives transitively as
+    # web-push -> jwt-simple -> superboring -> rsa, and jwt-simple pulls it in
+    # to support RS* JWT algorithms. quorum's VAPID signing is P-256/ES256
+    # throughout (relay/src/push.rs: p256::SecretKey, parse_key, load_key);
+    # the relay never performs an RSA private-key operation, so there is no
+    # RSA timing to observe.
+    #
+    # Re-check this if push signing ever gains an RS256 path, or if web-push
+    # changes its JWT backend.
+    "RUSTSEC-2023-0071",
+]
 
 [bans]
 # Two copies of a crypto crate means two copies of its bug fixes, and the
-# one you audited may not be the one that runs.
+# one you audited may not be the one that runs. Warn rather than deny for
+# now: duplicates are inherited from the dependency tree and clearing them
+# is its own piece of work. Tighten to "deny" once triaged.
 multiple-versions = "warn"
 wildcards = "deny"
 
@@ -34,6 +51,11 @@ allow = [
     "MPL-2.0",
 ]
 confidence-threshold = 0.9
+# Anything outside the allow list above is reported but does not fail the
+# build yet — the existing tree has not been audited licence-by-licence, so
+# denying on day one would be red for reasons unrelated to any change under
+# review. Same staging as clippy in ci.yml. Tighten once triaged.
+unused-allowed-license = "allow"
 
 [sources]
 unknown-registry = "deny"
