@@ -67,9 +67,9 @@ async fn message_log_assigns_ordered_seqs() {
     s.create_group(&group, "alice").await.unwrap();
     assert!(s.create_group(&group, "alice").await.is_err(), "duplicate group must fail");
 
-    assert_eq!(s.append_message(&group, 1, "alice", b"m1".to_vec()).await.unwrap(), 1);
-    assert_eq!(s.append_message(&group, 1, "alice", b"m2".to_vec()).await.unwrap(), 2);
-    assert_eq!(s.append_message(&group, 2, "bob", b"m3".to_vec()).await.unwrap(), 3);
+    assert_eq!(s.append_message(&group, 1, "alice", b"m1".to_vec(), false).await.unwrap(), 1);
+    assert_eq!(s.append_message(&group, 1, "alice", b"m2".to_vec(), false).await.unwrap(), 2);
+    assert_eq!(s.append_message(&group, 2, "bob", b"m3".to_vec(), false).await.unwrap(), 3);
 
     let tail = s.messages_after(&group, 1).await.unwrap();
     assert_eq!(tail.len(), 2);

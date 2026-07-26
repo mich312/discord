@@ -66,13 +66,13 @@ async fn membership_and_allow_are_idempotent() {
 async fn message_log_assigns_ascending_seqs_and_filters_after() {
     let s = store();
     assert!(
-        matches!(s.append_message("missing", 1, "alice", b"x".to_vec()).await, Err(StoreError::NoSuchGroup)),
+        matches!(s.append_message("missing", 1, "alice", b"x".to_vec(), false).await, Err(StoreError::NoSuchGroup)),
         "cannot append to a group that does not exist"
     );
     s.create_group("g1", "alice").await.unwrap();
-    assert_eq!(s.append_message("g1", 1, "alice", b"m1".to_vec()).await.unwrap(), 1);
-    assert_eq!(s.append_message("g1", 1, "bob", b"m2".to_vec()).await.unwrap(), 2);
-    assert_eq!(s.append_message("g1", 2, "alice", b"m3".to_vec()).await.unwrap(), 3);
+    assert_eq!(s.append_message("g1", 1, "alice", b"m1".to_vec(), false).await.unwrap(), 1);
+    assert_eq!(s.append_message("g1", 1, "bob", b"m2".to_vec(), false).await.unwrap(), 2);
+    assert_eq!(s.append_message("g1", 2, "alice", b"m3".to_vec(), false).await.unwrap(), 3);
 
     assert_eq!(s.messages_after("g1", 0).await.unwrap().len(), 3, "after=0 returns everything");
     let tail = s.messages_after("g1", 1).await.unwrap();
