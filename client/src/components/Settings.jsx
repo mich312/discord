@@ -16,6 +16,11 @@ export default function Settings({
   onSystemTheme,
   onEnableNotifications,
   voice,
+  // Device preference: route my media through TURN so peers never see my
+  // address. `turnAvailable` is whether the relay actually offers one.
+  relayOnly = false,
+  turnAvailable = false,
+  onRelayOnly,
   secured,
   onShowIdentity,
   onSecure,
@@ -278,6 +283,41 @@ export default function Settings({
             <p className="fineprint muted">
               On by default. Turn them off for raw capture — good hardware, or sharing music where
               the gate would clamp the quiet parts. Changes apply to a live call at once.
+            </p>
+          </div>
+
+          {/* The one privacy fact about calls that the app never stated:
+              media is peer-to-peer, so everyone in a call learns everyone
+              else's IP address. */}
+          <div className="settings-dsp">
+            <div className="settings-dsp-head">call privacy</div>
+            <label className="settings-toggle">
+              <input
+                type="checkbox"
+                checked={relayOnly}
+                onChange={() => onRelayOnly?.(!relayOnly)}
+                data-testid="settings-relay-only"
+              />
+              <span className="settings-toggle-body">
+                <span className="settings-toggle-label">hide my IP address from call peers</span>
+                <span className="fineprint muted">
+                  Calls are peer-to-peer, so by default everyone in a call can see your address.
+                  This routes your media through the relay’s TURN server instead. It hides{' '}
+                  <em>yours</em> — it does not hide theirs unless they turn this on too.
+                </span>
+              </span>
+            </label>
+            {relayOnly && !turnAvailable && (
+              // Said plainly rather than silently ignoring the setting: a
+              // privacy switch that quietly does nothing is worse than one
+              // that visibly does not work.
+              <p className="fineprint warn" data-testid="settings-relay-no-turn">
+                This relay has no TURN server configured, so calls will not connect while this is
+                on. Ask the operator to set <code>TURN_URLS</code>, or turn this off.
+              </p>
+            )}
+            <p className="fineprint muted">
+              Applies to calls you join from now on, not one you are already in.
             </p>
           </div>
 

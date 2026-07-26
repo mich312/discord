@@ -59,6 +59,62 @@ export function meshFullMessage() {
   return `this call is full (${MESH_LIMIT} people). calls are peer-to-peer, so every extra person costs everyone else bandwidth`;
 }
 
+/// Device preference: route my media through TURN so call peers never see my
+/// address. Off by default, because turning it on without a TURN server
+/// configured means calls stop connecting.
+export const RELAY_ONLY_KEY = 'quorum-voice-relay-only';
+
+/** Is there a TURN server in this ICE list? Relay-only mode has nothing to
+ *  relay through without one. Used to warn, not to override — see below. */
+export function hasTurn(servers) {
+  return (servers ?? []).some((s) => {
+    const urls = Array.isArray(s?.urls) ? s.urls : [s?.urls];
+    return urls.some((u) => typeof u === 'string' && /^turns?:/i.test(u.trim()));
+  });
+}
+
+/**
+ * The RTCPeerConnection config.
+ *
+ * When `relayOnly` is set we pass `iceTransportPolicy: 'relay'`, which stops
+ * the browser offering host and server-reflexive candidates — so peers see
+ * the TURN server's address instead of yours.
+ *
+ * **It is applied even when no TURN server is configured**, which makes calls
+ * fail rather than connect. That is deliberate: a privacy switch that
+ * silently does nothing is worse than one that visibly does not work, because
+ * only the second kind can be noticed. The UI is responsible for saying that
+ * TURN is missing (`hasTurn`) — the policy is not responsible for quietly
+ * overriding what someone asked for.
+ *
+ * Note the asymmetry, which the UI also states: this hides *your* address
+ * from peers. It does not hide theirs from you unless they enable it too.
+ */
+export function peerConfig(iceServers, relayOnly) {
+  const config = { iceServers: iceServers ?? DEFAULT_ICE };
+  if (relayOnly) config.iceTransportPolicy = 'relay';
+  return config;
+}
+
+/** Read the device preference. Absent or unreadable means off. */
+export function loadRelayOnly(storage = globalThis.localStorage) {
+  try {
+    return storage?.getItem(RELAY_ONLY_KEY) === '1';
+  } catch {
+    return false;
+  }
+}
+
+export function saveRelayOnly(on, storage = globalThis.localStorage) {
+  try {
+    if (on) storage?.setItem(RELAY_ONLY_KEY, '1');
+    else storage?.removeItem(RELAY_ONLY_KEY);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 // Opus fmtp knobs we stamp onto every offer/answer. DTX stops the encoder
 // sending steady packets through silence (big win in a mesh, where every
 // participant is a separate uplink); the bitrate cap keeps a mono voice
@@ -136,6 +192,8 @@ export class VoiceManager {
     this.onCallStarted = opts.onCallStarted ?? (() => {});
     this.muted = false; // my mic, track.enabled-level — peers hear silence
     this.iceServers = opts.iceServers ?? DEFAULT_ICE;
+    // Device preference, not account state — same treatment as the theme.
+    this.relayOnly = opts.relayOnly ?? loadRelayOnly();
     this.active = null; // {server, channel, stream}
     this.ring = null; // incoming direct call awaiting our answer: {server, room, from}
     this.dial = null; // outgoing direct call we're ringing: {server, room, to}
@@ -1074,7 +1132,7 @@ export class VoiceManager {
   }
 
   createPeer(server, name) {
-    const pc = new RTCPeerConnection({ iceServers: this.iceServers });
+    const pc = new RTCPeerConnection(peerConfig(this.iceServers, this.relayOnly));
     const peer = {
       pc,
       audio: null,

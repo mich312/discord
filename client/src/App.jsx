@@ -29,6 +29,7 @@ import BootLoader from './components/BootLoader.jsx';
 import { Key, ShieldCheck, LinkGlyph, Sun, QuorumGlyph, Gear, LogOut } from './components/icons.jsx';
 import { markPlayed, bumpPlayCount } from './lib/games.js';
 import { withViewTransition } from './lib/viewTransition.js';
+import { hasTurn, loadRelayOnly, saveRelayOnly } from './lib/voice.js';
 import {
   readPref,
   writePref,
@@ -400,6 +401,10 @@ export default function App() {
       alive = false;
     };
   }, [server, channel, state.messagesRev, state.messages]);
+
+  // Device preference, like the theme: whether to route call media through
+  // TURN so peers never see this device's address.
+  const [relayOnly, setRelayOnly] = useState(loadRelayOnly);
 
   // Must be stable: the palette re-runs its scan whenever this identity
   // changes, so an inline arrow would rescan on every keystroke it causes.
@@ -1013,6 +1018,15 @@ export default function App() {
             onSystemTheme={() => setThemePref(null)}
             onEnableNotifications={() => controllerRef.current.enableNotifications()}
             voice={controllerRef.current?.voice}
+            relayOnly={relayOnly}
+            turnAvailable={hasTurn(controllerRef.current?.voice?.iceServers)}
+            onRelayOnly={(on) => {
+              setRelayOnly(on);
+              saveRelayOnly(on);
+              // Existing peer connections keep the policy they were built
+              // with; this takes effect on the next call, which the panel says.
+              if (controllerRef.current?.voice) controllerRef.current.voice.relayOnly = on;
+            }}
             secured={!unsecured}
             onShowIdentity={openIdentity}
             onSecure={openSecure}

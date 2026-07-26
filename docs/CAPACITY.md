@@ -35,6 +35,7 @@ on the /64, not the address, so one allocation cannot mint fresh quota.
 | Circles per relay | unbounded | Per-group send locks mean circles do not contend with each other; Postgres connection count is the real ceiling |
 | Message log growth | unbounded | Nothing prunes `messages`. See §3.4 of the hardening plan for why naive pruning is unsafe |
 | Attachment storage | unbounded by default | `BLOB_TTL_DAYS` bounds it if you set it |
+| TURN bandwidth | unbounded | Every participant who enables *hide my IP* relays their media through your TURN server rather than sending it peer-to-peer. Budget for it before advertising the option |
 
 ## What has never been measured
 

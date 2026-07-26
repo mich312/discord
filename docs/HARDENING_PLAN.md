@@ -709,6 +709,16 @@ authority to ask, and two simultaneous joins can both see room. It converts
 the common case from a silent collapse into a clear refusal, which is all a
 client-side check can honestly claim.
 
+**Call-peer IP exposure is now opt-out.** The threat model listed it as OPEN:
+media is peer-to-peer, so everyone in a call learns everyone else's address,
+and nothing in the UI said so. Settings → *call privacy* sets
+`iceTransportPolicy: 'relay'`. Three things are stated rather than glossed:
+the policy is applied **even with no TURN server configured**, so calls fail
+loudly instead of silently leaking what the user asked to hide; it conceals
+your address and not theirs unless they enable it too; and it takes effect on
+the next call. Operators should note the bandwidth consequence — see
+`docs/CAPACITY.md`.
+
 Still open here: an escape hatch on the recovery-download gate, and mention
 badges (deliberately — there is no `@handle` affordance in the composer, so a
 matcher would be half a feature).

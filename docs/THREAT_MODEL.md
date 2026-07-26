@@ -96,7 +96,7 @@ Everything else in this document is secondary to whether that holds.
 
 | | Threat | Status |
 |---|---|---|
-| **I** | Every call peer learns every other peer's IP | **OPEN.** No `iceTransportPolicy: 'relay'` option, and nothing in the UI says so. |
+| **I** | Every call peer learns every other peer's IP | **Mitigable, opt-in, and now stated.** Settings → call privacy sets `iceTransportPolicy: 'relay'`, so peers see the TURN server instead of you. Three honest limits, all in the UI: it needs the operator to have configured TURN (the policy is applied regardless, so it *fails* rather than silently leaking); it hides your address, not theirs, unless they enable it too; and it applies to the next call, not one in progress. The TURN operator sees the media flow, though not its plaintext. |
 | **D** | Mesh collapse past ~8 participants | **Narrowed.** `MESH_LIMIT` refuses the ninth join before capturing the mic, and the button reads "full". Client-side and so advisory — media is peer-to-peer and simultaneous joins can both see room. |
 
 ## 5. Explicitly accepted risks
