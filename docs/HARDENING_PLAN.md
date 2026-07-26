@@ -64,6 +64,20 @@ Open, in the order I would take them:
    cargo-fuzz targets on protocol parsing, and an epoch state-machine
    simulation harness.
 
+**Phase 3 (agreed single-relay scope):** the global hub mutex is gone —
+sends serialize per group, so the database round-trip no longer sits behind
+one lock shared by every circle — and expired history is swept hourly
+rather than only when someone opens the room.
+
+**Phase 4 started:** connect/disconnect at INFO with the online count,
+subscribe at DEBUG. Still open: metrics, tracing, runbooks, config
+validation at boot.
+
+**Phase 5 started:** all three overlays are real dialogs with focus
+management (`useDialog`), and `--ink-mute` now clears WCAG AA in both
+themes. Still open: drawer focus, hit targets, the iOS 7-day storage
+eviction, the PWA offline shell.
+
 **Also done:** §2.5 supply-chain gate (cargo-deny + npm audit + lockfile
 sync), a real `/healthz` that round-trips the store with the deploy gate
 now requiring 2xx from it, pinned deploy host keys, and `SECURITY.md`.
