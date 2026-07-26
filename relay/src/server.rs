@@ -160,6 +160,19 @@ pub struct Hub {
     subscribers: HashMap<String, HashMap<String, mpsc::UnboundedSender<ServerMsg>>>,
     /// user -> outbound channel (for Welcome delivery)
     online: HashMap<String, mpsc::UnboundedSender<ServerMsg>>,
+    /// group -> send lock. Ordering only has to hold WITHIN a group, so
+    /// serializing per group rather than globally lets unrelated circles
+    /// append concurrently. See the Send arm.
+    send_locks: HashMap<String, Arc<Mutex<()>>>,
+}
+
+impl Hub {
+    /// The send lock for `group`, created on first use. Held only long
+    /// enough to hand the Arc back — the caller awaits the lock itself
+    /// after releasing the hub.
+    fn send_lock(&mut self, group: &str) -> Arc<Mutex<()>> {
+        self.send_locks.entry(group.to_string()).or_default().clone()
+    }
 }
 
 impl App {
@@ -708,10 +721,19 @@ async fn handle_request(
                 Ok(b) => b,
                 Err(e) => return err(rid, e),
             };
-            // Append and fan out under the hub lock: seq order == delivery
-            // order for every subscriber.
+            // Append and fan out under this GROUP's send lock, so seq order
+            // still equals delivery order for its subscribers.
+            //
+            // This used to hold the single global hub mutex across the
+            // database round-trip, which serialized every message in every
+            // circle behind one lock plus one write — the hard ceiling on
+            // throughput. Ordering only ever had to hold within a group.
+            //
+            // Lock order is always send-lock then hub, never the reverse, so
+            // the two cannot deadlock.
+            let send_lock = { app.hub.lock().await.send_lock(&group) };
+            let _ordered = send_lock.lock().await;
             let seq = {
-                let mut hub = app.hub.lock().await;
                 let seq = match app
                     .store
                     .append_message(&group, epoch, user, payload.clone(), commit)
@@ -720,6 +742,7 @@ async fn handle_request(
                     Ok(s) => s,
                     Err(e) => return err(rid, e),
                 };
+                let mut hub = app.hub.lock().await;
                 if let Some(subs) = hub.subscribers.get_mut(&group) {
                     let out = ServerMsg::Msg {
                         group: group.clone(),
