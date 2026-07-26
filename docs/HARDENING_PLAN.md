@@ -12,13 +12,17 @@ analysis; this is the current state.
 - **Phase 0** — all of §0.1–§0.8 except the `password_login` replay, which
   needs a decision rather than an implementation (see *Needs a decision*).
 - **Phase 1** — §1.1–§1.8.
-- **§2.1** the CI test gate · **§2.5** the supply-chain gate.
+- **Phase 2** — §2.1 CI gate · §2.2 `applyEnvelope` + `AccountService` ·
+  §2.3 the named coverage gaps · §2.4 image-based deploy with fast rollback ·
+  §2.5 supply chain · §2.6 wasm integrity check and published hashes.
+  The one part of §2.6 *not* delivered is byte-for-byte reproducible builds —
+  listed under *Next* rather than buried here, because the verification story
+  now exists while the thing to verify against does not.
 
 ### Partly done
 
 | Phase | Done | Open |
 |---|---|---|
-| **2** | CI gate, supply chain, deploy health gate + pinned host keys; **§2.2 done** (`applyEnvelope` + `AccountService`) | §2.3 coverage for the remaining risky paths; §2.4 image-based deploy with fast rollback; §2.6 reproducible builds + integrity manifest for worker and wasm |
 | **3** | Per-group send locks (global hub mutex gone); hourly history sweep; recorded schema version with a rollback guard; bounded fan-out queues; opt-in blob TTL; published capacity limits | Message-log GC (design in §3.4); disk quotas; measured throughput |
 | **4** | `/healthz`; connect/disconnect/subscribe logging; `deploy/RUNBOOK.md`; actionable WebAuthn config failure; token-gated Prometheus metrics; append-latency histogram; `deploy/alerts.yml` | OpenTelemetry tracing; SLOs |
 | **5** | Dialog semantics + focus management on all overlays; WCAG AA contrast; iOS storage-eviction fix; drawer `aria-expanded`/`aria-controls` + labelled landmarks; 44px touch targets; `prefers-color-scheme` with a system-following default; rail unread badges; local message search; PWA offline shell; update notice; persistent kept-history indicator; voice participant cap | mention badges; iOS add-to-home-screen interstitial; wake lock; visualViewport; popstate |
@@ -41,9 +45,12 @@ there is still no way to revoke a device short of burning the handle.
 ### Next, in order
 
 1. §1.2's sibling work: device revocation and identity key rotation.
-2. Recovery for groups that forked *before* §1.1 landed.
-3. §2.3's remaining coverage gaps, now that both seams are open.
+2. Reproducible builds — the one part of §2.6 still outstanding, and the only
+   real answer to operator-served code (`THREAT_MODEL.md` §6.2).
+3. Recovery for groups that forked *before* §1.1 landed.
 4. Phase 7's fuzzing and simulation harness.
+5. Phase 3's message-log GC (design and its hazard are in §3.4) and Phase 4's
+   tracing.
 
 ---
 
