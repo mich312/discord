@@ -21,7 +21,7 @@ analysis; this is the current state.
 | **2** | CI gate, supply chain, deploy health gate + pinned host keys | §2.2 extract `applyEnvelope`/`AccountService`; §2.3 coverage for the named risky paths; §2.4 image-based deploy with fast rollback; §2.6 reproducible builds + integrity manifest for worker and wasm |
 | **3** | Per-group send locks (global hub mutex gone); hourly history sweep; recorded schema version with a rollback guard | Bounded outbound queues; blob and message GC; publish the ceiling |
 | **4** | `/healthz`; connect/disconnect/subscribe logging; `deploy/RUNBOOK.md`; actionable WebAuthn config failure | Prometheus metrics; OpenTelemetry tracing; alerting |
-| **5** | Dialog semantics + focus management on all overlays; WCAG AA contrast; iOS storage-eviction fix; drawer `aria-expanded`/`aria-controls` + labelled landmarks; 44px touch targets; `prefers-color-scheme` with a system-following default; rail unread badges; local message search | PWA offline shell; mention badges; kept-history room indicator; voice participant cap |
+| **5** | Dialog semantics + focus management on all overlays; WCAG AA contrast; iOS storage-eviction fix; drawer `aria-expanded`/`aria-controls` + labelled landmarks; 44px touch targets; `prefers-color-scheme` with a system-following default; rail unread badges; local message search; PWA offline shell | update prompt; mention badges; kept-history room indicator; voice participant cap |
 | **7** | `SECURITY.md`; `docs/THREAT_MODEL.md` | cargo-fuzz targets on protocol parsing; epoch state-machine simulation harness |
 
 **Phase 6 is dropped** by decision — see *Decisions taken*. Device
@@ -555,14 +555,36 @@ the IndexedDB MLS state *and* the localStorage identity mirror.
 implement it. A user following the README is on an undisclosed timer to losing
 their account.
 
-Required: call `persist()` every boot and check the result; a standing banner
-when not persisted; an iOS Add-to-Home-Screen interstitial explaining that the
-install is required both for notifications and for keys to survive; SW precache
-with versioned caches and an update prompt (there is no `fetch` handler at all
-today, so an installed PWA white-screens offline despite every message being
-local); wake lock + Media Session so calls survive screen lock; `visualViewport`
-handling so the composer is not covered by the keyboard; `popstate` so the back
-button closes a drawer rather than exiting the app.
+The storage half is **done** — `persist()` every boot, checked, with a standing
+banner when it is refused.
+
+The **offline shell is done** too. There was no `fetch` handler at all, so an
+installed PWA white-screened offline while every message it needed sat in
+IndexedDB on the same device. `public/sw.js` now precaches the shell into a
+cache named for a content hash of that shell, and drops every older one on
+activate. Three decisions carry the correctness:
+
+- **Navigations are network-first**, cached-shell second. `index.html` is not
+  content-hashed, so cache-first would pin the app at whatever version was
+  cached first — the classic way a PWA becomes unupdatable.
+- **`sw.js` is never cached.** A cached service worker cannot replace itself.
+- **Nothing is cached at runtime.** The list is fixed at build time and
+  excludes `/blob/`: attachments are large and would compete for the same
+  origin quota the message store already has to fight for on iOS.
+
+Selection and versioning live in `client/scripts/shell-manifest.mjs`, apart
+from the script that writes them, because the only place a mistake there
+surfaces is a build that needs wasm-pack — the slowest feedback loop in the
+repo. `client/test/sw-fetch.test.mjs` drives the worker's own handlers in a
+`vm` against a stubbed Cache API. The new code-delivery surface is recorded in
+`docs/THREAT_MODEL.md`.
+
+Still open here: an update prompt when a new shell is waiting; an iOS
+Add-to-Home-Screen interstitial explaining that the install is required both
+for notifications and for keys to survive; wake lock + Media Session so calls
+survive screen lock; `visualViewport` handling so the composer is not covered
+by the keyboard; `popstate` so the back button closes a drawer rather than
+exiting the app.
 
 ### 5.3 UX gaps that block adoption
 

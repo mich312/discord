@@ -89,6 +89,8 @@ Everything else in this document is secondary to whether that holds.
 | **D** | Silent message loss on crash | **Mitigated.** Ratchet persists after the message and cursor. |
 | **D** | Total data loss to WebKit's 7-day eviction | **Mitigated.** Persistence requested every boot, checked, and surfaced. |
 | **I** | Identity key in localStorage | **Open.** Any script execution on the origin takes the account. |
+| **T** | A service worker outlives the page and re-serves a targeted bundle | **Narrowed, newly relevant.** The offline shell caches app code, so code delivery now has a persistent component. `sw.js` is never cached (it must be able to replace itself); `index.html` is network-first, so a targeted payload survives only until the next successful online navigation; assets are content-hashed and the cache is version-scoped, so nothing outlives its deploy. Search results and message content are never cached — only the shell. |
+| **D** | Attachments fill the origin quota via the shell cache | **Mitigated.** Nothing is cached at runtime; the precache list is fixed at build time and excludes `/blob/`. |
 
 ### Voice
 
@@ -131,6 +133,15 @@ Web-delivered E2EE means the operator ships the code that holds the keys, on
 every page load, per user. This is categorically weaker than a signed native
 client. It is the single largest gap and no amount of server hardening
 touches it.
+
+The offline shell adds a persistent cache to that delivery path. It does not
+change the shape of the risk — an operator who can serve you targeted code on
+one load can serve it on every load — but it does mean a payload can now
+outlive the page that received it. The mitigations are structural rather than
+policy: `sw.js` itself is never cached, so a hostile worker can always be
+replaced; navigations go to the network first; and the cache is keyed on a
+content hash of the shell, so it is discarded by the next deploy. Reproducible
+builds remain the only real fix, for the same reason they were before.
 
 ### 6.3 The identity key is a master key
 
