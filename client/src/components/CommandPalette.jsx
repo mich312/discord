@@ -1,10 +1,16 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Hash, CircleGlyph } from './icons.jsx';
+import { useDialog } from '../lib/useDialog.js';
 import { MIN_QUERY } from '../lib/search.js';
 
 // Long enough that typing a word does not fire a full scan per keystroke,
 // short enough that pausing feels like the results were already there.
 const DEBOUNCE_MS = 160;
+
+// Item ids become DOM ids so aria-activedescendant can point at them, and an
+// IDREF cannot contain whitespace — channel and circle names reach these ids,
+// so sanitise rather than trust.
+const optId = (id) => `palette-opt-${String(id).replace(/\s+/g, '_')}`;
 
 // ⌘K switcher. Rooms across every circle, circle switching, the handful of
 // global actions — and, below them, the messages themselves: search has to
@@ -17,6 +23,9 @@ export default function CommandPalette({ servers, active, actions, onSearch, onN
   const [searching, setSearching] = useState(false);
   const inputRef = useRef(null);
   const listRef = useRef(null);
+  // Focus in on open, Tab trapped, Escape on the dialog element, focus back
+  // to the opener on close — the same contract every other overlay uses.
+  const { ref: dialogRef, props: dialogAria } = useDialog(onClose, { label: 'command palette' });
 
   // Debounced, and every in-flight scan is fenced by the query it was for:
   // a slow scan resolving after a faster later one must not overwrite it.
@@ -90,6 +99,8 @@ export default function CommandPalette({ servers, active, actions, onSearch, onN
   }, [servers, active, actions, query, found, onNavigate]);
 
   useEffect(() => {
+    // useDialog focuses the first control, which is this input; re-assert it
+    // only so a re-render never leaves focus on the dialog shell itself.
     inputRef.current?.focus();
   }, []);
   useEffect(() => {
@@ -101,8 +112,11 @@ export default function CommandPalette({ servers, active, actions, onSearch, onN
       ?.scrollIntoView({ block: 'nearest' });
   }, [index]);
 
+  // Escape and Tab belong to useDialog, which binds them on the dialog node —
+  // this handler only moves the selection. Binding Escape here as well would
+  // close twice, and binding it on the input alone (as this did) meant Escape
+  // stopped working the moment focus moved off the input.
   function onKeyDown(e) {
-    if (e.key === 'Escape') return onClose();
     if (e.key === 'ArrowDown') {
       e.preventDefault();
       setIndex((i) => Math.min(i + 1, items.length - 1));
@@ -118,24 +132,51 @@ export default function CommandPalette({ servers, active, actions, onSearch, onN
 
   return (
     <div className="palette-backdrop" onClick={onClose}>
-      <div className="palette" role="dialog" aria-label="command palette" onClick={(e) => e.stopPropagation()}>
+      <div
+        className="palette"
+        ref={dialogRef}
+        {...dialogAria}
+        onClick={(e) => e.stopPropagation()}
+        onKeyDown={onKeyDown}
+      >
+        {/* A combobox driving a listbox: focus stays in the input while the
+            arrow keys move `aria-activedescendant`, which is what lets a
+            screen reader read each option as it is selected. Before this,
+            arrowing through the results announced nothing at all and Enter
+            fired a navigation the user had never heard described. */}
         <input
           ref={inputRef}
           className="palette-input"
           placeholder="Jump to a room, or search your messages…"
+          aria-label="jump to a room, or search your messages"
+          role="combobox"
+          aria-expanded={items.length > 0}
+          aria-controls="palette-results"
+          aria-activedescendant={items[index] ? optId(items[index].id) : undefined}
+          aria-autocomplete="list"
           value={query}
           onChange={(e) => setQuery(e.target.value)}
-          onKeyDown={onKeyDown}
         />
+        <span className="sr-only" role="status" aria-live="polite">
+          {items.length === 0
+            ? `nothing matches ${query}`
+            : `${items.length} result${items.length === 1 ? '' : 's'}`}
+        </span>
         {items.length === 0 ? (
           <div className="palette-empty">
             {searching ? `searching your messages for “${query}”…` : `nothing matches “${query}”`}
           </div>
         ) : (
-          <ul className="palette-results" ref={listRef}>
+          <ul className="palette-results" id="palette-results" role="listbox" ref={listRef}>
             {items.map((it, i) => (
-              <li key={it.id}>
+              <li key={it.id} role="presentation">
                 <button
+                  id={optId(it.id)}
+                  role="option"
+                  aria-selected={i === index}
+                  // Options are driven by aria-activedescendant, so they are
+                  // not tab stops — Tab must leave the list, not walk it.
+                  tabIndex={-1}
                   className={i === index ? 'palette-item selected' : 'palette-item'}
                   onMouseEnter={() => setIndex(i)}
                   onClick={() => {
