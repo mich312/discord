@@ -63,9 +63,20 @@ export default function Masthead({
         >
           {theme === 'paper' ? <Moon /> : <Sun />}
         </button>
-        <span className="conn-chip" title={`relay: ${connection}`}>
-          <span className={`conn-dot ${connection}`} data-testid="conn-dot" />
+        {/* Going offline mid-conversation produced no announcement in any
+            viewport, and below 820px `.conn-label` is hidden, which left a 7px
+            coloured dot as the entire indicator — state carried by hue alone.
+            role="status" announces the change; the dot carries a shape as well
+            as a colour so it survives being unreadable. */}
+        <span
+          className="conn-chip"
+          role="status"
+          aria-live="polite"
+          title={`relay: ${connection}`}
+        >
+          <span className={`conn-dot ${connection}`} data-testid="conn-dot" aria-hidden="true" />
           <span className="conn-label">relay·{connection}</span>
+          <span className="sr-only">relay {connection}</span>
         </span>
         {server && (
           <button

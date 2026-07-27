@@ -179,7 +179,13 @@ body {
 *::-webkit-scrollbar-track { background: transparent; }
 
 button, input, textarea { font: inherit; color: inherit; }
-input, textarea { outline: none; }
+/* Was `outline: none`, which stripped the focus ring from every text input
+   in the product — and because the per-field :focus rules below out-specified
+   the global :focus-visible, nothing put it back. A keyboard user had a
+   border-colour change as their only cue, on a border that measures under
+   2:1. The UA outline is suppressed only where a :focus-visible replacement
+   is guaranteed, which is everywhere. */
+input, textarea { outline-color: var(--accent); }
 button { cursor: pointer; }
 
 :is(button, a, input, textarea, summary, [tabindex]):focus-visible {
@@ -343,7 +349,7 @@ kbd {
   padding: 9px 11px;
   transition: border-color var(--fast) var(--ease);
 }
-.field input:focus, .field textarea:focus { border-color: var(--ink-dim); outline: none; }
+.field input:focus, .field textarea:focus { border-color: var(--ink-dim); }
 .field select {
   width: 100%;
   background: var(--well);
@@ -354,7 +360,7 @@ kbd {
   font: inherit;
   transition: border-color var(--fast) var(--ease);
 }
-.field select:focus { border-color: var(--ink-dim); outline: none; }
+.field select:focus { border-color: var(--ink-dim); }
 .field.checkbox {
   display: flex;
   align-items: center;
@@ -1072,7 +1078,7 @@ kbd {
   font: inherit;
   color: var(--ink);
 }
-.stage-composer input:focus { border-color: var(--ink-dim); outline: none; }
+.stage-composer input:focus { border-color: var(--ink-dim); }
 .stage-chat .composer-note { padding: 4px 12px 10px; }
 
 /* joined voice room name doubles as the way back to its stage */
@@ -1685,7 +1691,7 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
   padding: 9px 11px;
   transition: border-color var(--fast) var(--ease);
 }
-.overview-event-edit input:focus, .overview-edit-form > input:focus { border-color: var(--ink-dim); outline: none; }
+.overview-event-edit input:focus, .overview-edit-form > input:focus { border-color: var(--ink-dim); }
 .overview-event-edit input[type='datetime-local'] { color-scheme: inherit; font-size: 13px; }
 .overview-field-label {
   font: 600 var(--text-xs) var(--mono);
@@ -1705,7 +1711,7 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
 }
 .overview-edit-form textarea { resize: vertical; line-height: 1.55; }
 .overview-edit-form textarea:focus,
-.overview-link-edit input:focus { border-color: var(--ink-dim); outline: none; }
+.overview-link-edit input:focus { border-color: var(--ink-dim); }
 .overview-link-edit {
   display: grid;
   grid-template-columns: minmax(90px, 1fr) 2fr auto;
@@ -2895,7 +2901,7 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
   padding: 8px 10px;
   font: inherit;
 }
-.overview-event-edit2 select:focus { border-color: var(--ink-dim); outline: none; }
+.overview-event-edit2 select:focus { border-color: var(--ink-dim); }
 
 .hub-hero {
   position: relative;
@@ -3120,7 +3126,7 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
   font: inherit;
   transition: border-color var(--fast) var(--ease);
 }
-.game-add-form input:focus, .game-add-form select:focus { border-color: var(--ink-dim); outline: none; }
+.game-add-form input:focus, .game-add-form select:focus { border-color: var(--ink-dim); }
 .game-add-row { display: grid; grid-template-columns: 1fr 52px; gap: 8px; }
 .game-add-glyph { text-align: center; font-size: 16px; }
 .game-add-form .row { margin-top: 2px; }
@@ -3447,3 +3453,34 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
   margin-left: 6px;
 }
 .member-unchecked:hover { background: color-mix(in srgb, var(--warn) 12%, transparent); }
+
+/* Skip link: the first tab stop on the page, invisible until it has focus.
+   Uses the same clip technique as .sr-only rather than a negative offset, so
+   it does not participate in layout while hidden. */
+.skip-link {
+  position: absolute;
+  left: 8px;
+  top: 8px;
+  z-index: 80;
+  clip-path: inset(50%);
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  padding: 9px 14px;
+  border-radius: var(--r);
+  background: var(--raised);
+  border: 1px solid var(--accent);
+  color: var(--ink);
+  font: 650 var(--text-sm) var(--sans);
+  text-decoration: none;
+}
+.skip-link:focus-visible {
+  clip-path: none;
+  width: auto;
+  height: auto;
+}
+
+/* Speaking must not be hue alone: the ring gains weight as well as colour, so
+   it still reads when the green does not. */
+.member.speaking .seal-avatar { box-shadow: 0 0 0 3px var(--ok), 0 0 10px var(--ok-soft); }
+.stage-bubble.speaking { border-width: 2px; }

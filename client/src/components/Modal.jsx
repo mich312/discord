@@ -266,7 +266,7 @@ export default function Modal({
               <Download size={14} />
               download key file
             </a>
-            {error && <p className="error">{error}</p>}
+            {error && <p className="error" role="alert">{error}</p>}
           </>
         )}
         {modal.type === 'link-send' && (
@@ -298,7 +298,7 @@ export default function Modal({
                 <button className="button wide" onClick={onClose}>
                   cancel
                 </button>
-                {error && <p className="error">{error}</p>}
+                {error && <p className="error" role="alert">{error}</p>}
               </>
             ) : (
               <p className="muted" data-testid="link-sent">
@@ -510,7 +510,7 @@ export default function Modal({
                 </button>
               </div>
             </div>
-            {error && <p className="error">{error}</p>}
+            {error && <p className="error" role="alert">{error}</p>}
           </>
         )}
         {modal.type === 'identity' && (
@@ -629,7 +629,7 @@ export default function Modal({
                 </button>
               </>
             )}
-            {error && <p className="error">{error}</p>}
+            {error && <p className="error" role="alert">{error}</p>}
           </>
         )}
         {modal.type === 'logout' && (
@@ -639,7 +639,7 @@ export default function Modal({
               circle&rsquo;s keys, then returns to the sign-in screen.
             </p>
             {unsecured ? (
-              <p className="error" data-testid="logout-unsecured-warning">
+              <p className="error" role="alert" data-testid="logout-unsecured-warning">
                 This account isn&rsquo;t secured yet — there is no passkey, password, or
                 exported key. If you log out now it is gone <strong>for good</strong>.
               </p>
@@ -663,7 +663,7 @@ export default function Modal({
                 cancel
               </button>
             </div>
-            {error && <p className="error">{error}</p>}
+            {error && <p className="error" role="alert">{error}</p>}
           </>
         )}
         <button className="ghost close" onClick={onClose} data-testid="close-modal" title="close">

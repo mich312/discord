@@ -154,6 +154,11 @@ function reducer(state, action) {
       return { ...state, connection: action.status };
     case 'toast':
       return { ...state, toast: action.text };
+    // Audio cues mirrored as text. Kept out of `toast` on purpose: a toast is
+    // a visible transient, and these exist for people who cannot hear the
+    // chime, not for everyone to read.
+    case 'announce':
+      return { ...state, announce: action.text };
     case 'modal':
       return { ...state, modal: action.modal };
     case 'voice':
@@ -638,6 +643,11 @@ export default function App() {
 
   return (
     <div className="app-shell" data-drawer={drawer ?? undefined}>
+      {/* Reaching the conversation meant tabbing the rail, the whole channel
+          sidebar and the voice list, on every load. Hidden until focused. */}
+      <a className="skip-link" href="#messages-pane">
+        skip to conversation
+      </a>
       <Masthead
         server={activeServer}
         connection={state.connection}
@@ -1017,7 +1027,18 @@ export default function App() {
           onToggleMute={() => controllerRef.current.voice.setMuted(!state.voice.muted)}
           onOpen={openStage}
         />
-        {state.toast && <div className="toast">{state.toast}</div>}
+        {/* Every confirmation in the product lands here — "device revoked",
+            "marked as verified", a failed screen share — and it was a bare
+            div that vanished after five seconds. aria-atomic so the whole
+            line is read rather than the diff against the previous toast. */}
+        {state.toast && (
+          <div className="toast" role="status" aria-live="polite" aria-atomic="true">
+            {state.toast}
+          </div>
+        )}
+        <span className="sr-only" role="status" aria-live="polite" aria-atomic="true">
+          {state.announce}
+        </span>
         {state.modal?.type === 'settings' && (
           <Settings
             me={state.me}

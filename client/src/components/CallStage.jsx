@@ -22,7 +22,14 @@ function ScreenTile({ stream, name, mine }) {
   }, [stream]);
   return (
     <div className="stage-screen" data-testid="stage-screen">
-      <video ref={ref} autoPlay playsInline muted data-testid={`stage-screen-video-${name}`} />
+      <video
+        ref={ref}
+        autoPlay
+        playsInline
+        muted
+        aria-label={`${name}'s shared screen`}
+        data-testid={`stage-screen-video-${name}`}
+      />
       <span className="stage-screen-label">
         <Screen size={12} />
         {mine ? 'your screen' : `${name}'s screen`}
@@ -49,6 +56,7 @@ function CameraTile({ stream, name, mine }) {
       autoPlay
       playsInline
       muted
+      aria-label={mine ? 'your camera' : `${name}'s camera`}
       data-testid={`bubble-cam-video-${name}`}
     />
   );
@@ -191,6 +199,11 @@ export default function CallStage({
                   data-testid={`stage-bubble-${p}`}
                   data-speaking={speaking ? 'true' : 'false'}
                 >
+                  {/* Speaking was a green ring and nothing else — invisible to
+                      a screen reader and to anyone who cannot separate the
+                      hue. Not a live region: who is talking changes several
+                      times a second and would be a firehose. */}
+                  {speaking && <span className="sr-only">{p} is speaking</span>}
                   <span className={camStream ? 'bubble-seal has-cam' : 'bubble-seal'}>
                     {camStream ? (
                       <CameraTile stream={camStream} name={p} mine={p === me} />
