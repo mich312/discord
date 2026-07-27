@@ -3323,6 +3323,8 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
   .voice-join { padding: 12px 14px; min-height: 44px; }
   .role-toggle { padding: 12px 10px; min-height: 44px; }
   .msg-act { min-width: 44px; min-height: 44px; }
+  /* The only way to send a file, and it was 32px. */
+  .attach { min-width: 44px; min-height: 44px; }
   .ghost { min-height: 44px; }
 
   /* 16px inputs: anything smaller makes iOS zoom the page on focus */
