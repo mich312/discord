@@ -271,6 +271,9 @@ function PreviewShell({ empty = false, banner = false, modal = null, palette = f
 
   return (
     <div className="app-shell" data-drawer={drawer ?? undefined}>
+      <a className="skip-link" href="#messages-pane">
+        skip to conversation
+      </a>
       <Masthead
         server={activeServer}
         connection="online"

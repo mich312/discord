@@ -59,6 +59,7 @@ export default function Members({ server, me, canManage, voice, onAdd, onMember,
         // cross-dissolving it. Named only while it's a real roster row.
         style={{ viewTransitionName: memberVtName(m) }}
       >
+        {speaking && <span className="sr-only">{m} is speaking</span>}
         <Seal name={m} size={26} />
         <span className="member-col">
           <button

@@ -474,7 +474,7 @@ export default function Messages({
   }, [messages]);
 
   return (
-    <main className="messages-pane">
+    <main className="messages-pane" id="messages-pane" tabIndex={-1}>
       <span className="sr-only" role="log" aria-live="polite" aria-atomic="true">
         {announce}
       </span>

@@ -298,6 +298,7 @@ export class Controller {
       send: (server, content, notify) => this.sendEphemeral(server, content, notify),
       onState: (state) => this.dispatch({ type: 'voice', state }),
       onNotify: (text) => this.dispatch({ type: 'toast', text }),
+      onAnnounce: (text) => this.dispatch({ type: 'announce', text }),
       // First joiner in an empty room = a call started; say so in the
       // room's first text channel so it reads like the event it is.
       onCallStarted: (server, channel, name) => {

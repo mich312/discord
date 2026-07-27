@@ -187,6 +187,10 @@ export class VoiceManager {
     this.send = opts.send;
     this.onState = opts.onState;
     this.onNotify = opts.onNotify ?? (() => {}); // transient user messages (toasts)
+    // Text equivalents for audio-only cues. Separate from onNotify because
+    // these are for assistive tech, not for the screen: a toast on every
+    // join and leave would be noise nobody asked for.
+    this.onAnnounce = opts.onAnnounce ?? (() => {});
     // A room's presence went 0 -> 1: someone opened a call. The controller
     // drops a system line into the room's first text channel.
     this.onCallStarted = opts.onCallStarted ?? (() => {});
@@ -299,6 +303,13 @@ export class VoiceManager {
     };
     if (typeof window !== 'undefined') window.__voice = state;
     this.onState(state);
+  }
+
+  /** Mirror an audio cue into text for anyone who cannot hear it. Routed
+      through the same dispatch the UI already listens to, so the live region
+      is one place rather than one per event. */
+  announce(text) {
+    this.onAnnounce(text);
   }
 
   /** Persist and toggle the join/leave chime preference. */
@@ -1036,6 +1047,11 @@ export class VoiceManager {
               // Someone new arrived in my call — chime, then tell them we're
               // here (they can't know otherwise).
               this.chime('join');
+              // The chime is the only signal a participant arrived, and the
+              // roster updates silently. Announced separately from the sound
+              // so the chime toggle governs audio only — turning it off must
+              // not also turn off the accessible equivalent.
+              this.announce(`${sender} joined the call`);
               await this.send(server, this.hereEnvelope(content.ch));
             }
             await this.ensurePeer(server, sender);
@@ -1075,7 +1091,10 @@ export class VoiceManager {
           this.track(server, content.ch, sender, false);
           this.shares.delete(sender);
           this.cameras.delete(sender);
-          if (wasInMyCall) this.chime('leave');
+          if (wasInMyCall) {
+            this.chime('leave');
+            this.announce(`${sender} left the call`);
+          }
           this.dropPeer(sender);
           // A direct call ends when the *other party* leaves that same room —
           // not when some unrelated member leaves another voice room, which

@@ -371,7 +371,7 @@ export default function Onboarding({ controller }) {
               </button>
             </>
           )}
-          {error && <p className="error">{error}</p>}
+          {error && <p className="error" role="alert">{error}</p>}
         </div>
       </Gate>
     );
@@ -450,7 +450,7 @@ export default function Onboarding({ controller }) {
               sign in first, then use the link again
             </button>
           </p>
-          {error && <p className="error">{error}</p>}
+          {error && <p className="error" role="alert">{error}</p>}
         </div>
       </Gate>
     );
@@ -635,7 +635,7 @@ export default function Onboarding({ controller }) {
             </p>
           </div>
         )}
-        {error && <p className="error">{error}</p>}
+        {error && <p className="error" role="alert">{error}</p>}
       </div>
     </Gate>
   );
