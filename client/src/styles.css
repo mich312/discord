@@ -52,7 +52,11 @@
      This token carries most metadata in the product — overlines, timestamps,
      the sealed-note and fineprint lines — usually at 10-12px. */
   --ink-dim: #b4b4bd;
-  --ink-mute: #6d6d76;
+  /* Raised from #6d6d76, which measured 3.17:1 on --active and failed AA on
+     every surface. The comment above once implied this whole tier had been
+     fixed; only --ink-dim had been. contrast.test.mjs now checks the claim
+     rather than trusting it. */
+  --ink-mute: #8e8e98;
   --hairline: rgba(255, 255, 255, 0.08);
   --hairline-strong: rgba(255, 255, 255, 0.17);
   --accent: #ff5470;          /* coral — fills, rules, focus          */
@@ -61,6 +65,10 @@
   --accent-soft: rgba(255, 84, 112, 0.13);
   --ok: #3ddc84;
   --ok-soft: rgba(61, 220, 132, 0.12);
+  /* Caution: a guarantee is reduced or unchecked — distinct from --danger,
+     which means broken or irreversible. Was referenced as an undefined
+     var(--warn, #d08b1f) fallback that never changed with the theme. */
+  --warn: #d08b1f;
   --danger: #e06055;
   --danger-soft: rgba(224, 96, 85, 0.12);
   --scrollbar: rgba(242, 242, 243, 0.16);
@@ -88,17 +96,18 @@
   --ink: #1c1c1e;
   /* Paper theme: was #59595c at 2.85:1, well below AA for normal text. */
   --ink-dim: #4a4a4d;
-  --ink-mute: #8f8f8c;
+  --ink-mute: #5d5d5f;
   --hairline: rgba(28, 28, 30, 0.14);
   --hairline-strong: rgba(28, 28, 30, 0.3);
-  --accent: #e8496b;          /* the same coral, tuned for daylight   */
-  --accent-ink: #c22c50;      /* readable coral for accent-as-text    */
+  --accent: #c62a4d;          /* the same coral, tuned for daylight   */
+  --accent-ink: #a81f43;      /* readable coral for accent-as-text    */
   --on-accent: #ffffff;
-  --accent-soft: rgba(232, 73, 107, 0.14);
-  --ok: #2f8a57;
-  --ok-soft: rgba(47, 138, 87, 0.12);
-  --danger: #ad4a3c;
-  --danger-soft: rgba(173, 74, 60, 0.1);
+  --accent-soft: rgba(198, 42, 77, 0.07);
+  --ok: #1f6e42;
+  --ok-soft: rgba(31, 110, 66, 0.07);
+  --warn: #6f540e;
+  --danger: #933a2e;
+  --danger-soft: rgba(147, 58, 46, 0.06);
   --scrollbar: rgba(28, 28, 30, 0.25);
   --backdrop: rgba(35, 32, 28, 0.45);
   --overlay-shadow: 0 16px 48px rgba(60, 54, 36, 0.25);
@@ -114,17 +123,18 @@
     --active: #dfdbd3;
     --ink: #1c1c1e;
     --ink-dim: #4a4a4d;
-    --ink-mute: #8f8f8c;
+    --ink-mute: #5d5d5f;
     --hairline: rgba(28, 28, 30, 0.14);
     --hairline-strong: rgba(28, 28, 30, 0.3);
-    --accent: #e8496b;
-    --accent-ink: #c22c50;
+    --accent: #c62a4d;
+    --accent-ink: #a81f43;
     --on-accent: #ffffff;
-    --accent-soft: rgba(232, 73, 107, 0.14);
-    --ok: #2f8a57;
-    --ok-soft: rgba(47, 138, 87, 0.12);
-    --danger: #ad4a3c;
-    --danger-soft: rgba(173, 74, 60, 0.1);
+    --accent-soft: rgba(198, 42, 77, 0.07);
+    --ok: #1f6e42;
+    --ok-soft: rgba(31, 110, 66, 0.07);
+    --warn: #6f540e;
+    --danger: #933a2e;
+    --danger-soft: rgba(147, 58, 46, 0.06);
     --scrollbar: rgba(28, 28, 30, 0.25);
     --backdrop: rgba(35, 32, 28, 0.45);
     --overlay-shadow: 0 16px 48px rgba(60, 54, 36, 0.25);
@@ -134,9 +144,9 @@
   /* The handful of component rules that go beyond the tokens. Their
      `[data-theme='paper']` originals are further down, beside the components
      they belong to; these mirror them for the system-preference case. */
-  :root:not([data-theme]) .voice-live-card { border-color: rgba(47, 138, 87, 0.35); }
+  :root:not([data-theme]) .voice-live-card { border-color: rgba(31, 110, 66, 0.35); }
   :root:not([data-theme]) .voice-join-pill { color: #fff; }
-  :root:not([data-theme]) .voice-joined-card { border-color: rgba(47, 138, 87, 0.35); }
+  :root:not([data-theme]) .voice-joined-card { border-color: rgba(31, 110, 66, 0.35); }
   :root:not([data-theme]) .call-orb .seal-avatar { box-shadow: 0 0 0 2px #dff1e6; }
 }
 
@@ -647,7 +657,7 @@ kbd {
   border: 1px solid rgba(61, 220, 132, 0.25);
   border-radius: var(--r);
 }
-[data-theme='paper'] .voice-live-card { border-color: rgba(47, 138, 87, 0.35); }
+[data-theme='paper'] .voice-live-card { border-color: rgba(31, 110, 66, 0.35); }
 .voice-live-label { color: var(--ok); display: block; margin-bottom: 8px; }
 .voice-live-row { display: flex; align-items: center; }
 .voice-live-stack { display: flex; align-items: center; }
@@ -717,7 +727,7 @@ kbd {
   border: 1px solid rgba(61, 220, 132, 0.25);
   border-radius: var(--r);
 }
-[data-theme='paper'] .voice-joined-card { border-color: rgba(47, 138, 87, 0.35); }
+[data-theme='paper'] .voice-joined-card { border-color: rgba(31, 110, 66, 0.35); }
 .voice-joined-card .voice-live-label { margin-bottom: 10px; }
 /* Who's in the call, as a stack of orbs — same language as the "live in …"
    card above, but each orb pulses while its owner is talking. */
