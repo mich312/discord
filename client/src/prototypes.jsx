@@ -86,7 +86,7 @@ function Identity() {
 
       <Row
         label="B · derived mark"
-        note="One division of the field plus an occasional charge, keyed to the circle id — heraldry's answer to being legible when small. Hues are quantised to a 12-stop wheel so neighbours in the rail never land next to each other."
+        note="A generated gradient, keyed to the circle id — nothing drawn on top. Variation lives in the hues, the geometry (a linear sweep or a radial source) and where the light falls. Hues run on an arc from 15° to 295°, never a full wheel: the 80° around coral is a dead zone no circle can enter, anchor or companion, so a mark never reads as 'selected'."
       >
         {CIRCLES.map((c) => (
           <figure key={c.id} className="p-tile">
