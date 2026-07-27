@@ -190,8 +190,34 @@ button { cursor: pointer; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.01ms !important;
+    /* Without this, a near-zero duration on an `infinite` animation does not
+       stop it — it runs it about a hundred thousand times a second. Every
+       pulse, blink and glow in the product became a flicker, for exactly the
+       people who asked for less motion. */
+    animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
+
+  /* Collapsing the duration lands each animation on whichever keyframe
+     happens to be last, which for a pulse is an arbitrary point in the cycle.
+     These carry meaning — someone is speaking, the relay is down — so they
+     stop outright and keep the static styling underneath instead. */
+  .call-orb.speaking .seal-avatar,
+  .call-glyph.pulse,
+  .conn-dot.connecting,
+  .conn-dot.offline,
+  .member-count.live,
+  .stage-bubble.speaking .bubble-seal svg,
+  .stage-bubble.speaking .bubble-cam,
+  .boot-mark,
+  .channel-empty .ce-glyph {
+    animation: none !important;
+  }
+
+  /* `.conn-dot.offline` blinked to say "offline" and nothing else did, so
+     stopping it would erase the state. Give it a static form instead. */
+  .conn-dot.offline { outline: 2px solid var(--danger); outline-offset: 2px; }
 }
 
 h1 { font-size: var(--text-xl); font-weight: 650; letter-spacing: -0.015em; }
@@ -2795,6 +2821,13 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
   border: 1px solid var(--hairline);
   border-radius: var(--r);
   background: var(--panel);
+  /* A grid item's min-width is `auto`, i.e. min-content — so this row refused
+     to shrink below the combined width of the attendee stack and the RSVP
+     button, and pushed 700px of content through a 390px pane. The overflow
+     was invisible because the scroller's `overflow-y: auto` computes
+     `overflow-x` to `auto` too, so it scrolled sideways inside the pane
+     instead of breaking the page. */
+  min-width: 0;
 }
 .night-mark {
   flex-shrink: 0;
@@ -3255,6 +3288,16 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
     animation: fade var(--fast) var(--ease);
   }
   .sidebar .self-card { padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px)); }
+
+  /* A game night is title + who's going + RSVP. Side by side that needs more
+     width than a phone has, and the RSVP button — the entire point of the row
+     — was the part that ended up off-screen. Stack it: the body takes a full
+     row, the attendee stack and the button share the one beneath. */
+  .night-row { flex-wrap: wrap; row-gap: 10px; }
+  .night-body { flex: 1 1 100%; order: 1; }
+  .night-mark { order: 0; }
+  .night-going { order: 2; }
+  .night-action { order: 3; margin-left: auto; min-height: 44px; }
 
   /* conversation takes the full width */
   .pane-head { padding: 0 12px; }
