@@ -236,6 +236,13 @@ const modals = {
   },
   'modal-secure': { type: 'secure' },
   'modal-identity': { type: 'identity', key: 'AGVkMjU1MTkAAAAg7fQm1kO4X9cJ2ZxWv8pRnLhT3sBqYaUieDo0M5wNfKgQxJtM2v-identity-demo' },
+  'modal-mismatch': {
+    type: 'safety',
+    server: 'srv-race',
+    peer: 'charlie',
+    number: '39217 55018 82649 10473 66392 04815 77260 93148 25501 68937 41205 87716',
+    mismatched: true,
+  },
   'modal-safety': {
     type: 'safety',
     server: 'srv-race',
