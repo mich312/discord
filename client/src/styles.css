@@ -339,7 +339,7 @@ kbd {
   margin-bottom: 0;
   text-transform: none;
   letter-spacing: normal;
-  font: 500 var(--text-sm) var(--sans, inherit);
+  font: 500 var(--text-sm) var(--sans);
   color: var(--ink);
 }
 .field.checkbox input { width: auto; accent-color: var(--accent); }
@@ -1226,12 +1226,12 @@ kbd {
 .msg-line:hover { background: var(--hover); }
 /* Own message states: dimmed while in flight, marked when the send failed. */
 .msg-line.pending .text { opacity: 0.55; }
-.msg-line.failed .text { opacity: 0.75; text-decoration: underline dotted var(--danger, #c0392b); }
+.msg-line.failed .text { opacity: 0.75; text-decoration: underline dotted var(--danger); }
 .msg-retry {
   font-size: 11px;
   padding: 1px 8px;
-  color: var(--danger, #c0392b);
-  border-color: var(--danger, #c0392b);
+  color: var(--danger);
+  border-color: var(--danger);
 }
 .msg-line time {
   position: absolute;
@@ -1805,7 +1805,7 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
 .settings-toggle { display: flex; align-items: flex-start; gap: 10px; margin-top: 9px; cursor: pointer; }
 .settings-toggle input { width: auto; margin-top: 2px; accent-color: var(--accent); flex-shrink: 0; }
 .settings-toggle-body { display: flex; flex-direction: column; gap: 2px; }
-.settings-toggle-label { font: 500 var(--text-sm) var(--sans, inherit); color: var(--ink); }
+.settings-toggle-label { font: 500 var(--text-sm) var(--sans); color: var(--ink); }
 .settings-dsp > .fineprint { margin-top: 10px; }
 
 .settings-actions { display: flex; gap: 8px; flex-wrap: wrap; }
@@ -2174,7 +2174,7 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
   transition: color var(--fast) var(--ease), background var(--fast) var(--ease);
 }
 .msg-act:hover { color: var(--ink); background: var(--hover); }
-.msg-act.danger { color: var(--danger, #c0392b); font-weight: 650; padding: 0 8px; }
+.msg-act.danger { color: var(--danger); font-weight: 650; padding: 0 8px; }
 .react-picker {
   position: absolute;
   top: calc(100% + 6px);
@@ -2203,7 +2203,7 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
   padding: 0 3px;
   border-radius: var(--r-sm);
   background: color-mix(in srgb, var(--accent) 12%, transparent);
-  color: var(--accent-ink, var(--accent));
+  color: var(--accent-ink);
   font-weight: 600;
 }
 .mention.self { background: var(--accent-soft); color: var(--ink); }
