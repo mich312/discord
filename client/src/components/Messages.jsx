@@ -412,6 +412,11 @@ export default function Messages({
   // The line being edited (a message), or null. Editing takes over the
   // composer, so it and a pending reply are mutually exclusive.
   const [editing, setEditing] = useState(null);
+  // Touch has no hover, so the action toolbar needs something to reveal it.
+  // Tapping a line selects it; tapping it again (or any other line) puts it
+  // away. Pointer devices never read this — the hover rule already covers
+  // them, and the class carries no styling outside `@media (hover: none)`.
+  const [acting, setActing] = useState(null);
   const inputRef = useRef(null);
   const scroller = useRef(null);
   // Which lines this device actually holds — a reply's "jump to original"
@@ -581,9 +586,20 @@ export default function Messages({
               </div>
               {item.lines.map((m, i) => (
                 <div
-                  className={m.failed ? 'msg-line failed' : m.pending ? 'msg-line pending' : 'msg-line'}
+                  className={[
+                    'msg-line',
+                    m.failed ? 'failed' : m.pending ? 'pending' : '',
+                    acting === `${m.ts}:${i}` ? 'acting' : '',
+                  ]
+                    .filter(Boolean)
+                    .join(' ')}
                   key={`${m.ts}:${i}`}
                   data-mid={midOf(m)}
+                  onClick={(e) => {
+                    // Never steal a tap meant for something inside the line.
+                    if (e.target.closest('button, a, input, textarea, [role="button"]')) return;
+                    setActing((cur) => (cur === `${m.ts}:${i}` ? null : `${m.ts}:${i}`));
+                  }}
                 >
                   {m.deleted ? (
                     <span className="text deleted" data-testid="msg-deleted">
