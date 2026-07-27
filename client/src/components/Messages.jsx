@@ -3,6 +3,7 @@ import Seal from './Seal.jsx';
 import { describeRetention, freshTyping } from '../lib/controller.js';
 import { meshFull, meshFullMessage } from '../lib/voice.js';
 import { nameHue } from '../lib/avatar.js';
+import { fold, dayLabel } from '../lib/fold.js';
 import { AlertTriangle, Lock, Paperclip, Clock, Archive, Wave, Gamepad, Check, Plus, Reply, Pencil, Trash, X } from './icons.jsx';
 
 // The reaction palette: small on purpose. Reactions ride MLS like any
@@ -233,48 +234,8 @@ function timeOf(ts) {
   return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
-function dayLabel(ts) {
-  const d = new Date(ts);
-  const today = new Date();
-  const yesterday = new Date(today);
-  yesterday.setDate(today.getDate() - 1);
-  const same = (a, b) =>
-    a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
-  if (same(d, today)) return 'today';
-  if (same(d, yesterday)) return 'yesterday';
-  return d.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' });
-}
-
 // Fold the flat message list into day dividers, system chips, and groups of
 // consecutive lines from one sender within a five-minute window.
-const GROUP_WINDOW = 5 * 60 * 1000;
-function fold(messages) {
-  const out = [];
-  let day = null;
-  let group = null;
-  for (const m of messages) {
-    const label = dayLabel(m.ts);
-    if (label !== day) {
-      out.push({ kind: 'day', label, key: `d${m.ts}` });
-      day = label;
-      group = null;
-    }
-    if (m.system) {
-      out.push({ kind: 'system', m, key: `s${m.ts}${out.length}` });
-      group = null;
-      continue;
-    }
-    if (group && group.sender === m.sender && m.ts - group.last < GROUP_WINDOW) {
-      group.lines.push(m);
-      group.last = m.ts;
-    } else {
-      group = { kind: 'group', sender: m.sender, ts: m.ts, last: m.ts, lines: [m], key: `g${m.ts}${out.length}` };
-      out.push(group);
-    }
-  }
-  return out;
-}
-
 function Attachment({ file, fetchFile }) {
   const [url, setUrl] = useState(null);
   const [error, setError] = useState(null);
@@ -577,10 +538,31 @@ export default function Messages({
               <Seal name={item.sender} size={34} title={item.sender} />
               <div className="msg-head">
                 <span className={item.sender === me ? 'sender self' : 'sender'}>{item.sender}</span>
-                {(server.verified ?? []).includes(item.sender) && (
-                  <span className="sender-check" title="safety number checked on this device">
-                    <Check size={10} />
+                {/* The check means "this line was signed by a key I checked".
+                    A restored line was never signed by its sender — it was
+                    sealed with the room key, which every current and former
+                    member holds — so it cannot carry the badge, and says what
+                    it is instead. */}
+                {item.fromHistory ? (
+                  <span
+                    className="sender-history"
+                    role="img"
+                    aria-label="from kept history — sealed with the room key, not signed by the sender"
+                    title="from kept history — sealed with the room key, not signed by the sender"
+                  >
+                    <Archive size={10} />
                   </span>
+                ) : (
+                  (server.verified ?? []).includes(item.sender) && (
+                    <span
+                      className="sender-check"
+                      role="img"
+                      aria-label="safety number checked on this device"
+                      title="safety number checked on this device"
+                    >
+                      <Check size={10} />
+                    </span>
+                  )
                 )}
                 <time>{timeOf(item.ts)}</time>
               </div>
