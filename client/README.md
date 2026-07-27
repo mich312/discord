@@ -37,22 +37,33 @@ server metadata is rebroadcast (encrypted) after every member add.
 - Onboarding cannot be completed without downloading the recovery file
   and confirming the code is stored off-device.
 
-### Design system — "the register"
+### Design system — "afterdark"
 
-The UI is its own product language, not a Discord/Slack skin and not an
-AI-default gradient theme. The register is an engineering ledger in the
-International Typographic tradition: hierarchy comes from 1px rules,
-spacing and type — never from glow, gradient, blur or shadow stacks;
-geometry is sharp (0–2px radii, no pills). Two near-monochrome themes off
-one token contract in `src/styles.css` — **carbon** (dark, default) and
-**paper** (light) — with a single **signal-yellow** accent used strictly
-functionally (selection, primary action, focus); green and red appear
-only where they carry meaning (trust, danger). The monospace carries the
-brand: wordmark, section indices (`01 CIRCLES`), epochs, timestamps,
-handles, statuses — anything the system says, it says in mono. Member
-avatars are **cipher marks** (`src/lib/identicon.js`): flat 5×5 mirrored
-module glyphs computed from the handle — identity is a key, so the
-avatar is a fingerprint, never an upload. Chrome layout: a full-width
+**The rules live in [docs/DESIGN_GUIDELINES.md](../docs/DESIGN_GUIDELINES.md),
+and several of them are enforced by tests. What follows is orientation, not
+the contract** — this section previously described a system ("the register":
+signal-yellow, 0–2px radii, no pills, no gradients, `identicon.js` cipher
+marks) that had been replaced wholesale, down to a file that no longer
+exists. Prose drifts; keep the rules where a test can reach them.
+
+The UI is its own product language, not a Discord/Slack skin. A private
+arcade rather than a terminal: true-black neutral surfaces, soft geometry
+(10px radii, round avatars, pills for counts), and colour carried by
+identity — member orbs and game covers hold the saturation while the chrome
+around them stays dark and out of the way. Two themes off one token contract
+in `src/styles.css` — **carbon** (dark, default) and **paper** (light),
+each authored separately rather than derived, because a light-theme tint
+needs about half the alpha of a dark one to read the same.
+
+Colour is a controlled vocabulary, one meaning each: **coral** for selection,
+the primary action and focus; **green** for a cryptographic fact or someone
+being here right now; **amber** for a guarantee that is reduced or unchecked;
+**red** for broken or irreversible. The monospace carries the system's voice —
+labels, timestamps, counts, epochs, statuses, security lines — but never a
+person's name, body copy, or a button label. Member avatars are **mesh orbs**
+(`src/lib/avatar.js`): hashed hue blobs blurred into one wash, derived from
+the handle and never uploaded, because identity here is a key. Chrome layout:
+a full-width
 masthead (brand · circle + epoch · invite · ⌘K palette · theme · relay
 state), a single sidebar (circles → rooms → voice → self card), the
 conversation (grouped messages, day dividers, hover timestamps), and the
@@ -74,6 +85,12 @@ the real components against mock state (no relay, no WASM) — views:
 `?view=app|onboarding|invited|empty|banner|palette|modal-*`, plus
 `&theme=paper`. Useful for design review and screenshots when the crypto
 core isn't built.
+
+`npm run shots:ui` walks the whole gallery and writes 42 PNGs to `SHOT_DIR`
+(default `/tmp/ui`) — every view, both themes, desktop and phone, at 2×. The
+phone context sets `hasTouch`, which is load-bearing: without it
+`@media (hover: none)` never matches and the shot shows a layout no phone
+user will ever see.
 
 ### Invite links
 
