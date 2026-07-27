@@ -156,6 +156,26 @@ jobs:
       - name: deploy.sh is shellcheck-clean
         run: shellcheck ci/deploy.sh
 
+      # The health gate is the one check standing between a bad image and
+      # production, so a health gate that cannot pass is worse than none: it
+      # fails the deploy, fails the rollback too, and reports the *app* as
+      # broken. That is exactly what a trailing slash on the base URL did —
+      # it built "//healthz", which axum's router does not collapse to
+      # "/healthz", so every probe 404ed off the static-file fallback.
+      # Assert the path deploy.sh actually requests is a route the relay
+      # registers, rather than trusting the two strings to stay in step.
+      - name: the health check requests a path the relay actually routes
+        run: |
+          set -euo pipefail
+          health=$(bash -c 'eval "$(grep -E "^(URL|HEALTH_URL)=" ci/deploy.sh)"; printf %s "${HEALTH_URL:-}"')
+          path=${health#*://}; path=/${path#*/}
+          echo "deploy.sh health-checks $health (path: $path)"
+          case "$path" in
+            *//*) echo "path has an empty segment — the relay's router will 404 it"; exit 1 ;;
+          esac
+          grep -qF ".route(\"$path\"" relay/src/lib.rs \
+            || { echo "relay/src/lib.rs registers no route \"$path\""; exit 1; }
+
       - name: the production overlay set resolves
         # The same three files ci/deploy.sh brings up. A typo here is a failed
         # deploy on the box rather than a failed check here.

@@ -20,7 +20,12 @@
 set -euo pipefail
 
 REPO_DIR="$HOME/discord"
-URL="https://quorum.mich312.com/"
+# No trailing slash. Paths below are appended directly, and the relay's router
+# (axum/matchit) does not collapse "//" — a base of ".../" once produced
+# "//healthz", which matches no route and falls through to the static-file
+# fallback as a 404. That 404ed every deploy AND every rollback.
+URL="https://quorum.mich312.com"
+HEALTH_URL="${URL%/}/healthz"
 # Survives across deploys, so a rollback still knows what was last known good
 # even if the current containers are gone.
 STATE_FILE="$REPO_DIR/deploy/.last-good-image"
@@ -42,8 +47,8 @@ compose() {
 healthy() {
   sleep 3   # give the relay a moment to boot + reach postgres
   for _ in $(seq 1 18); do   # ~90s
-    code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 "$URL/healthz") || code=000
-    echo "  $URL/healthz -> $code"
+    code=$(curl -s -o /dev/null -w '%{http_code}' --max-time 8 "$HEALTH_URL") || code=000
+    echo "  $HEALTH_URL -> $code"
     case "$code" in 2[0-9][0-9]) return 0 ;; esac   # only a real 2xx is healthy
     sleep 5
   done
