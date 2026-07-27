@@ -28,9 +28,13 @@ const VIEWS = [
 // On a phone the interesting question is the floor plan, not the modals.
 const MOBILE_VIEWS = ['app', 'overview', 'onboarding', 'call', 'emptychat'];
 
+// `touch` is load-bearing, not a detail: without it Playwright reports a
+// hover-capable device, `@media (hover: none)` never matches, and every
+// reveal-on-touch affordance stays hidden. A mobile shot taken that way
+// renders a layout no phone user will ever see.
 const VIEWPORTS = [
-  { name: 'desktop', width: 1440, height: 900, views: VIEWS },
-  { name: 'mobile', width: 390, height: 844, views: MOBILE_VIEWS },
+  { name: 'desktop', width: 1440, height: 900, views: VIEWS, touch: false },
+  { name: 'mobile', width: 390, height: 844, views: MOBILE_VIEWS, touch: true },
 ];
 
 const vite = spawn('npx', ['vite', '--port', String(PORT), '--strictPort'], {
@@ -63,6 +67,8 @@ for (const vp of VIEWPORTS) {
   const ctx = await browser.newContext({
     viewport: { width: vp.width, height: vp.height },
     deviceScaleFactor: 2,
+    hasTouch: vp.touch,
+    isMobile: vp.touch,
   });
   const page = await ctx.newPage();
   page.on('pageerror', (e) => console.error(`  ! ${e.message}`));
