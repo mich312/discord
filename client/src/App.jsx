@@ -968,6 +968,7 @@ export default function App() {
                       peer,
                       number,
                       verified: (activeServer.verified ?? []).includes(peer),
+                      mismatched: !!activeServer.mismatched?.[peer],
                     },
                   });
                 } catch (e) {
@@ -1075,6 +1076,16 @@ export default function App() {
               await controllerRef.current.markVerified(srv, peer);
               dispatch({ type: 'modal', modal: null });
               dispatch({ type: 'toast', text: `${peer} marked as verified` });
+            }}
+            onMismatch={async (srv, peer) => {
+              await controllerRef.current.markMismatch(srv, peer);
+              // The dialog stays open, unlike verifying: the outcome copy is
+              // the point of pressing this, and closing onto a toast would
+              // throw away the only guidance the user gets.
+              dispatch({
+                type: 'modal',
+                modal: { ...state.modal, mismatched: true, verified: false },
+              });
             }}
             onSecurePasskey={async () => {
               await controllerRef.current.secureWithPasskey();

@@ -3,6 +3,7 @@ import Seal from './Seal.jsx';
 import { describeRetention, freshTyping } from '../lib/controller.js';
 import { meshFull, meshFullMessage } from '../lib/voice.js';
 import { nameHue } from '../lib/avatar.js';
+import { fold, dayLabel } from '../lib/fold.js';
 import { AlertTriangle, Lock, Paperclip, Clock, Archive, Wave, Gamepad, Check, Plus, Reply, Pencil, Trash, X } from './icons.jsx';
 
 // The reaction palette: small on purpose. Reactions ride MLS like any
@@ -233,48 +234,8 @@ function timeOf(ts) {
   return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
 }
 
-function dayLabel(ts) {
-  const d = new Date(ts);
-  const today = new Date();
-  const yesterday = new Date(today);
-  yesterday.setDate(today.getDate() - 1);
-  const same = (a, b) =>
-    a.getFullYear() === b.getFullYear() && a.getMonth() === b.getMonth() && a.getDate() === b.getDate();
-  if (same(d, today)) return 'today';
-  if (same(d, yesterday)) return 'yesterday';
-  return d.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' });
-}
-
 // Fold the flat message list into day dividers, system chips, and groups of
 // consecutive lines from one sender within a five-minute window.
-const GROUP_WINDOW = 5 * 60 * 1000;
-function fold(messages) {
-  const out = [];
-  let day = null;
-  let group = null;
-  for (const m of messages) {
-    const label = dayLabel(m.ts);
-    if (label !== day) {
-      out.push({ kind: 'day', label, key: `d${m.ts}` });
-      day = label;
-      group = null;
-    }
-    if (m.system) {
-      out.push({ kind: 'system', m, key: `s${m.ts}${out.length}` });
-      group = null;
-      continue;
-    }
-    if (group && group.sender === m.sender && m.ts - group.last < GROUP_WINDOW) {
-      group.lines.push(m);
-      group.last = m.ts;
-    } else {
-      group = { kind: 'group', sender: m.sender, ts: m.ts, last: m.ts, lines: [m], key: `g${m.ts}${out.length}` };
-      out.push(group);
-    }
-  }
-  return out;
-}
-
 function Attachment({ file, fetchFile }) {
   const [url, setUrl] = useState(null);
   const [error, setError] = useState(null);
@@ -412,8 +373,21 @@ export default function Messages({
   // The line being edited (a message), or null. Editing takes over the
   // composer, so it and a pending reply are mutually exclusive.
   const [editing, setEditing] = useState(null);
+  // Touch has no hover, so the action toolbar needs something to reveal it.
+  // Tapping a line selects it; tapping it again (or any other line) puts it
+  // away. Pointer devices never read this — the hover rule already covers
+  // them, and the class carries no styling outside `@media (hover: none)`.
+  const [acting, setActing] = useState(null);
   const inputRef = useRef(null);
   const scroller = useRef(null);
+  const attachRef = useRef(null);
+  // Incoming messages were never announced: a screen-reader user in a room
+  // got no signal that anything had arrived, which is the core function of
+  // the product. The whole transcript cannot be a live region — it would
+  // re-read on every render and recite the chrome with it — so one small
+  // region carries the newest line and nothing else.
+  const [announce, setAnnounce] = useState('');
+  const lastSeen = useRef(null);
   // Which lines this device actually holds — a reply's "jump to original"
   // only lights up when the quoted line is one of them.
   const present = useMemo(() => new Set(messages.map(midOf)), [messages]);
@@ -463,12 +437,47 @@ export default function Messages({
       .map((r) => ({ r, n: voice?.presence?.[`${server.id}/${r}`]?.length ?? 0 }))
       .sort((a, b) => b.n - a.n)[0] ?? null;
 
+  // Switching room or circle resets the watermark, so the backlog that
+  // renders next is not "new" and must not be read out.
+  useEffect(() => {
+    lastSeen.current = null;
+    setAnnounce('');
+  }, [channel, server.id]);
+
+  useEffect(() => {
+    const last = messages[messages.length - 1];
+    if (!last) return;
+    const id = `${last.sender ?? 'system'}:${last.ts}`;
+    // First pass after a reset is the existing history, not an arrival.
+    if (lastSeen.current === null) {
+      lastSeen.current = id;
+      return;
+    }
+    if (lastSeen.current === id) return;
+    lastSeen.current = id;
+    // Your own sends are not news, and you already know you sent them.
+    if (last.system || last.sender === me) return;
+    const body = last.deleted
+      ? 'deleted a message'
+      : last.file
+        ? `sent a file, ${last.file.name}`
+        : last.game
+          ? `opened ${last.game.name ?? 'a game'}`
+          : (last.text ?? '');
+    // Only the newest line: a burst would otherwise queue up and read for
+    // longer than it takes the next one to arrive.
+    setAnnounce(`${last.sender}: ${body}`);
+  }, [messages, me]);
+
   useEffect(() => {
     if (pinned.current) scroller.current?.scrollTo(0, scroller.current.scrollHeight);
   }, [messages]);
 
   return (
     <main className="messages-pane">
+      <span className="sr-only" role="log" aria-live="polite" aria-atomic="true">
+        {announce}
+      </span>
       <header className="pane-head">
         <span className="room-name">
           <span className="glyph">
@@ -572,18 +581,50 @@ export default function Messages({
               <Seal name={item.sender} size={34} title={item.sender} />
               <div className="msg-head">
                 <span className={item.sender === me ? 'sender self' : 'sender'}>{item.sender}</span>
-                {(server.verified ?? []).includes(item.sender) && (
-                  <span className="sender-check" title="safety number checked on this device">
-                    <Check size={10} />
+                {/* The check means "this line was signed by a key I checked".
+                    A restored line was never signed by its sender — it was
+                    sealed with the room key, which every current and former
+                    member holds — so it cannot carry the badge, and says what
+                    it is instead. */}
+                {item.fromHistory ? (
+                  <span
+                    className="sender-history"
+                    role="img"
+                    aria-label="from kept history — sealed with the room key, not signed by the sender"
+                    title="from kept history — sealed with the room key, not signed by the sender"
+                  >
+                    <Archive size={10} />
                   </span>
+                ) : (
+                  (server.verified ?? []).includes(item.sender) && (
+                    <span
+                      className="sender-check"
+                      role="img"
+                      aria-label="safety number checked on this device"
+                      title="safety number checked on this device"
+                    >
+                      <Check size={10} />
+                    </span>
+                  )
                 )}
                 <time>{timeOf(item.ts)}</time>
               </div>
               {item.lines.map((m, i) => (
                 <div
-                  className={m.failed ? 'msg-line failed' : m.pending ? 'msg-line pending' : 'msg-line'}
+                  className={[
+                    'msg-line',
+                    m.failed ? 'failed' : m.pending ? 'pending' : '',
+                    acting === `${m.ts}:${i}` ? 'acting' : '',
+                  ]
+                    .filter(Boolean)
+                    .join(' ')}
                   key={`${m.ts}:${i}`}
                   data-mid={midOf(m)}
+                  onClick={(e) => {
+                    // Never steal a tap meant for something inside the line.
+                    if (e.target.closest('button, a, input, textarea, [role="button"]')) return;
+                    setActing((cur) => (cur === `${m.ts}:${i}` ? null : `${m.ts}:${i}`));
+                  }}
                 >
                   {m.deleted ? (
                     <span className="text deleted" data-testid="msg-deleted">
@@ -745,19 +786,36 @@ export default function Messages({
             onSend(text, reply);
           }}
         >
-          <label className="attach" title="attach a file (encrypted before it leaves this device)">
+          {/* A <label> wrapping a `hidden` input is not reachable: `hidden` is
+              display:none, so the input is neither focusable nor in the
+              accessibility tree, the label is not focusable either, and the
+              glyph inside it is aria-hidden — which left the only way to send
+              a file with no keyboard path and no accessible name at all. The
+              button is the control; the input is a file picker it opens, kept
+              in the DOM but out of the tab order. */}
+          <button
+            type="button"
+            className="attach"
+            aria-label="attach a file"
+            title="attach a file (encrypted before it leaves this device)"
+            data-testid="attach"
+            onClick={() => attachRef.current?.click()}
+          >
             <Paperclip />
-            <input
-              type="file"
-              hidden
-              data-testid="attach-input"
-              onChange={(e) => {
-                const file = e.target.files[0];
-                e.target.value = '';
-                if (file) onSendFile(file);
-              }}
-            />
-          </label>
+          </button>
+          <input
+            ref={attachRef}
+            type="file"
+            className="sr-only"
+            tabIndex={-1}
+            aria-hidden="true"
+            data-testid="attach-input"
+            onChange={(e) => {
+              const file = e.target.files[0];
+              e.target.value = '';
+              if (file) onSendFile(file);
+            }}
+          />
           <input
             ref={inputRef}
             type="text"

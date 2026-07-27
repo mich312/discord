@@ -52,7 +52,11 @@
      This token carries most metadata in the product — overlines, timestamps,
      the sealed-note and fineprint lines — usually at 10-12px. */
   --ink-dim: #b4b4bd;
-  --ink-mute: #6d6d76;
+  /* Raised from #6d6d76, which measured 3.17:1 on --active and failed AA on
+     every surface. The comment above once implied this whole tier had been
+     fixed; only --ink-dim had been. contrast.test.mjs now checks the claim
+     rather than trusting it. */
+  --ink-mute: #8e8e98;
   --hairline: rgba(255, 255, 255, 0.08);
   --hairline-strong: rgba(255, 255, 255, 0.17);
   --accent: #ff5470;          /* coral — fills, rules, focus          */
@@ -61,6 +65,10 @@
   --accent-soft: rgba(255, 84, 112, 0.13);
   --ok: #3ddc84;
   --ok-soft: rgba(61, 220, 132, 0.12);
+  /* Caution: a guarantee is reduced or unchecked — distinct from --danger,
+     which means broken or irreversible. Was referenced as an undefined
+     var(--warn, #d08b1f) fallback that never changed with the theme. */
+  --warn: #d08b1f;
   --danger: #e06055;
   --danger-soft: rgba(224, 96, 85, 0.12);
   --scrollbar: rgba(242, 242, 243, 0.16);
@@ -88,17 +96,18 @@
   --ink: #1c1c1e;
   /* Paper theme: was #59595c at 2.85:1, well below AA for normal text. */
   --ink-dim: #4a4a4d;
-  --ink-mute: #8f8f8c;
+  --ink-mute: #5d5d5f;
   --hairline: rgba(28, 28, 30, 0.14);
   --hairline-strong: rgba(28, 28, 30, 0.3);
-  --accent: #e8496b;          /* the same coral, tuned for daylight   */
-  --accent-ink: #c22c50;      /* readable coral for accent-as-text    */
+  --accent: #c62a4d;          /* the same coral, tuned for daylight   */
+  --accent-ink: #a81f43;      /* readable coral for accent-as-text    */
   --on-accent: #ffffff;
-  --accent-soft: rgba(232, 73, 107, 0.14);
-  --ok: #2f8a57;
-  --ok-soft: rgba(47, 138, 87, 0.12);
-  --danger: #ad4a3c;
-  --danger-soft: rgba(173, 74, 60, 0.1);
+  --accent-soft: rgba(198, 42, 77, 0.07);
+  --ok: #1f6e42;
+  --ok-soft: rgba(31, 110, 66, 0.07);
+  --warn: #6f540e;
+  --danger: #933a2e;
+  --danger-soft: rgba(147, 58, 46, 0.06);
   --scrollbar: rgba(28, 28, 30, 0.25);
   --backdrop: rgba(35, 32, 28, 0.45);
   --overlay-shadow: 0 16px 48px rgba(60, 54, 36, 0.25);
@@ -114,17 +123,18 @@
     --active: #dfdbd3;
     --ink: #1c1c1e;
     --ink-dim: #4a4a4d;
-    --ink-mute: #8f8f8c;
+    --ink-mute: #5d5d5f;
     --hairline: rgba(28, 28, 30, 0.14);
     --hairline-strong: rgba(28, 28, 30, 0.3);
-    --accent: #e8496b;
-    --accent-ink: #c22c50;
+    --accent: #c62a4d;
+    --accent-ink: #a81f43;
     --on-accent: #ffffff;
-    --accent-soft: rgba(232, 73, 107, 0.14);
-    --ok: #2f8a57;
-    --ok-soft: rgba(47, 138, 87, 0.12);
-    --danger: #ad4a3c;
-    --danger-soft: rgba(173, 74, 60, 0.1);
+    --accent-soft: rgba(198, 42, 77, 0.07);
+    --ok: #1f6e42;
+    --ok-soft: rgba(31, 110, 66, 0.07);
+    --warn: #6f540e;
+    --danger: #933a2e;
+    --danger-soft: rgba(147, 58, 46, 0.06);
     --scrollbar: rgba(28, 28, 30, 0.25);
     --backdrop: rgba(35, 32, 28, 0.45);
     --overlay-shadow: 0 16px 48px rgba(60, 54, 36, 0.25);
@@ -134,9 +144,9 @@
   /* The handful of component rules that go beyond the tokens. Their
      `[data-theme='paper']` originals are further down, beside the components
      they belong to; these mirror them for the system-preference case. */
-  :root:not([data-theme]) .voice-live-card { border-color: rgba(47, 138, 87, 0.35); }
+  :root:not([data-theme]) .voice-live-card { border-color: rgba(31, 110, 66, 0.35); }
   :root:not([data-theme]) .voice-join-pill { color: #fff; }
-  :root:not([data-theme]) .voice-joined-card { border-color: rgba(47, 138, 87, 0.35); }
+  :root:not([data-theme]) .voice-joined-card { border-color: rgba(31, 110, 66, 0.35); }
   :root:not([data-theme]) .call-orb .seal-avatar { box-shadow: 0 0 0 2px #dff1e6; }
 }
 
@@ -180,8 +190,34 @@ button { cursor: pointer; }
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
     animation-duration: 0.01ms !important;
+    /* Without this, a near-zero duration on an `infinite` animation does not
+       stop it — it runs it about a hundred thousand times a second. Every
+       pulse, blink and glow in the product became a flicker, for exactly the
+       people who asked for less motion. */
+    animation-iteration-count: 1 !important;
     transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
   }
+
+  /* Collapsing the duration lands each animation on whichever keyframe
+     happens to be last, which for a pulse is an arbitrary point in the cycle.
+     These carry meaning — someone is speaking, the relay is down — so they
+     stop outright and keep the static styling underneath instead. */
+  .call-orb.speaking .seal-avatar,
+  .call-glyph.pulse,
+  .conn-dot.connecting,
+  .conn-dot.offline,
+  .member-count.live,
+  .stage-bubble.speaking .bubble-seal svg,
+  .stage-bubble.speaking .bubble-cam,
+  .boot-mark,
+  .channel-empty .ce-glyph {
+    animation: none !important;
+  }
+
+  /* `.conn-dot.offline` blinked to say "offline" and nothing else did, so
+     stopping it would erase the state. Give it a static form instead. */
+  .conn-dot.offline { outline: 2px solid var(--danger); outline-offset: 2px; }
 }
 
 h1 { font-size: var(--text-xl); font-weight: 650; letter-spacing: -0.015em; }
@@ -329,7 +365,7 @@ kbd {
   margin-bottom: 0;
   text-transform: none;
   letter-spacing: normal;
-  font: 500 var(--text-sm) var(--sans, inherit);
+  font: 500 var(--text-sm) var(--sans);
   color: var(--ink);
 }
 .field.checkbox input { width: auto; accent-color: var(--accent); }
@@ -647,7 +683,7 @@ kbd {
   border: 1px solid rgba(61, 220, 132, 0.25);
   border-radius: var(--r);
 }
-[data-theme='paper'] .voice-live-card { border-color: rgba(47, 138, 87, 0.35); }
+[data-theme='paper'] .voice-live-card { border-color: rgba(31, 110, 66, 0.35); }
 .voice-live-label { color: var(--ok); display: block; margin-bottom: 8px; }
 .voice-live-row { display: flex; align-items: center; }
 .voice-live-stack { display: flex; align-items: center; }
@@ -717,7 +753,7 @@ kbd {
   border: 1px solid rgba(61, 220, 132, 0.25);
   border-radius: var(--r);
 }
-[data-theme='paper'] .voice-joined-card { border-color: rgba(47, 138, 87, 0.35); }
+[data-theme='paper'] .voice-joined-card { border-color: rgba(31, 110, 66, 0.35); }
 .voice-joined-card .voice-live-label { margin-bottom: 10px; }
 /* Who's in the call, as a stack of orbs — same language as the "live in …"
    card above, but each orb pulses while its owner is talking. */
@@ -1216,12 +1252,12 @@ kbd {
 .msg-line:hover { background: var(--hover); }
 /* Own message states: dimmed while in flight, marked when the send failed. */
 .msg-line.pending .text { opacity: 0.55; }
-.msg-line.failed .text { opacity: 0.75; text-decoration: underline dotted var(--danger, #c0392b); }
+.msg-line.failed .text { opacity: 0.75; text-decoration: underline dotted var(--danger); }
 .msg-retry {
   font-size: 11px;
   padding: 1px 8px;
-  color: var(--danger, #c0392b);
-  border-color: var(--danger, #c0392b);
+  color: var(--danger);
+  border-color: var(--danger);
 }
 .msg-line time {
   position: absolute;
@@ -1388,7 +1424,7 @@ kbd {
 .member .tag { margin-left: auto; flex-shrink: 0; }
 
 .badge-you { font: var(--text-xs) var(--mono); color: var(--ink-mute); }
-.badge-verified, .badge-unverified, .badge-admin {
+.badge-verified, .badge-unverified, .badge-mismatch, .badge-admin {
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -1407,7 +1443,20 @@ kbd {
   padding: 2px;
   line-height: 0;
 }
-.badge-unverified { color: var(--accent-ink); border-color: var(--accent-ink); }
+/* Was --accent-ink, i.e. the brand coral, which also paints the wordmark,
+   the active channel and "playing Hex Gambit". A trust warning drawn in the
+   same hue as a video game is decoration. --warn is the token for a guarantee
+   that is reduced or unchecked, which is exactly this. */
+.badge-unverified { color: var(--warn); border-color: var(--warn); }
+.badge-unverified:hover { background: color-mix(in srgb, var(--warn) 12%, transparent); }
+/* The only badge that is --danger: a mismatch is not a reduced guarantee like
+   an unchecked member, it is a broken one. It is also the only badge carrying
+   a filled background, because it has to survive being read past. */
+.badge-mismatch {
+  color: var(--danger);
+  border-color: var(--danger);
+  background: var(--danger-soft);
+}
 .badge-admin { color: var(--ink-mute); border-color: var(--hairline-strong); margin-right: 4px; }
 
 .role-toggle {
@@ -1795,7 +1844,7 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
 .settings-toggle { display: flex; align-items: flex-start; gap: 10px; margin-top: 9px; cursor: pointer; }
 .settings-toggle input { width: auto; margin-top: 2px; accent-color: var(--accent); flex-shrink: 0; }
 .settings-toggle-body { display: flex; flex-direction: column; gap: 2px; }
-.settings-toggle-label { font: 500 var(--text-sm) var(--sans, inherit); color: var(--ink); }
+.settings-toggle-label { font: 500 var(--text-sm) var(--sans); color: var(--ink); }
 .settings-dsp > .fineprint { margin-top: 10px; }
 
 .settings-actions { display: flex; gap: 8px; flex-wrap: wrap; }
@@ -2141,7 +2190,13 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
 .msg-line:hover .msg-actions,
 .msg-actions:hover,
 .msg-actions:focus-within { opacity: 1; pointer-events: auto; }
-@media (hover: none) { .msg-actions { opacity: 1; pointer-events: auto; } }
+/* Touch: reveal on tap, not always. Left visible, a 44px-target toolbar is
+   ~185px wide on a 390px screen — half the column, floating over the line
+   above — on every message at once. `.acting` is set by a tap on the line. */
+@media (hover: none) {
+  .msg-actions { opacity: 0; pointer-events: none; }
+  .msg-line.acting .msg-actions { opacity: 1; pointer-events: auto; }
+}
 .react-add-wrap { position: relative; display: inline-flex; }
 .msg-act {
   display: inline-grid;
@@ -2158,7 +2213,7 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
   transition: color var(--fast) var(--ease), background var(--fast) var(--ease);
 }
 .msg-act:hover { color: var(--ink); background: var(--hover); }
-.msg-act.danger { color: var(--danger, #c0392b); font-weight: 650; padding: 0 8px; }
+.msg-act.danger { color: var(--danger); font-weight: 650; padding: 0 8px; }
 .react-picker {
   position: absolute;
   top: calc(100% + 6px);
@@ -2187,7 +2242,7 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
   padding: 0 3px;
   border-radius: var(--r-sm);
   background: color-mix(in srgb, var(--accent) 12%, transparent);
-  color: var(--accent-ink, var(--accent));
+  color: var(--accent-ink);
   font-weight: 600;
 }
 .mention.self { background: var(--accent-soft); color: var(--ink); }
@@ -2263,7 +2318,7 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
 }
 .reply-bar .rb-cancel:hover { color: var(--ink); background: var(--hover); }
 /* editing reuses the reply bar's frame with a warmer edge and a keyboard hint */
-.reply-bar.editing { border-left-color: var(--warn, #d08b1f); }
+.reply-bar.editing { border-left-color: var(--warn); }
 .reply-bar .rb-hint { flex: 1; text-align: right; color: var(--ink-mute); font-size: var(--text-xs); }
 
 /* typing indicator: a quiet italic line reserving its own row above the
@@ -2367,7 +2422,7 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
   max-width: 100%;
   height: 150px;
   margin-top: 4px;
-  border-radius: var(--r-md, 8px);
+  border-radius: var(--r);
   border: 1px solid var(--hairline);
   background: linear-gradient(
     100deg,
@@ -2535,6 +2590,10 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
 
 /* verified check beside the sender name */
 .sender-check { display: inline-grid; place-items: center; color: var(--ok); }
+/* Deliberately not --ok and deliberately not --danger: a restored line is not
+   a failure, it is a weaker claim. --warn is the token for "this guarantee is
+   reduced", and this is the clearest case of it in the product. */
+.sender-history { display: inline-grid; place-items: center; color: var(--warn); }
 
 /* composer: quiet keyboard hint */
 .send-hint {
@@ -2775,6 +2834,13 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
   border: 1px solid var(--hairline);
   border-radius: var(--r);
   background: var(--panel);
+  /* A grid item's min-width is `auto`, i.e. min-content — so this row refused
+     to shrink below the combined width of the attendee stack and the RSVP
+     button, and pushed 700px of content through a 390px pane. The overflow
+     was invisible because the scroller's `overflow-y: auto` computes
+     `overflow-x` to `auto` too, so it scrolled sideways inside the pane
+     instead of breaking the page. */
+  min-width: 0;
 }
 .night-mark {
   flex-shrink: 0;
@@ -3236,6 +3302,16 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
   }
   .sidebar .self-card { padding-bottom: calc(10px + env(safe-area-inset-bottom, 0px)); }
 
+  /* A game night is title + who's going + RSVP. Side by side that needs more
+     width than a phone has, and the RSVP button — the entire point of the row
+     — was the part that ended up off-screen. Stack it: the body takes a full
+     row, the attendee stack and the button share the one beneath. */
+  .night-row { flex-wrap: wrap; row-gap: 10px; }
+  .night-body { flex: 1 1 100%; order: 1; }
+  .night-mark { order: 0; }
+  .night-going { order: 2; }
+  .night-action { order: 3; margin-left: auto; min-height: 44px; }
+
   /* conversation takes the full width */
   .pane-head { padding: 0 12px; }
   .sealed-note { display: none; }
@@ -3260,6 +3336,8 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
   .voice-join { padding: 12px 14px; min-height: 44px; }
   .role-toggle { padding: 12px 10px; min-height: 44px; }
   .msg-act { min-width: 44px; min-height: 44px; }
+  /* The only way to send a file, and it was 32px. */
+  .attach { min-width: 44px; min-height: 44px; }
   .ghost { min-height: 44px; }
 
   /* 16px inputs: anything smaller makes iOS zoom the page on focus */
@@ -3348,3 +3426,24 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
   color: var(--ink-dim);
   line-height: 1.5;
 }
+
+/* Two equally weighted outcomes in the safety dialog. Equal width is the
+   point: the trust-granting button must not be the visually easier one. */
+.safety-actions { display: flex; gap: 8px; }
+.safety-actions .button { flex: 1; justify-content: center; }
+
+/* The outstanding-verification prompt in the roster header. Quiet by default —
+   it is a standing amount of work, not an alarm — but it is a real button, so
+   the one comparison nobody has made is always one tap away. */
+.member-unchecked {
+  font: 600 var(--text-xs) var(--mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--warn);
+  background: none;
+  border: 1px solid var(--warn);
+  border-radius: var(--r-pill);
+  padding: 2px 8px;
+  margin-left: 6px;
+}
+.member-unchecked:hover { background: color-mix(in srgb, var(--warn) 12%, transparent); }

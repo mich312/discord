@@ -69,6 +69,7 @@
 //                                   own registry — the payload itself never
 //                                   supplies a URL to launch
 import { b64, Relay } from './relay.js';
+import { applyVerified, applyMismatch, retireMismatch } from './trust.js';
 import {
   generateHistoryId,
   generateHistoryKey,
@@ -527,6 +528,7 @@ export class Controller {
       hcursor: prior?.hcursor ?? {},
       verified: prior?.verified,
       verifiedSn: prior?.verifiedSn,
+      mismatched: prior?.mismatched,
       members,
       epoch,
       lastSeq: msg.after,
@@ -2182,8 +2184,27 @@ export class Controller {
   async markVerified(serverId, peer) {
     const record = this.servers.get(serverId);
     const sn = await this.safetyNumber(serverId, peer);
-    record.verifiedSn = { ...(record.verifiedSn ?? {}), [peer]: sn };
-    record.verified = Object.keys(record.verifiedSn);
+    applyVerified(record, peer, sn);
+    await this.db.serverPut(record);
+    this.dispatch({ type: 'servers', servers: this.snapshotServers() });
+  }
+
+  /** Record that a comparison came back *wrong*.
+
+      A dialog whose only button grants trust is a consent funnel: the user who
+      does the work correctly and finds a mismatch has nothing to click and no
+      trace of what they found. `record.mismatched` maps peer -> the safety
+      number that failed, so a later key change can clear it the same way
+      `verifiedSn` is cleared.
+
+      Device-local, and deliberately not in the encrypted backup — for the same
+      reason `verifiedSn` isn't. This is the user's own judgement about a
+      comparison they made in person, and it does not transfer to a device that
+      never made it. */
+  async markMismatch(serverId, peer) {
+    const record = this.servers.get(serverId);
+    const sn = await this.safetyNumber(serverId, peer);
+    applyMismatch(record, peer, sn);
     await this.db.serverPut(record);
     this.dispatch({ type: 'servers', servers: this.snapshotServers() });
   }
@@ -2208,10 +2229,30 @@ export class Controller {
       );
       return true;
     }
-    const stored = record.verifiedSn;
-    if (!stored || !Object.keys(stored).length) return false;
-
+    // A recorded mismatch is about the key that was in front of the user when
+    // they compared. If that key is gone, the finding is spent: keeping it
+    // would badge a member over a comparison nobody ever made against the key
+    // they now hold. Cleared quietly — the mismatch already had its say.
     let changed = false;
+    for (const [peer, was] of Object.entries(record.mismatched ?? {})) {
+      let now;
+      try {
+        now = await this.safetyNumber(record.id, peer);
+      } catch {
+        continue;
+      }
+      if (retireMismatch(record, peer, now)) {
+        changed = true;
+        await this.addSystemMessage(
+          record.id,
+          `${peer}'s key changed since you found a mismatch — the warning is cleared, but nothing has been verified. Compare again before trusting them.`
+        );
+      }
+    }
+
+    const stored = record.verifiedSn;
+    if (!stored || !Object.keys(stored).length) return changed;
+
     for (const [peer, was] of Object.entries(stored)) {
       // Someone who has left the group keeps their entry: if they are ever
       // re-added the check below runs against the new key and catches it.
@@ -2392,6 +2433,7 @@ export class Controller {
       hcursor: prior?.hcursor ?? {},
       verified: prior?.verified,
       verifiedSn: prior?.verifiedSn,
+      mismatched: prior?.mismatched,
       members,
       epoch,
       lastSeq: sent.seq,
@@ -2500,6 +2542,7 @@ export class Controller {
         roles: { ...(r.roles ?? {}) },
         verified: [...(r.verified ?? [])],
         verifiedSn: { ...(r.verifiedSn ?? {}) },
+        mismatched: { ...(r.mismatched ?? {}) },
         notices: [...(r.notices ?? [])],
         rsvps: { ...(r.rsvps ?? {}) },
         overview: r.overview ? JSON.parse(JSON.stringify(r.overview)) : r.overview,

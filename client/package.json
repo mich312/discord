@@ -7,7 +7,8 @@
     "build": "node scripts/copy-pkg.mjs && vite build && node scripts/inject-sri.mjs && node scripts/inject-integrity.mjs && node scripts/inject-precache.mjs",
     "test": "node --test test/*.test.mjs",
     "e2e": "node e2e/run.mjs",
-    "preview:ui": "vite --open /preview.html"
+    "preview:ui": "vite --open /preview.html",
+    "shots:ui": "node e2e/gallery-shots.mjs"
   },
   "dependencies": {
     "qrcode-generator": "^2.0.4",

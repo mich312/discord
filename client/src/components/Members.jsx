@@ -38,6 +38,14 @@ export default function Members({ server, me, canManage, voice, onAdd, onMember,
   const playingOnly = server.members.filter((m) => !inCallSet.has(m) && playing[m]);
   const rest = server.members.filter((m) => !inCallSet.has(m) && !playing[m]);
   const liveCount = inCallSet.size + playingOnly.length;
+  // Everyone whose key nobody on this device has checked. Deliberately not
+  // just the link-joiners: a member added by hand is equally unchecked — they
+  // arrived with someone vouching for them socially rather than
+  // cryptographically. The badge below distinguishes provenance; this count
+  // does not, because the work outstanding is the same either way.
+  const unchecked = server.members.filter(
+    (m) => m !== me && !(server.verified ?? []).includes(m) && !server.mismatched?.[m]
+  );
 
   const row = (m) => {
     const speaking = voice?.speaking?.includes(m);
@@ -91,14 +99,32 @@ export default function Members({ server, me, canManage, voice, onAdd, onMember,
           )}
           {m === me ? (
             <span className="badge-you">you</span>
+          ) : /* A found mismatch outranks every other badge. Losing a ✓ must
+                 render as a loss, not as the absence of a mark — "no badge"
+                 is what an unchecked stranger looks like, and this is not
+                 that. */
+            server.mismatched?.[m] ? (
+            <span
+              className="badge-mismatch"
+              data-testid={`badge-mismatch-${m}`}
+              title="you compared safety numbers and they did not match"
+              aria-label="key mismatch"
+            >
+              key mismatch
+            </span>
           ) : (server.verified ?? []).includes(m) ? (
             <span className="badge-verified" title="verified — safety number checked on this device" aria-label="verified">
               <Check size={11} />
             </span>
           ) : (server.linkJoined ?? []).includes(m) ? (
-            <span className="badge-unverified" title="joined via invite link; safety number not checked">
+            <button
+              className="badge-unverified"
+              data-testid={`badge-unverified-${m}`}
+              title="joined via an invite link, and nobody here has checked their key — tap to compare"
+              onClick={() => onMember(m)}
+            >
               via link
-            </span>
+            </button>
           ) : null}
           {canManage && m !== me && roles[m] && (
             <button
@@ -139,6 +165,21 @@ export default function Members({ server, me, canManage, voice, onAdd, onMember,
           </span>
         ) : (
           <span className="member-count">{server.members.length}</span>
+        )}
+        {/* The product had no surface that ever asked anyone to verify: the
+            flow existed and nothing pointed at it, so an unchecked member
+            stayed unchecked forever. The count is the prompt, and it is the
+            button — opening the first outstanding comparison is one tap from
+            the roster rather than a tooltip nobody sees on touch. */}
+        {unchecked.length > 0 && (
+          <button
+            className="member-unchecked"
+            data-testid="unchecked-count"
+            title={`nobody on this device has checked ${unchecked.length === 1 ? 'this key' : 'these keys'} yet`}
+            onClick={() => onMember(unchecked[0])}
+          >
+            {unchecked.length} unchecked
+          </button>
         )}
       </div>
       {occupiedRooms.map((room) => {

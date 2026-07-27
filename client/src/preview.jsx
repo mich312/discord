@@ -129,6 +129,10 @@ const messages = [
   { sender: 'dana', text: 'thanks @alice — leave the intermediates too, forecast is shaky', ts: now - 1.0 * H },
   { sender: 'bob', text: 'grid slot confirmed: P4 (was P5)', ts: now - 0.9 * H, edited: true },
   { sender: 'charlie', ts: now - 0.85 * H, deleted: true },
+  // Restored from kept history: same sender as a live line and close enough
+  // in time that the old grouping would have merged them under one header.
+  { sender: 'bob', text: 'wets are in the second truck if we need them', ts: now - 0.84 * H, fromHistory: true },
+  { sender: 'bob', text: 'and the spare set is under the awning', ts: now - 0.83 * H, fromHistory: true },
 ];
 
 // 2×2 png so the eager image-decrypt path renders something real.
@@ -232,6 +236,13 @@ const modals = {
   },
   'modal-secure': { type: 'secure' },
   'modal-identity': { type: 'identity', key: 'AGVkMjU1MTkAAAAg7fQm1kO4X9cJ2ZxWv8pRnLhT3sBqYaUieDo0M5wNfKgQxJtM2v-identity-demo' },
+  'modal-mismatch': {
+    type: 'safety',
+    server: 'srv-race',
+    peer: 'charlie',
+    number: '39217 55018 82649 10473 66392 04815 77260 93148 25501 68937 41205 87716',
+    mismatched: true,
+  },
   'modal-safety': {
     type: 'safety',
     server: 'srv-race',

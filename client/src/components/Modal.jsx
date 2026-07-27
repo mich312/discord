@@ -1,6 +1,6 @@
 import { useDialog } from '../lib/useDialog.js';
 import React, { useEffect, useState } from 'react';
-import { LinkGlyph, Key, ShieldCheck, Copy, Download, X, Check, Gear, LogOut } from './icons.jsx';
+import { LinkGlyph, Key, ShieldCheck, Copy, Download, X, Check, AlertTriangle, Gear, LogOut } from './icons.jsx';
 
 const RETENTION_CHOICES = [
   { value: 0, label: 'keep until deleted by hand' },
@@ -14,6 +14,7 @@ export default function Modal({
   modal,
   onClose,
   onVerify,
+  onMismatch,
   onSecurePasskey,
   onSecurePassword,
   onSecureFile,
@@ -319,17 +320,49 @@ export default function Modal({
                 <span key={i} className="mono">{group}</span>
               ))}
             </div>
-            {modal.verified ? (
+            {modal.mismatched ? (
+              /* The outcome copy deliberately does not tell anyone to remove
+                 and re-add the member "to force a new key". The safety number
+                 is derived from both parties' MLS *signature* keys
+                 (crypto-core `safety_number`), and a member's signer is
+                 created once at account setup and carried in every KeyPackage
+                 they ever publish — so a re-add produces a new leaf and the
+                 same safety number. Sending someone who may be under attack
+                 through a ritual that changes nothing is worse than saying
+                 nothing. */
+              <p className="error" role="alert" data-testid="safety-mismatch-note">
+                Don’t send anything sensitive to <strong>{modal.peer}</strong> in this
+                circle for now. A mismatch means the key you have for {modal.peer} isn’t
+                the key they have. Usually that’s because they set up a new account — ask
+                them, on a call or in person. If they did, compare again and the new
+                numbers should match. If they didn’t, someone has put a different key in
+                front of you. Removing {modal.peer} ends their access to this circle, but
+                it can’t change their key — and nobody can change it for them.
+              </p>
+            ) : modal.verified ? (
               <p className="fineprint muted">already marked verified on this device.</p>
             ) : (
-              <button
-                className="button primary wide"
-                data-testid="mark-verified"
-                onClick={() => onVerify(modal.server, modal.peer)}
-              >
-                <Check size={14} />
-                the numbers match — mark verified
-              </button>
+              /* Two outcomes, equally weighted. A dialog whose only button
+                 grants trust is a consent funnel: the user who does the
+                 comparison properly and finds it wrong had nothing to press. */
+              <div className="safety-actions">
+                <button
+                  className="button primary"
+                  data-testid="mark-verified"
+                  onClick={() => onVerify(modal.server, modal.peer)}
+                >
+                  <Check size={14} />
+                  they match
+                </button>
+                <button
+                  className="button danger"
+                  data-testid="mark-mismatch"
+                  onClick={() => onMismatch(modal.server, modal.peer)}
+                >
+                  <AlertTriangle size={14} />
+                  they don’t match
+                </button>
+              </div>
             )}
             <p className="fineprint muted">
               Verification is stored on this device only; it is your judgement, not the

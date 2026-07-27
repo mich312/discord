@@ -41,10 +41,16 @@ export function useDialog(onClose, { label } = {}) {
     const node = ref.current;
     if (!node) return undefined;
 
+    // `tabindex="-1"` has to be excluded on every element type, not just on
+    // the bare [tabindex] arm. A listbox option is a real <button> that is
+    // deliberately not a tab stop, and counting it made the trap believe the
+    // last option was the edge — so on Tab from the input it declined to
+    // intervene, and the browser, which does respect tabindex="-1", moved
+    // focus out of the dialog entirely.
     const focusable = () =>
       [
         ...node.querySelectorAll(
-          'a[href], button:not([disabled]), input:not([disabled]), select:not([disabled]), textarea:not([disabled]), [tabindex]:not([tabindex="-1"])'
+          'a[href]:not([tabindex="-1"]), button:not([disabled]):not([tabindex="-1"]), input:not([disabled]):not([tabindex="-1"]), select:not([disabled]):not([tabindex="-1"]), textarea:not([disabled]):not([tabindex="-1"]), [tabindex]:not([tabindex="-1"])'
         ),
       ].filter((el) => el.offsetParent !== null || el === document.activeElement);
 
