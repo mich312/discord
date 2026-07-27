@@ -91,6 +91,19 @@ export default function Members({ server, me, canManage, voice, onAdd, onMember,
           )}
           {m === me ? (
             <span className="badge-you">you</span>
+          ) : /* A found mismatch outranks every other badge. Losing a ✓ must
+                 render as a loss, not as the absence of a mark — "no badge"
+                 is what an unchecked stranger looks like, and this is not
+                 that. */
+            server.mismatched?.[m] ? (
+            <span
+              className="badge-mismatch"
+              data-testid={`badge-mismatch-${m}`}
+              title="you compared safety numbers and they did not match"
+              aria-label="key mismatch"
+            >
+              key mismatch
+            </span>
           ) : (server.verified ?? []).includes(m) ? (
             <span className="badge-verified" title="verified — safety number checked on this device" aria-label="verified">
               <Check size={11} />

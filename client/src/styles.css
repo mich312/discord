@@ -1424,7 +1424,7 @@ kbd {
 .member .tag { margin-left: auto; flex-shrink: 0; }
 
 .badge-you { font: var(--text-xs) var(--mono); color: var(--ink-mute); }
-.badge-verified, .badge-unverified, .badge-admin {
+.badge-verified, .badge-unverified, .badge-mismatch, .badge-admin {
   display: inline-flex;
   align-items: center;
   gap: 4px;
@@ -1444,6 +1444,14 @@ kbd {
   line-height: 0;
 }
 .badge-unverified { color: var(--accent-ink); border-color: var(--accent-ink); }
+/* The only badge that is --danger: a mismatch is not a reduced guarantee like
+   an unchecked member, it is a broken one. It is also the only badge carrying
+   a filled background, because it has to survive being read past. */
+.badge-mismatch {
+  color: var(--danger);
+  border-color: var(--danger);
+  background: var(--danger-soft);
+}
 .badge-admin { color: var(--ink-mute); border-color: var(--hairline-strong); margin-right: 4px; }
 
 .role-toggle {
@@ -3413,3 +3421,8 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
   color: var(--ink-dim);
   line-height: 1.5;
 }
+
+/* Two equally weighted outcomes in the safety dialog. Equal width is the
+   point: the trust-granting button must not be the visually easier one. */
+.safety-actions { display: flex; gap: 8px; }
+.safety-actions .button { flex: 1; justify-content: center; }
