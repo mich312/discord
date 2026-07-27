@@ -1443,7 +1443,12 @@ kbd {
   padding: 2px;
   line-height: 0;
 }
-.badge-unverified { color: var(--accent-ink); border-color: var(--accent-ink); }
+/* Was --accent-ink, i.e. the brand coral, which also paints the wordmark,
+   the active channel and "playing Hex Gambit". A trust warning drawn in the
+   same hue as a video game is decoration. --warn is the token for a guarantee
+   that is reduced or unchecked, which is exactly this. */
+.badge-unverified { color: var(--warn); border-color: var(--warn); }
+.badge-unverified:hover { background: color-mix(in srgb, var(--warn) 12%, transparent); }
 /* The only badge that is --danger: a mismatch is not a reduced guarantee like
    an unchecked member, it is a broken one. It is also the only badge carrying
    a filled background, because it has to survive being read past. */
@@ -3426,3 +3431,19 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
    point: the trust-granting button must not be the visually easier one. */
 .safety-actions { display: flex; gap: 8px; }
 .safety-actions .button { flex: 1; justify-content: center; }
+
+/* The outstanding-verification prompt in the roster header. Quiet by default —
+   it is a standing amount of work, not an alarm — but it is a real button, so
+   the one comparison nobody has made is always one tap away. */
+.member-unchecked {
+  font: 600 var(--text-xs) var(--mono);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--warn);
+  background: none;
+  border: 1px solid var(--warn);
+  border-radius: var(--r-pill);
+  padding: 2px 8px;
+  margin-left: 6px;
+}
+.member-unchecked:hover { background: color-mix(in srgb, var(--warn) 12%, transparent); }
