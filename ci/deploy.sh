@@ -61,6 +61,25 @@ running_image() {
   compose ps --format '{{.Image}}' quorum 2>/dev/null | head -1
 }
 
+# Keep the server's disk from creeping full. Image mode NEVER builds here, yet
+# every deploy pulls a fresh sha-tagged image and leaves the old one behind —
+# and a one-off legacy build cache (from the old build-on-server mode) once ate
+# 25GB. So after a good deploy: drop build cache + dangling layers, then remove
+# old quorum image tags, KEEPING the one now running and the rollback target.
+# `docker rmi` refuses to delete an image a container uses, so the live image is
+# safe even if it slips the filter; every step is best-effort (|| true).
+prune_old_images() {
+  docker builder prune -af >/dev/null 2>&1 || true
+  docker image prune -f >/dev/null 2>&1 || true
+  docker images 'ghcr.io/mich312/discord' --format '{{.Repository}}:{{.Tag}}' 2>/dev/null \
+    | grep -v ':latest$' \
+    | while read -r ref; do
+        [ "$ref" = "${QUORUM_IMAGE:-}" ] && continue
+        [ "$ref" = "${PREV_IMAGE:-}" ] && continue
+        docker rmi "$ref" >/dev/null 2>&1 || true
+      done
+}
+
 if [ -n "${QUORUM_IMAGE:-}" ]; then
   # ---------------------------------------------------------------- image --
   PREV_IMAGE="$(running_image)"
@@ -83,6 +102,7 @@ if [ -n "${QUORUM_IMAGE:-}" ]; then
     echo "✅ deploy OK: $QUORUM_IMAGE"
     mkdir -p "$(dirname "$STATE_FILE")"
     printf '%s\n' "$QUORUM_IMAGE" > "$STATE_FILE"
+    prune_old_images   # reclaim old tags + build cache; keeps running + rollback
     exit 0
   fi
 
