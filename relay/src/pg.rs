@@ -172,6 +172,11 @@ impl PgStore {
             -- last looked; never returned to clients. Existing rows predate
             -- it and get '', which matches no handle — so an old entry can
             -- be redacted by an admin but not by its (unrecorded) author.
+            --
+            -- Additive, so SCHEMA_VERSION does not move and a rollback to
+            -- the previous relay stays safe: the column has a default, so
+            -- an older binary's INSERT (which never names it) still
+            -- succeeds, and its SELECT never asks for it.
             ALTER TABLE history ADD COLUMN IF NOT EXISTS author text NOT NULL DEFAULT '';
             -- Paging reads a channel newest-first; unread counts read by ts.
             CREATE INDEX IF NOT EXISTS history_page_idx ON history (group_id, hid, seq DESC);
