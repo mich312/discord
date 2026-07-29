@@ -15,8 +15,20 @@ blobs, decrypted events, and opaque state snapshots only.
   the MLS identity key in the worker), rid-correlated requests, reconnect
   with backoff; on ready it re-subscribes each group from `lastSeq` and
   tops up the KeyPackage store.
-- `src/lib/db.js` — IndexedDB: MLS state snapshot, server records,
-  decrypted message history (per-device store; there is no server copy).
+- `src/lib/db.js` — IndexedDB: MLS state snapshot and circle records
+  (names, channels, settings, room keys, key directory). **Keys, not
+  messages** — the conversation lives in the relay's per-channel logs and
+  is read back from there each session.
+- `src/lib/log.js` — the fold: what a page of decrypted, signature-checked
+  log entries means. Content, edits, deletions and reactions are separate
+  append-only entries; the fold replays them in relay order, so a page that
+  arrives out of order still converges.
+- `src/lib/history.js` — log-entry crypto: seal/open under the room key,
+  and the exact bytes an entry's author signs (bound to its circle and log
+  id, so an entry cannot be replayed into another channel).
+- `src/lib/keys.js` — the key directory: which identity key speaks for
+  which handle, built from the MLS roster rather than from anything the
+  relay says, and carried in the encrypted backup.
 - `src/lib/recovery.js` — recovery key: identity bundle wrapped with
   PBKDF2-SHA256 (310k) → AES-256-GCM under a generated code.
 
@@ -25,14 +37,16 @@ blobs, decrypted events, and opaque state snapshots only.
 One MLS group per server. Channels are routing *inside* the encryption —
 message plaintext is a JSON envelope (`{k:'chat', ch, text}`,
 `{k:'chan', ch}`, `{k:'meta', name, channels}`), so the relay never learns
-channel structure or server names. Because joiners have no scrollback,
-server metadata is rebroadcast (encrypted) after every member add.
+channel structure or server names. Server metadata is rebroadcast
+(encrypted) after every member add; it carries the room keys, which is how
+a joiner comes to be able to read the channel logs at all.
 
 ### Load-bearing UI (per the plan)
 
 - The roster is the security boundary — "everyone who holds the keys",
   with add-member right there, and the key epoch visible in the masthead.
-- Permanent join watermark at the top of every channel.
+- The top of a channel is either "read further back" or the start of the
+  record — the circle's, not this device's.
 - Composer states the encryption scope ("sealed for N members").
 - Onboarding cannot be completed without downloading the recovery file
   and confirming the code is stored off-device.

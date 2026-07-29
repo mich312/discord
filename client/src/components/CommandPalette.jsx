@@ -209,9 +209,12 @@ export default function CommandPalette({ servers, active, actions, onSearch, onN
           <span><kbd>↵</kbd> open</span>
           <span><kbd>esc</kbd> dismiss</span>
           {/* The honest limit, stated where it matters rather than in a
-              README nobody opens: the relay holds ciphertext and cannot
-              index it, so search sees only this device's own copies. */}
-          <span className="palette-scope">search covers this device only</span>
+              README nobody opens. The relay holds ciphertext and cannot
+              index it, so searching means searching what has been decrypted
+              here — which, now that rooms are read back a page at a time, is
+              what you have actually opened this session rather than
+              everything the device ever kept. */}
+          <span className="palette-scope">search covers what you have opened this session</span>
         </div>
       </div>
     </div>

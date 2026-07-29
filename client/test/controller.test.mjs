@@ -6,45 +6,40 @@ import assert from 'node:assert/strict';
 import { Controller, freshTyping } from '../src/lib/controller.js';
 import { FORK_THRESHOLD } from '../src/lib/fork.js';
 import { b64 } from '../src/lib/relay.js';
-import { openBackup, openHistoryEntry } from '../src/lib/history.js';
+import { openBackup, openLogEntry, sealLogEntry } from '../src/lib/history.js';
+import { renderLog } from '../src/lib/log.js';
 
 function fakeDb() {
-  const messages = [];
   return {
-    messages,
-    msgAdd: async (m) => messages.push({ ...m }),
-    msgPatch: async (server, channel, sender, ts, patch) => {
-      const i = messages.findIndex(
-        (m) => !m.system && m.server === server && m.channel === channel && m.sender === sender && m.ts === ts
-      );
-      if (i === -1) return false;
-      messages[i] = patch(messages[i]);
-      return true;
-    },
-    msgsFor: async (server, channel) =>
-      messages.filter((m) => m.server === server && m.channel === channel),
-    msgsPrune: async () => 0,
     serverPut: async () => {},
     serverDelete: async () => {},
-    msgsDeleteServer: async (server) => {
-      for (let i = messages.length - 1; i >= 0; i--) {
-        if (messages[i].server === server) messages.splice(i, 1);
-      }
-    },
-    msgsDelete: async (server, channel) => {
-      for (let i = messages.length - 1; i >= 0; i--) {
-        if (messages[i].server === server && messages[i].channel === channel) messages.splice(i, 1);
-      }
-    },
     kvPut: async () => {},
     kvGet: async () => null,
   };
 }
 
+/** What the controller would render for a room: the folded channel log.
+    There is no local message store any more, so this is the only answer to
+    "what does this device show". */
+function msgs(c, channel = 'general', server = 'srv') {
+  return renderLog(c.channelLog(server, channel));
+}
+
+/** Put a message into a room the way one arriving over MLS would. */
+function seed(c, { server = 'srv', channel = 'general', sender, ts, text, ...rest }) {
+  c.applyLiveEntry(server, channel, { k: 'chat', sender, ts, text, ...rest });
+}
+
 function fakeCrypto() {
-  return async (cmd) => {
+  return async (cmd, args = {}) => {
     if (cmd === 'send') return { blob: new Uint8Array([1, 2, 3]), epoch: 1, state: null };
     if (cmd === 'receive') throw new Error('not used in these tests');
+    // Signing and verification live in the worker; here they are stubs that
+    // always agree, so tests exercise the fold rather than Ed25519. The
+    // tests that care about a bad signature override this.
+    if (cmd === 'sign') return new Uint8Array(64);
+    if (cmd === 'verifyEntries') return (args.items ?? []).map(() => true);
+    if (cmd === 'memberKeys') return {};
     return {};
   };
 }
@@ -88,7 +83,7 @@ test('sendChat stores the line first; a successful send clears pending', async (
   const r = record();
   c.servers.set('srv', r);
   await c.sendChat('srv', 'general', 'hello');
-  const mine = c.db.messages.filter((m) => !m.system);
+  const mine = msgs(c).filter((m) => !m.system);
   assert.equal(mine.length, 1);
   assert.equal(mine[0].text, 'hello');
   assert.ok(!mine[0].pending && !mine[0].failed, 'flags cleared after the ack');
@@ -104,13 +99,13 @@ test('a failed send keeps the line visible as failed; retry heals it', async () 
   c.servers.set('srv', r);
 
   await assert.rejects(() => c.sendChat('srv', 'general', 'lost?'));
-  let mine = c.db.messages.filter((m) => !m.system);
+  let mine = msgs(c).filter((m) => !m.system);
   assert.equal(mine.length, 1, 'the message is still stored locally');
   assert.equal(mine[0].failed, true, 'and marked failed, not silently dropped');
 
   fail = false;
   await c.retryMessage('srv', 'general', mine[0]);
-  mine = c.db.messages.filter((m) => !m.system);
+  mine = msgs(c).filter((m) => !m.system);
   assert.ok(!mine[0].failed && !mine[0].pending, 'retry cleared the failure');
   clearTimeout(c.backupTimer);
 });
@@ -320,7 +315,7 @@ test('presence rides the ephemeral fan-out, not the group log', async () => {
   assert.equal(me.playing.id, 'g1');
 });
 
-test('a reply carries a quoted snapshot that survives send, store, and history', async () => {
+test('a reply carries a quoted snapshot into the log and the live send', async () => {
   const appended = [];
   const { c } = makeController({
     relayHandler: (msg) => {
@@ -328,21 +323,20 @@ test('a reply carries a quoted snapshot that survives send, store, and history',
       return Promise.resolve({ seq: 1 });
     },
   });
-  // Kept-history on, so the reply must also ride the sealed log.
   const hkey = b64.enc(new Uint8Array(32));
   const r = record({ chanMeta: { general: { hid: 'h1', hkey } } });
   c.servers.set('srv', r);
   await c.sendChat('srv', 'general', 'agreed', { sender: 'bob', ts: 111, text: 'ship it?' });
-  const mine = c.db.messages.filter((m) => !m.system);
+  const mine = msgs(c).filter((m) => !m.system);
   assert.equal(mine.length, 1);
-  assert.deepEqual(mine[0].reply, { sender: 'bob', ts: 111, text: 'ship it?' }, 'quote stored on the line');
+  assert.deepEqual(mine[0].reply, { sender: 'bob', ts: 111, text: 'ship it?' }, 'quote on the line');
   const sent = c.relay.requests.find((m) => m.t === 'send');
-  assert.ok(sent, 'the chat went out on the group log');
-  // appendHistory seals asynchronously and isn't awaited by deliverChat.
-  await new Promise((r) => setTimeout(r, 30));
-  assert.equal(appended.length, 1, 'and the reply was appended to kept history');
-  const entry = await openHistoryEntry(hkey, appended[0].payload);
-  assert.deepEqual(entry.reply, { sender: 'bob', ts: 111, text: 'ship it?' }, 'quote sealed into history');
+  assert.ok(sent, 'the chat went out live as well');
+  assert.equal(appended.length, 1, 'and the reply was written to the channel log');
+  const entry = await openLogEntry(hkey, appended[0].payload);
+  assert.deepEqual(entry.reply, { sender: 'bob', ts: 111, text: 'ship it?' }, 'quote sealed in');
+  assert.equal(entry.k, 'chat', 'entries are typed now');
+  assert.ok(entry.sig, 'and signed by their author');
   clearTimeout(c.backupTimer);
 });
 
@@ -351,7 +345,7 @@ test('a malformed reply is dropped, not stored', async () => {
   c.servers.set('srv', record());
   // No ts — not a resolvable quote.
   await c.sendChat('srv', 'general', 'hi', { sender: 'bob', text: 'no ts' });
-  const mine = c.db.messages.filter((m) => !m.system);
+  const mine = msgs(c).filter((m) => !m.system);
   assert.equal(mine[0].reply, undefined, 'garbage quote left off the line');
   clearTimeout(c.backupTimer);
 });
@@ -369,7 +363,7 @@ test('a received chat carries its reply through and clears the sender typing', a
     'bob',
     JSON.stringify({ k: 'chat', ch: 'general', text: 'yes', ts: 222, reply: { sender: 'alice', ts: 200, text: 'ok?' } })
   );
-  const stored = c.db.messages.find((m) => !m.system && m.sender === 'bob');
+  const stored = msgs(c).find((m) => !m.system && m.sender === 'bob');
   assert.deepEqual(stored.reply, { sender: 'alice', ts: 200, text: 'ok?' }, 'incoming quote preserved');
   assert.ok(!c.liveTyping.get('srv').bob, 'the landed line cleared bob’s typing signal');
   clearTimeout(c.backupTimer);
@@ -398,8 +392,8 @@ test('editMessage patches my own line, marks it edited, and fans out an edit', a
   const { c } = makeController();
   c.servers.set('srv', record());
   await c.sendChat('srv', 'general', 'helo');
-  await c.editMessage('srv', 'general', c.db.messages.find((m) => !m.system), 'hello');
-  const line = c.db.messages.find((m) => !m.system);
+  await c.editMessage('srv', 'general', msgs(c).find((m) => !m.system), 'hello');
+  const line = msgs(c).find((m) => !m.system);
   assert.equal(line.text, 'hello', 'text updated in place');
   assert.equal(line.edited, true, 'edited marker set');
   const edit = c.relay.requests.filter((m) => m.t === 'send');
@@ -412,14 +406,14 @@ test('an incoming edit can only touch its own author’s line', async () => {
   const r = record();
   c.servers.set('srv', r);
   // A line authored by bob.
-  await c.storeMessage({ server: 'srv', channel: 'general', sender: 'bob', text: 'original', ts: 500 });
+  seed(c, { sender: 'bob', text: 'original', ts: 500 });
   // Mallory tries to rewrite bob's line (same ts) — the (sender, ts) key misses.
   await c.onContent(r, 'mallory', JSON.stringify({ k: 'edit', ch: 'general', to: { ts: 500 }, text: 'hijacked' }));
-  assert.equal(c.db.messages.find((m) => m.ts === 500).text, 'original', 'a stranger cannot edit it');
+  assert.equal(msgs(c).find((m) => m.ts === 500).text, 'original', 'a stranger cannot edit it');
   // Bob edits his own line — it lands.
   await c.onContent(r, 'bob', JSON.stringify({ k: 'edit', ch: 'general', to: { ts: 500 }, text: 'fixed' }));
-  assert.equal(c.db.messages.find((m) => m.ts === 500).text, 'fixed', 'the author’s edit lands');
-  assert.equal(c.db.messages.find((m) => m.ts === 500).edited, true);
+  assert.equal(msgs(c).find((m) => m.ts === 500).text, 'fixed', 'the author’s edit lands');
+  assert.equal(msgs(c).find((m) => m.ts === 500).edited, true);
   clearTimeout(c.backupTimer);
 });
 
@@ -427,37 +421,137 @@ test('deleteMessage tombstones my line and strips its body; a delete fans out', 
   const { c } = makeController();
   c.servers.set('srv', record());
   await c.sendChat('srv', 'general', 'oops wrong channel', { sender: 'bob', ts: 9, text: 'x' });
-  await c.deleteMessage('srv', 'general', c.db.messages.find((m) => !m.system));
-  const line = c.db.messages.find((m) => !m.system);
+  await c.deleteMessage('srv', 'general', msgs(c).find((m) => !m.system));
+  const line = msgs(c).find((m) => !m.system);
   assert.equal(line.deleted, true, 'tombstoned');
   assert.equal(line.text, undefined, 'body stripped');
   assert.equal(line.reply, undefined, 'quote stripped too');
   clearTimeout(c.backupTimer);
 });
 
-test('a history backfill never resurrects a deleted line or duplicates an edited one', async () => {
+/** Seal `entries` the way a member's client would, into one channel log. */
+async function sealedLog(hkey, group, hid, entries) {
+  const sign = async () => new Uint8Array(64);
+  const out = [];
+  for (const [i, entry] of entries.entries()) {
+    out.push({ seq: i + 1, payload: await sealLogEntry(hkey, group, hid, entry, sign) });
+  }
+  return out;
+}
+
+test('opening a channel reads it back from the relay, edits and deletions folded', async () => {
+  // The whole conversation, as it sits in the relay's log: a line, an edit
+  // of it, and a deletion of another — the state a device that was never
+  // online for any of it has to arrive at.
   const hkey = b64.enc(new Uint8Array(32));
-  // Two sealed originals sit in the relay's history log.
-  const { sealHistoryEntry } = await import('../src/lib/history.js');
+  const entries = await sealedLog(hkey, 'srv', 'h1', [
+    { v: 1, k: 'chat', sender: 'alice', ts: 100, text: 'to be deleted' },
+    { v: 1, k: 'chat', sender: 'alice', ts: 200, text: 'original wording' },
+    { v: 1, k: 'edit', sender: 'alice', ts: 300, to: { ts: 200 }, text: 'edited wording' },
+    { v: 1, k: 'del', sender: 'alice', ts: 400, to: { ts: 100 } },
+  ]);
+  const { c } = makeController({
+    relayHandler: (msg) =>
+      msg.t === 'history_fetch'
+        ? Promise.resolve({ entries, complete: true })
+        : Promise.resolve({ seq: 1 }),
+  });
+  // A mutation only applies when its author's signature checked out, so the
+  // circle must hold a key for alice.
+  const r = record({
+    chanMeta: { general: { hid: 'h1', hkey } },
+    keys: { alice: b64.enc(new Uint8Array(32)) },
+  });
+  c.servers.set('srv', r);
+
+  const shown = await c.loadMessages('srv', 'general');
+  const at100 = shown.filter((m) => m.ts === 100);
+  const at200 = shown.filter((m) => m.ts === 200);
+  assert.equal(at100.length, 1, 'the deleted line keeps its place');
+  assert.equal(at100[0].deleted, true, 'as a tombstone');
+  assert.equal(at100[0].text, undefined, 'with its body gone');
+  assert.equal(at200.length, 1, 'the edited line is not duplicated by its original');
+  assert.equal(at200[0].text, 'edited wording', 'the edit is folded over it');
+  assert.equal(at200[0].edited, true);
+  clearTimeout(c.backupTimer);
+});
+
+test('a live line and its log entry are one message, not two', async () => {
+  // The sender writes both; a reader gets the MLS copy now and the log copy
+  // on its next read. Keyed on (sender, ts), they must collapse.
+  const hkey = b64.enc(new Uint8Array(32));
+  const entries = await sealedLog(hkey, 'srv', 'h1', [
+    { v: 1, k: 'chat', sender: 'bob', ts: 700, text: 'hello' },
+  ]);
+  const { c } = makeController({
+    relayHandler: (msg) =>
+      msg.t === 'history_fetch'
+        ? Promise.resolve({ entries, complete: true })
+        : Promise.resolve({ seq: 1 }),
+  });
+  const r = record({ chanMeta: { general: { hid: 'h1', hkey } } });
+  c.servers.set('srv', r);
+
+  await c.onContent(r, 'bob', JSON.stringify({ k: 'chat', ch: 'general', text: 'hello', ts: 700 }));
+  const shown = await c.loadMessages('srv', 'general');
+  assert.equal(shown.filter((m) => !m.system).length, 1, 'one line, not one per path');
+  assert.equal(shown[0].seq, 1, 'and it is the relay copy that stands, with its seq');
+  clearTimeout(c.backupTimer);
+});
+
+test('an entry whose signature does not verify is dropped, not shown unsigned', async () => {
+  // The room key is held by the whole roster, so it proves membership, not
+  // authorship. An entry that fails its signature is somebody with the key
+  // writing in another member's name.
+  const hkey = b64.enc(new Uint8Array(32));
+  const entries = await sealedLog(hkey, 'srv', 'h1', [
+    { v: 1, k: 'chat', sender: 'alice', ts: 100, text: 'genuine' },
+    { v: 1, k: 'chat', sender: 'alice', ts: 200, text: 'forged in her name' },
+  ]);
+  const { c } = makeController({
+    relayHandler: (msg) =>
+      msg.t === 'history_fetch'
+        ? Promise.resolve({ entries, complete: true })
+        : Promise.resolve({ seq: 1 }),
+  });
+  // The second entry fails verification.
+  const base = c.crypto;
+  c.crypto = async (cmd, args = {}) =>
+    cmd === 'verifyEntries' ? (args.items ?? []).map((_, i) => i === 0) : base(cmd, args);
+  const r = record({ chanMeta: { general: { hid: 'h1', hkey } }, keys: { alice: b64.enc(new Uint8Array(32)) } });
+  c.servers.set('srv', r);
+
+  const shown = await c.loadMessages('srv', 'general');
+  assert.deepEqual(shown.map((m) => m.text), ['genuine'], 'the forgery never reaches the room');
+  clearTimeout(c.backupTimer);
+});
+
+test('an unsigned mutation cannot rewrite a line, though unsigned content still reads', async () => {
+  // Entries written before signatures existed stay readable — dropping them
+  // would delete real conversations. Mutations are different: there is no
+  // legacy of them, and they are what a room-key holder would forge to
+  // tamper with someone else's message.
+  const hkey = b64.enc(new Uint8Array(32));
   const entries = [
-    { seq: 1, payload: await sealHistoryEntry(hkey, { sender: 'alice', ts: 100, text: 'to be deleted' }) },
-    { seq: 2, payload: await sealHistoryEntry(hkey, { sender: 'alice', ts: 200, text: 'original wording' }) },
+    // No signature at all, the pre-signature wire shape.
+    { seq: 1, payload: await sealLogEntry(hkey, 'srv', 'h1', { sender: 'alice', ts: 100, text: 'old line' }, async () => new Uint8Array(64)) },
+    { seq: 2, payload: await sealLogEntry(hkey, 'srv', 'h1', { v: 1, k: 'edit', sender: 'alice', ts: 200, to: { ts: 100 }, text: 'rewritten' }, async () => new Uint8Array(64)) },
   ];
   const { c } = makeController({
-    relayHandler: (msg) => (msg.t === 'history_fetch' ? Promise.resolve({ entries }) : Promise.resolve({ seq: 1 })),
+    relayHandler: (msg) =>
+      msg.t === 'history_fetch'
+        ? Promise.resolve({ entries, complete: true })
+        : Promise.resolve({ seq: 1 }),
   });
-  const r = record({ chanMeta: { general: { hid: 'h1', hkey } }, hcursor: {} });
+  // No key for alice: every entry is 'unknown' rather than 'signed'.
+  c.crypto = async (cmd, args = {}) => (cmd === 'verifyEntries' ? (args.items ?? []).map(() => true) : {});
+  const r = record({ chanMeta: { general: { hid: 'h1', hkey } } });
   c.servers.set('srv', r);
-  // Locally: ts 100 was deleted, ts 200 was edited.
-  await c.storeMessage({ server: 'srv', channel: 'general', sender: 'alice', ts: 100, deleted: true });
-  await c.storeMessage({ server: 'srv', channel: 'general', sender: 'alice', ts: 200, text: 'edited wording', edited: true });
-  await c.backfillHistory(r);
-  const at100 = c.db.messages.filter((m) => m.ts === 100 && !m.system);
-  const at200 = c.db.messages.filter((m) => m.ts === 200 && !m.system);
-  assert.equal(at100.length, 1, 'deleted line not resurrected from history');
-  assert.equal(at100[0].deleted, true, 'it stays a tombstone');
-  assert.equal(at200.length, 1, 'edited line not duplicated by its original');
-  assert.equal(at200[0].text, 'edited wording', 'the edited copy stands');
+
+  const shown = await c.loadMessages('srv', 'general');
+  assert.equal(shown.length, 1, 'the unattributable line still reads');
+  assert.equal(shown[0].text, 'old line', 'and the unattributable edit did not touch it');
+  assert.equal(shown[0].auth, 'unknown', 'flagged for the UI rather than trusted');
   clearTimeout(c.backupTimer);
 });
 
@@ -493,13 +587,13 @@ test('chan-del from a sender whose role cannot be established is dropped, not ap
   });
   const r = record({ channels: ['general', 'design'] });
   c.servers.set('srv', r);
-  await c.db.msgAdd({ server: 'srv', channel: 'design', sender: 'bob', ts: 1, text: 'keep me' });
+  seed(c, { channel: 'design', sender: 'bob', ts: 1, text: 'keep me' });
 
   await c.onContent(r, 'mallory', JSON.stringify({ k: 'chan-del', ch: 'design' }));
 
   assert.ok(r.channels.includes('design'), 'the channel survives an unestablished sender');
   assert.equal(
-    c.db.messages.filter((m) => m.channel === 'design' && !m.system).length,
+    msgs(c, 'design').filter((m) => !m.system).length,
     1,
     'and its history was not deleted'
   );
@@ -607,7 +701,7 @@ test("a peer's key changing clears their badge on the next membership change", a
   assert.deepEqual(r.verified, [], 'the ✓ is gone');
   assert.equal(r.verifiedSn.bob, undefined, 'and the stale binding was dropped');
   assert.ok(
-    c.db.messages.some((m) => m.system && m.text.includes("bob's safety number changed")),
+    msgs(c).some((m) => m.system && m.text.includes("bob's safety number changed")),
     'the user is told, rather than the badge silently vanishing'
   );
   clearTimeout(c.backupTimer);
@@ -638,7 +732,7 @@ test('legacy handle-only verifications are reset rather than trusted', async () 
   assert.equal(changed, true);
   assert.deepEqual(r.verified, [], 'the unbound badge is dropped');
   assert.ok(
-    c.db.messages.some((m) => m.system && m.text.includes('verification badges were reset')),
+    msgs(c).some((m) => m.system && m.text.includes('verification badges were reset')),
     'and the reset is explained'
   );
   clearTimeout(c.backupTimer);
@@ -696,7 +790,7 @@ test('removing someone rotates every kept-history key and keeps the old ones for
   assert.deepEqual(meta.hkeys, ['OLD-KEY'], 'the superseded key is kept so members can still read the past');
   assert.equal(r.chanMeta.chatter.hkey, undefined, 'a channel without history is untouched');
   assert.ok(
-    c.db.messages.some((m) => m.system && m.text.includes('new history key for #general')),
+    msgs(c).some((m) => m.system && m.text.includes('new history key for #general')),
     'and the rotation is announced'
   );
   clearTimeout(c.backupTimer);
@@ -729,7 +823,7 @@ test('removing someone revokes the circle’s invite links instead of refreshing
   assert.deepEqual(revoked, ['inv1', 'inv2'], 'every parked link is killed');
   assert.deepEqual(r.invites, [], 'and dropped locally');
   assert.ok(
-    c.db.messages.some((m) => m.system && m.text.includes('2 invite links revoked')),
+    msgs(c).some((m) => m.system && m.text.includes('2 invite links revoked')),
     'the admin is told, since this also invalidates links for pending joiners'
   );
   clearTimeout(c.backupTimer);
@@ -742,16 +836,12 @@ test('removing someone revokes the circle’s invite links instead of refreshing
 // a crash lands on, and a stale ratchet is recoverable where a lost message
 // is not.
 
-test('a received message is durable before the ratchet snapshot is', async () => {
+test('the receive cursor is durable before the ratchet snapshot is', async () => {
   const writes = [];
   const { c } = makeController();
   const baseDb = c.db;
   c.db = {
     ...baseDb,
-    msgAdd: async (m) => {
-      writes.push('message');
-      return baseDb.msgAdd(m);
-    },
     serverPut: async (r) => {
       writes.push('cursor');
       return baseDb.serverPut(r);
@@ -761,13 +851,14 @@ test('a received message is durable before the ratchet snapshot is', async () =>
       return baseDb.kvPut(k, v);
     },
   };
-  c.crypto = async (cmd) => {
+  c.crypto = async (cmd, args = {}) => {
     if (cmd === 'receive') {
       return {
         event: { kind: 'message', sender: 'bob', text: 'hello', epoch: 1 },
         state: new Uint8Array([1, 2, 3]),
       };
     }
+    if (cmd === 'verifyEntries') return (args.items ?? []).map(() => true);
     return {};
   };
   c.servers.set('srv', record());
@@ -775,33 +866,40 @@ test('a received message is durable before the ratchet snapshot is', async () =>
   await c.onGroupMessage({ group: 'srv', seq: 7, epoch: 1, sender: 'bob', payload: 'AAAA' });
 
   const ratchetAt = writes.indexOf('kv:mlsState');
-  const messageAt = writes.indexOf('message');
   const cursorAt = writes.indexOf('cursor');
   assert.ok(ratchetAt !== -1, 'the ratchet was persisted');
-  assert.ok(messageAt !== -1 && messageAt < ratchetAt, 'the message lands before the ratchet');
-  assert.ok(cursorAt !== -1 && cursorAt < ratchetAt, 'and so does the cursor');
+  assert.ok(cursorAt !== -1 && cursorAt < ratchetAt, 'the cursor lands before the ratchet');
+  // The message itself is no longer part of this ordering question: it is
+  // durable because the sender wrote it to the relay's log, not because
+  // this device managed to write it down before crashing.
+  assert.equal(msgs(c).filter((m) => !m.system).length, 1, 'and the line is on screen');
   clearTimeout(c.backupTimer);
 });
 
-test('a storage failure while applying a message is reported, not laundered as undecryptable', async () => {
-  // Both failures shared one catch, so a quota error read exactly like our
-  // own commit echoing back on catch-up — a case whose comment calls it
-  // expected. Storage problems were therefore invisible.
-  const { c, dispatched } = makeController();
-  const baseDb = c.db;
-  c.db = { ...baseDb, msgAdd: async () => { throw new Error('QuotaExceededError'); } };
-  c.crypto = async (cmd) =>
-    cmd === 'receive'
-      ? { event: { kind: 'message', sender: 'bob', text: 'hello', epoch: 1 }, state: null }
-      : {};
+test('a line whose log append fails is shown as failed, and retry re-sends it', async () => {
+  // The storage question moved: there is no local write to fail. What can
+  // fail is the append to the relay, and that is the one that decides
+  // whether the message is in the conversation at all — so it must not look
+  // delivered.
+  let fail = true;
+  const { c } = makeController({
+    relayHandler: (msg) =>
+      msg.t === 'history_append' && fail
+        ? Promise.reject(new Error('the disk is full'))
+        : Promise.resolve({ seq: 1 }),
+  });
   c.servers.set('srv', record());
 
-  await c.onGroupMessage({ group: 'srv', seq: 3, epoch: 1, sender: 'bob', payload: 'AAAA' });
+  await assert.rejects(() => c.sendChat('srv', 'general', 'did this land?'));
+  let mine = msgs(c).filter((m) => !m.system);
+  assert.equal(mine.length, 1, 'the line is still on screen');
+  assert.equal(mine[0].failed, true, 'and marked failed rather than looking sent');
 
-  assert.ok(
-    dispatched.some((a) => a.type === 'toast' && /could not be saved/.test(a.text)),
-    'the user is told the message could not be stored'
-  );
+  fail = false;
+  await c.retryMessage('srv', 'general', mine[0]);
+  mine = msgs(c).filter((m) => !m.system);
+  assert.equal(mine.length, 1, 'the retry did not double it');
+  assert.ok(!mine[0].failed, 'and cleared the failure');
   clearTimeout(c.backupTimer);
 });
 
@@ -951,32 +1049,53 @@ test('an ACL fetch that fails leaves the advisory gate open and the destructive 
 
 /* --- channelDigest: the home base's unread counts ------------------------ */
 
-test('channelDigest counts only what arrived after this device last looked', async () => {
-  const { c } = makeController();
-  const r = record({ channels: ['general', 'design'], seen: { general: 150 }, joinedAt: 100 });
+/** A relay that answers unread counts from a {hid: n} table. */
+function countingRelay(counts) {
+  return (msg) =>
+    msg.t === 'history_counts'
+      ? Promise.resolve({
+          counts: msg.logs.map(({ hid }) => ({ hid, n: counts[hid] ?? 0 })),
+        })
+      : Promise.resolve({ seq: 1 });
+}
+
+test('channelDigest asks the relay what this device has missed, per room', async () => {
+  // A device holds no messages, so it cannot count them. The relay can: it
+  // knows how many entries each log has, when they landed, and who wrote
+  // them — and it excludes the caller's own, which are read by definition.
+  const { c } = makeController({ relayHandler: countingRelay({ h_gen: 1, h_des: 1 }) });
+  const r = record({
+    channels: ['general', 'design'],
+    seen: { general: 150 },
+    joinedAt: 100,
+    chanMeta: { general: { hid: 'h_gen' }, design: { hid: 'h_des' } },
+  });
   c.servers.set('srv', r);
-  for (const m of [
-    { server: 'srv', channel: 'general', sender: 'bob', ts: 120, text: 'before' },
-    { server: 'srv', channel: 'general', sender: 'bob', ts: 200, text: 'after' },
-    { server: 'srv', channel: 'general', sender: 'alice', ts: 300, text: 'mine' },
-    { server: 'srv', channel: 'design', sender: 'bob', ts: 110, text: 'since joining' },
-  ]) {
-    await c.db.msgAdd(m);
-  }
+  // Whatever this session has read back is what the preview quotes.
+  seed(c, { sender: 'alice', ts: 300, text: 'mine' });
 
   const digest = await c.channelDigest('srv');
   const general = digest.find((d) => d.channel === 'general');
-  assert.equal(general.unread, 1, 'only the one past the seen marker, and not my own');
-  assert.equal(general.last.text, 'mine', 'the preview is the newest line regardless');
+  assert.equal(general.unread, 1);
+  assert.equal(general.last.text, 'mine', 'the preview is the newest line this device has');
 
   const design = digest.find((d) => d.channel === 'design');
-  assert.equal(design.unread, 1, 'a never-opened room counts from joinedAt');
+  assert.equal(design.unread, 1, 'a never-opened room still gets a count');
+  assert.equal(design.last, null, 'without a preview — it has not been read back yet');
+
+  // The cursor the relay is given is the seen marker, in seconds.
+  const asked = c.relay.requests.find((m) => m.t === 'history_counts');
+  assert.deepEqual(
+    asked.logs.find((l) => l.hid === 'h_gen'),
+    { hid: 'h_gen', after_ts: 0 },
+    'seen 150ms floors to second 0'
+  );
 });
 
 test('channelDigest reports an empty room rather than omitting it', async () => {
   // The home base lists every room; a missing entry would render as a gap.
-  const { c } = makeController();
-  const r = record({ channels: ['general'] });
+  const { c } = makeController({ relayHandler: countingRelay({}) });
+  const r = record({ channels: ['general'], chanMeta: { general: { hid: 'h1' } } });
   c.servers.set('srv', r);
   const [only] = await c.channelDigest('srv');
   assert.equal(only.channel, 'general');
@@ -985,14 +1104,34 @@ test('channelDigest reports an empty room rather than omitting it', async () => 
 });
 
 test('channelDigest ignores system chips', async () => {
-  // "carol joined" must not light up the home base.
-  const { c } = makeController();
-  const r = record({ seen: {}, joinedAt: 0 });
+  // "carol joined" is this device's own notice, never in the log — so it can
+  // neither light up the home base nor become its preview.
+  const { c } = makeController({ relayHandler: countingRelay({ h1: 0 }) });
+  const r = record({ seen: {}, joinedAt: 0, chanMeta: { general: { hid: 'h1' } } });
   c.servers.set('srv', r);
-  await c.db.msgAdd({ server: 'srv', channel: 'general', sender: 'x', ts: 500, text: 'joined', system: true });
+  c.addSystemMessage('srv', 'joined', 'general');
   const [general] = await c.channelDigest('srv');
   assert.equal(general.unread, 0);
   assert.equal(general.last, null, 'and it is not the preview either');
+});
+
+test('a circle unread total sums its rooms, and survives an unreachable relay', async () => {
+  const { c } = makeController({ relayHandler: countingRelay({ h_gen: 2, h_des: 3 }) });
+  c.servers.set(
+    'srv',
+    record({
+      channels: ['general', 'design'],
+      chanMeta: { general: { hid: 'h_gen' }, design: { hid: 'h_des' } },
+    })
+  );
+  assert.deepEqual(await c.circleUnreads(), { srv: 5 });
+
+  const offline = makeController({
+    relayHandler: (msg) =>
+      msg.t === 'history_counts' ? Promise.reject(new Error('offline')) : Promise.resolve({ seq: 1 }),
+  });
+  offline.c.servers.set('srv', record({ chanMeta: { general: { hid: 'h_gen' } } }));
+  assert.deepEqual(await offline.c.circleUnreads(), { srv: 0 }, 'no badge rather than no rail');
 });
 
 test('channelDigest on an unknown circle is empty, not an exception', async () => {
@@ -1000,46 +1139,20 @@ test('channelDigest on an unknown circle is empty, not an exception', async () =
   assert.deepEqual(await c.channelDigest('gone'), []);
 });
 
-/* --- storage failure: a full or evicted quota ---------------------------- */
+/* --- the relay refusing a write ------------------------------------------ */
 
-test('a storage quota failure surfaces instead of silently dropping the message', async () => {
-  // The exact failure iOS produces under eviction pressure. A message that
-  // vanishes with no error is the worst outcome; the receive path must say so.
-  const { c, dispatched } = makeController();
-  const r = record();
+test('a channel whose log fetch fails renders empty rather than throwing', async () => {
+  // With no local copy, an unreachable relay means an empty room. It must
+  // not take the pane down with it.
+  const { c } = makeController({
+    relayHandler: (msg) =>
+      msg.t === 'history_fetch' ? Promise.reject(new Error('offline')) : Promise.resolve({ seq: 1 }),
+  });
+  const hkey = b64.enc(new Uint8Array(32));
+  const r = record({ chanMeta: { general: { hid: 'h1', hkey } } });
   c.servers.set('srv', r);
-  c.db.msgAdd = async () => {
-    const e = new Error('The quota has been exceeded.');
-    e.name = 'QuotaExceededError';
-    throw e;
-  };
 
-  await assert.rejects(
-    () => c.onContent(r, 'bob', JSON.stringify({ k: 'chat', ch: 'general', text: 'hi' })),
-    /quota/i,
-    'the failure propagates to the caller that logs and toasts it'
-  );
-  assert.equal(
-    dispatched.some((d) => d.type === 'newMessage'),
-    false,
-    'and nothing is announced to the UI as stored'
-  );
-  clearTimeout(c.backupTimer);
-});
-
-test('a storage failure on one envelope does not corrupt the record', async () => {
-  // The record is written by the caller after onContent; a throw must leave
-  // it in a state the next attempt can still work from.
-  const { c } = makeController();
-  const r = record();
-  c.servers.set('srv', r);
-  c.db.msgAdd = async () => {
-    throw new Error('disk is full');
-  };
-  await assert.rejects(() =>
-    c.onContent(r, 'bob', JSON.stringify({ k: 'chat', ch: 'design', text: 'hi' }))
-  );
-  assert.ok(r.channels.includes('design'), 'the channel the message named still exists');
+  assert.deepEqual(await c.loadMessages('srv', 'general'), []);
   clearTimeout(c.backupTimer);
 });
 

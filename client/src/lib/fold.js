@@ -39,17 +39,14 @@ export function fold(messages) {
       group = null;
       continue;
     }
-    // Restored lines never join a live group. A live line is signed by the
-    // sender's key and the check means "I compared that key"; a restored line
-    // was never signed by its sender at all — it is sealed with the room key,
-    // which every current *and former* member of a kept-history room holds.
-    // One header cannot honestly speak for both.
-    if (
-      group &&
-      group.sender === m.sender &&
-      !!group.fromHistory === !!m.fromHistory &&
-      m.ts - group.last < GROUP_WINDOW
-    ) {
+    // Lines whose authorship stands on different evidence never share a
+    // group. A signed line was signed by the sender's own key, and the check
+    // on the header means "I compared that key". A line we could not verify
+    // — no signature, or no key to check it against — is authenticated only
+    // by the room key, which every current *and former* member holds. One
+    // header cannot honestly speak for both.
+    const auth = m.auth ?? 'signed';
+    if (group && group.sender === m.sender && group.auth === auth && m.ts - group.last < GROUP_WINDOW) {
       group.lines.push(m);
       group.last = m.ts;
     } else {
@@ -59,7 +56,7 @@ export function fold(messages) {
         ts: m.ts,
         last: m.ts,
         lines: [m],
-        fromHistory: !!m.fromHistory,
+        auth,
         key: `g${m.ts}${out.length}`,
       };
       out.push(group);

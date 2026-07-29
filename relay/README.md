@@ -17,18 +17,28 @@ base64 blob it cannot read.
   in seq order. `subscribe {after}` replays missed messages on reconnect.
 - **Welcome delivery**: addressed to one user, stored if they're offline,
   flushed on their next connection. Carries `group` and `after` so the
-  joiner knows where their log begins — history before that point never
-  existed for them.
+  joiner knows where the MLS log resumes for them.
+- **Channel logs**: the conversation itself. One append-only log per
+  channel under a client-chosen opaque id (`hid`) the relay cannot map to
+  a channel name, holding AES-GCM ciphertext under a room key the relay
+  never sees. Reads are paged in either direction and clamped server-side.
+  Each entry records its author — the authenticated handle that appended
+  it — which is what authorizes a redaction and what lets a client ask
+  "how many entries have I missed" without decrypting anything. Retention
+  is enforced here: expired entries are deleted, on read and on a sweep.
 - **ACL**: `create_group` / `allow` / membership checks gate subscribe and
   send. This is server-enforced (therefore weak) spam control — the
   cryptographic boundary is MLS membership, which the server can't affect.
 
 ## What it cannot do — by design
 
-Read messages, group state, or invite blobs. It *can* observe metadata
-(who talks to whom, when, how often) and it *can* lie about delivery —
-which is why clients verify membership cryptographically and never trust
-the server's word for it.
+Read messages, group state, invite blobs, or channel-log entries. It *can*
+observe metadata (who talks to whom, when, how often, how much each
+channel holds, and which member appended each entry) and it *can* lie
+about delivery — which is why clients verify membership cryptographically,
+check each log entry's signature against keys taken from the MLS roster
+rather than from anything the relay says, and never trust the server's
+word for either.
 
 ## Protocol
 
@@ -52,6 +62,11 @@ authenticates rather than merely that the key holder was live) → `ready`.
 | `revoke_invite {invite}` | `ok` | members only |
 | `redeem_invite {invite}` | `invite {group, payload}` | enforces expiry/max-uses, grants ACL membership |
 | `ephemeral {group, payload}` | `ok` + fan-out `eph` | members only; NOT logged — voice presence/WebRTC signaling |
+| `history_append {group, hid, ts, expires_at?, payload}` | `ok {seq}` | members only; records the caller as the entry's author |
+| `history_fetch {group, hid, after, before?, limit?}` | `history {hid, entries[], complete}` | members only; `before` pages backwards, `limit` is clamped |
+| `history_redact {group, hid, seq}` | `ok` | members only; removes the entry if the caller wrote it, or is an admin. Answers identically either way |
+| `history_counts {group, logs[{hid, after_ts}]}` | `history_count {counts[]}` | members only; per-log count of entries past `after_ts` that the caller did not write |
+| `history_prune {group, hid, before_ts}` | `ok` | admins only; retention |
 
 Invite expiry and use-counting are **server-enforced and therefore weak**
 (a malicious relay can hand the blob to anyone). What it cannot do is read

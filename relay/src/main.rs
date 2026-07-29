@@ -21,8 +21,8 @@ async fn main() -> anyhow::Result<()> {
     let bind = std::env::var("RELAY_BIND").unwrap_or_else(|_| "0.0.0.0".into());
     let app = App::new(store);
 
-    // Retention sweeper. Expired history entries were only ever deleted
-    // inside history_after, i.e. when someone opened the room — so an
+    // Retention sweeper. Expired log entries were only ever deleted on
+    // read, i.e. when someone opened the room — so an
     // abandoned channel kept its expired ciphertext indefinitely and the
     // auto-delete setting was a promise the relay only sometimes kept.
     // Hourly is well inside the shortest retention (1 hour) being useful,

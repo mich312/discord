@@ -135,6 +135,23 @@ pub struct HistoryEntry {
     pub ts: u64,
     pub expires_at: Option<u64>,
     pub payload: Vec<u8>,
+    /// The authenticated handle that appended this entry. Kept for
+    /// authorization only (redaction, unread counts) and deliberately not
+    /// echoed to clients: the entry's own signature is the authorship
+    /// claim readers check, and a second unauthenticated one sitting next
+    /// to it would be a claim someone might trust by mistake.
+    pub author: String,
+}
+
+/// Which way a page of a channel log is read. The log is unbounded and is
+/// now the only copy of a conversation, so every read is a page.
+#[derive(Debug, Clone, Copy)]
+pub enum HistoryPage {
+    /// The oldest `limit` entries with seq > `after` — forward catch-up.
+    After { after: u64, limit: u32 },
+    /// The newest `limit` entries with seq < `before` — opening a channel
+    /// and paging back through it.
+    Before { before: u64, limit: u32 },
 }
 
 #[async_trait]
@@ -194,27 +211,64 @@ pub trait Store: Send + Sync {
     // --- channel history logs ---
     /// Append to the history log `hid` of `group`; returns the assigned
     /// seq (1-based, per (group, hid)).
+    ///
+    /// `author` is the authenticated caller. The relay necessarily sees it
+    /// at write time — the append arrives on that user's own connection —
+    /// but it is now *kept*, which is a real if modest change: a database
+    /// dump maps entries to speakers where before it did not. It buys two
+    /// things that need an authorization answer the ciphertext cannot
+    /// give: deleting an entry for real (`redact_history`) and counting
+    /// what someone else has said since you last looked
+    /// (`history_counts`). Documented in the threat model rather than
+    /// slipped in.
     async fn append_history(
         &self,
         group: &str,
         hid: &str,
+        author: &str,
         ts: u64,
         expires_at: Option<u64>,
         payload: Vec<u8>,
     ) -> Result<u64, StoreError>;
     /// Entries after `after`, excluding ones expired at `now`.
     /// Delete every expired history entry across every group. Retention was
-    /// enforced only lazily, inside `history_after`, so an abandoned
+    /// enforced only lazily, on read, so an abandoned
     /// channel's expired ciphertext lived forever — the auto-delete promise
     /// held only for rooms someone still opened. Returns rows removed.
     async fn sweep_expired_history(&self, now: u64) -> Result<u64, StoreError>;
-    async fn history_after(
+    /// One page of a log, ascending by seq, expired entries excluded.
+    /// Returns `(entries, complete)`; `complete` is true when the page
+    /// reached the start of the log, so the caller knows there is nothing
+    /// older rather than inferring it from a short page.
+    async fn history_page(
         &self,
         group: &str,
         hid: &str,
-        after: u64,
+        page: HistoryPage,
         now: u64,
-    ) -> Result<Vec<HistoryEntry>, StoreError>;
+    ) -> Result<(Vec<HistoryEntry>, bool), StoreError>;
+    /// Entries in `hid` with ts > `after_ts` that `exclude` did not write,
+    /// counted rather than returned. Unexpired only.
+    async fn history_count(
+        &self,
+        group: &str,
+        hid: &str,
+        after_ts: u64,
+        exclude: &str,
+        now: u64,
+    ) -> Result<u64, StoreError>;
+    /// Delete entry `seq` from `hid`. `caller` must have written it, unless
+    /// `admin` is set. Returns whether a row went — an entry that was
+    /// already gone and one written by somebody else are answered
+    /// identically, so this is not an authorship oracle.
+    async fn redact_history(
+        &self,
+        group: &str,
+        hid: &str,
+        seq: u64,
+        caller: &str,
+        admin: bool,
+    ) -> Result<bool, StoreError>;
     /// Drop entries with ts < `before_ts` (retention shrank / history off).
     async fn prune_history(&self, group: &str, hid: &str, before_ts: u64) -> Result<(), StoreError>;
 
@@ -471,6 +525,7 @@ impl Store for MemoryStore {
         &self,
         group: &str,
         hid: &str,
+        author: &str,
         ts: u64,
         expires_at: Option<u64>,
         payload: Vec<u8>,
@@ -480,7 +535,13 @@ impl Store for MemoryStore {
         let log = data.history.entry(hid.to_string()).or_default();
         log.last_seq += 1;
         let seq = log.last_seq;
-        log.entries.push(HistoryEntry { seq, ts, expires_at, payload });
+        log.entries.push(HistoryEntry {
+            seq,
+            ts,
+            expires_at,
+            payload,
+            author: author.to_string(),
+        });
         Ok(seq)
     }
 
@@ -497,19 +558,73 @@ impl Store for MemoryStore {
         Ok(removed)
     }
 
-    async fn history_after(
+    async fn history_page(
         &self,
         group: &str,
         hid: &str,
-        after: u64,
+        page: HistoryPage,
         now: u64,
-    ) -> Result<Vec<HistoryEntry>, StoreError> {
+    ) -> Result<(Vec<HistoryEntry>, bool), StoreError> {
         let mut inner = self.inner.lock().unwrap();
         let data = inner.groups.get_mut(group).ok_or(StoreError::NoSuchGroup)?;
-        let Some(log) = data.history.get_mut(hid) else { return Ok(Vec::new()) };
+        let Some(log) = data.history.get_mut(hid) else { return Ok((Vec::new(), true)) };
         // Expired ciphertext has no readers left to serve — drop it now.
         log.entries.retain(|e| !e.expires_at.is_some_and(|t| now > t));
-        Ok(log.entries.iter().filter(|e| e.seq > after).cloned().collect())
+        Ok(match page {
+            HistoryPage::After { after, limit } => {
+                let matching: Vec<_> = log.entries.iter().filter(|e| e.seq > after).collect();
+                let complete = after == 0 && matching.len() <= limit as usize;
+                let entries = matching.into_iter().take(limit as usize).cloned().collect();
+                (entries, complete)
+            }
+            HistoryPage::Before { before, limit } => {
+                let matching: Vec<_> = log.entries.iter().filter(|e| e.seq < before).collect();
+                // Nothing was left behind: this page starts at the log's
+                // first surviving entry.
+                let complete = matching.len() <= limit as usize;
+                let skip = matching.len().saturating_sub(limit as usize);
+                let entries = matching.into_iter().skip(skip).cloned().collect();
+                (entries, complete)
+            }
+        })
+    }
+
+    async fn history_count(
+        &self,
+        group: &str,
+        hid: &str,
+        after_ts: u64,
+        exclude: &str,
+        now: u64,
+    ) -> Result<u64, StoreError> {
+        let inner = self.inner.lock().unwrap();
+        let data = inner.groups.get(group).ok_or(StoreError::NoSuchGroup)?;
+        let Some(log) = data.history.get(hid) else { return Ok(0) };
+        Ok(log
+            .entries
+            .iter()
+            .filter(|e| {
+                e.ts > after_ts
+                    && e.author != exclude
+                    && !e.expires_at.is_some_and(|t| now > t)
+            })
+            .count() as u64)
+    }
+
+    async fn redact_history(
+        &self,
+        group: &str,
+        hid: &str,
+        seq: u64,
+        caller: &str,
+        admin: bool,
+    ) -> Result<bool, StoreError> {
+        let mut inner = self.inner.lock().unwrap();
+        let data = inner.groups.get_mut(group).ok_or(StoreError::NoSuchGroup)?;
+        let Some(log) = data.history.get_mut(hid) else { return Ok(false) };
+        let before = log.entries.len();
+        log.entries.retain(|e| !(e.seq == seq && (admin || e.author == caller)));
+        Ok(log.entries.len() < before)
     }
 
     async fn prune_history(&self, group: &str, hid: &str, before_ts: u64) -> Result<(), StoreError> {

@@ -5,7 +5,8 @@
 //! default `cargo test` covers store semantics on their own.
 
 use relay::store::{
-    InviteRecord, MemoryStore, RegisterOutcome, Store, StoreError, StoredWelcome, VaultRecord,
+    HistoryPage, InviteRecord, MemoryStore, RegisterOutcome, Store, StoreError, StoredWelcome,
+    VaultRecord,
 };
 
 fn store() -> MemoryStore {
@@ -199,41 +200,151 @@ async fn history_logs_are_per_hid_ordered_and_expire() {
 
     // Unknown group errors; unknown hid inside a known group is just empty.
     assert!(matches!(
-        s.append_history("missing", "h1", 10, None, b"x".to_vec()).await,
+        s.append_history("missing", "h1", "alice", 10, None, b"x".to_vec()).await,
         Err(StoreError::NoSuchGroup)
     ));
-    assert!(s.history_after("g1", "h1", 0, 100).await.unwrap().is_empty());
+    assert!(after(&s, "g1", "h1", 0, 100).await.is_empty());
 
-    assert_eq!(s.append_history("g1", "h1", 10, None, b"one".to_vec()).await.unwrap(), 1);
-    assert_eq!(s.append_history("g1", "h1", 20, Some(50), b"two".to_vec()).await.unwrap(), 2);
-    assert_eq!(s.append_history("g1", "h2", 30, None, b"other-log".to_vec()).await.unwrap(), 1);
+    assert_eq!(s.append_history("g1", "h1", "alice", 10, None, b"one".to_vec()).await.unwrap(), 1);
+    assert_eq!(s.append_history("g1", "h1", "alice", 20, Some(50), b"two".to_vec()).await.unwrap(), 2);
+    assert_eq!(s.append_history("g1", "h2", "alice", 30, None, b"other-log".to_vec()).await.unwrap(), 1);
 
     // `after` is a cursor; logs are independent per hid.
-    let all = s.history_after("g1", "h1", 0, 40).await.unwrap();
+    let all = after(&s, "g1", "h1", 0, 40).await;
     assert_eq!(all.iter().map(|e| e.payload.clone()).collect::<Vec<_>>(), vec![b"one".to_vec(), b"two".to_vec()]);
-    assert_eq!(s.history_after("g1", "h1", 1, 40).await.unwrap().len(), 1);
-    assert_eq!(s.history_after("g1", "h2", 0, 40).await.unwrap().len(), 1);
+    assert_eq!(after(&s, "g1", "h1", 1, 40).await.len(), 1);
+    assert_eq!(after(&s, "g1", "h2", 0, 40).await.len(), 1);
 
     // Past expires_at the entry is gone — and stays gone for earlier `now`
     // reads too (expired ciphertext is deleted, not filtered per-read).
-    let live = s.history_after("g1", "h1", 0, 60).await.unwrap();
+    let live = after(&s, "g1", "h1", 0, 60).await;
     assert_eq!(live.len(), 1, "expired entry dropped");
     assert_eq!(live[0].payload, b"one".to_vec());
-    assert_eq!(s.history_after("g1", "h1", 0, 40).await.unwrap().len(), 1);
+    assert_eq!(after(&s, "g1", "h1", 0, 40).await.len(), 1);
 
     // Seqs never restart after deletion: the client cursor stays valid.
-    assert_eq!(s.append_history("g1", "h1", 70, None, b"three".to_vec()).await.unwrap(), 3);
+    assert_eq!(s.append_history("g1", "h1", "alice", 70, None, b"three".to_vec()).await.unwrap(), 3);
+}
+
+/// The whole of a log, read forward from `after`. The paging API is the
+/// interesting one (below); most assertions here only care about content.
+async fn after(
+    s: &MemoryStore,
+    group: &str,
+    hid: &str,
+    from: u64,
+    now: u64,
+) -> Vec<relay::store::HistoryEntry> {
+    s.history_page(group, hid, HistoryPage::After { after: from, limit: 100 }, now)
+        .await
+        .unwrap()
+        .0
+}
+
+#[tokio::test]
+async fn history_pages_backwards_and_says_when_it_reached_the_start() {
+    let s = store();
+    s.create_group("g1", "alice").await.unwrap();
+    for i in 1..=5u64 {
+        s.append_history("g1", "h1", "alice", i, None, vec![i as u8]).await.unwrap();
+    }
+
+    // Opening a channel: the newest page, ascending, with more behind it.
+    let (page, complete) = s
+        .history_page("g1", "h1", HistoryPage::Before { before: u64::MAX, limit: 2 }, 0)
+        .await
+        .unwrap();
+    assert_eq!(page.iter().map(|e| e.seq).collect::<Vec<_>>(), vec![4, 5]);
+    assert!(!complete, "two of five: there is older");
+
+    // Paging back from the oldest seq held.
+    let (older, complete) = s
+        .history_page("g1", "h1", HistoryPage::Before { before: 4, limit: 2 }, 0)
+        .await
+        .unwrap();
+    assert_eq!(older.iter().map(|e| e.seq).collect::<Vec<_>>(), vec![2, 3]);
+    assert!(!complete);
+
+    // The last page reaches the start and says so, so the client can stop
+    // offering "load older" instead of guessing from a short page.
+    let (first, complete) = s
+        .history_page("g1", "h1", HistoryPage::Before { before: 2, limit: 2 }, 0)
+        .await
+        .unwrap();
+    assert_eq!(first.iter().map(|e| e.seq).collect::<Vec<_>>(), vec![1]);
+    assert!(complete);
+
+    // A page that exactly consumes the remainder is complete too.
+    let (exact, complete) = s
+        .history_page("g1", "h1", HistoryPage::Before { before: 3, limit: 2 }, 0)
+        .await
+        .unwrap();
+    assert_eq!(exact.iter().map(|e| e.seq).collect::<Vec<_>>(), vec![1, 2]);
+    assert!(complete);
+
+    // Forward catch-up is limited too.
+    let (fwd, _) = s
+        .history_page("g1", "h1", HistoryPage::After { after: 0, limit: 3 }, 0)
+        .await
+        .unwrap();
+    assert_eq!(fwd.iter().map(|e| e.seq).collect::<Vec<_>>(), vec![1, 2, 3]);
+}
+
+#[tokio::test]
+async fn history_counts_exclude_the_caller_and_expired_entries() {
+    let s = store();
+    s.create_group("g1", "alice").await.unwrap();
+    s.append_history("g1", "h1", "alice", 10, None, b"mine".to_vec()).await.unwrap();
+    s.append_history("g1", "h1", "bob", 20, None, b"theirs".to_vec()).await.unwrap();
+    s.append_history("g1", "h1", "bob", 30, Some(40), b"expiring".to_vec()).await.unwrap();
+
+    // Your own lines are read by definition, so they never count.
+    assert_eq!(s.history_count("g1", "h1", 0, "alice", 0).await.unwrap(), 2);
+    assert_eq!(s.history_count("g1", "h1", 0, "bob", 0).await.unwrap(), 1);
+    // The cursor is a timestamp, not a seq: it is what the device has seen.
+    assert_eq!(s.history_count("g1", "h1", 20, "alice", 0).await.unwrap(), 1);
+    // An entry past its expiry is not unread, it is gone.
+    assert_eq!(s.history_count("g1", "h1", 0, "alice", 50).await.unwrap(), 1);
+    // An unknown log is empty, not an error.
+    assert_eq!(s.history_count("g1", "ghost", 0, "alice", 0).await.unwrap(), 0);
+}
+
+#[tokio::test]
+async fn redaction_removes_only_the_authors_own_entry() {
+    let s = store();
+    s.create_group("g1", "alice").await.unwrap();
+    s.append_history("g1", "h1", "alice", 10, None, b"mine".to_vec()).await.unwrap();
+    s.append_history("g1", "h1", "bob", 20, None, b"theirs".to_vec()).await.unwrap();
+
+    // Someone else's entry does not go, and the answer is the same shape as
+    // for an entry that was never there — no authorship oracle.
+    assert!(!s.redact_history("g1", "h1", 2, "alice", false).await.unwrap());
+    assert!(!s.redact_history("g1", "h1", 99, "alice", false).await.unwrap());
+    assert_eq!(after(&s, "g1", "h1", 0, 0).await.len(), 2);
+
+    // Your own does.
+    assert!(s.redact_history("g1", "h1", 1, "alice", false).await.unwrap());
+    let left = after(&s, "g1", "h1", 0, 0).await;
+    assert_eq!(left.len(), 1);
+    assert_eq!(left[0].payload, b"theirs".to_vec());
+
+    // An admin may redact anyone's.
+    assert!(s.redact_history("g1", "h1", 2, "alice", true).await.unwrap());
+    assert!(after(&s, "g1", "h1", 0, 0).await.is_empty());
+
+    // Redaction does not reset the counter: cursors stay valid.
+    assert_eq!(s.append_history("g1", "h1", "alice", 30, None, b"next".to_vec()).await.unwrap(), 3);
 }
 
 #[tokio::test]
 async fn history_prune_drops_older_entries_only() {
     let s = store();
     s.create_group("g1", "alice").await.unwrap();
-    s.append_history("g1", "h1", 10, None, b"old".to_vec()).await.unwrap();
-    s.append_history("g1", "h1", 20, None, b"kept".to_vec()).await.unwrap();
+    s.append_history("g1", "h1", "alice", 10, None, b"old".to_vec()).await.unwrap();
+    s.append_history("g1", "h1", "alice", 20, None, b"kept".to_vec()).await.unwrap();
 
     s.prune_history("g1", "h1", 20).await.unwrap();
-    let left = s.history_after("g1", "h1", 0, 0).await.unwrap();
+    let left = after(&s, "g1", "h1", 0, 0).await;
     assert_eq!(left.len(), 1);
     assert_eq!(left[0].payload, b"kept".to_vec());
 

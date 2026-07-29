@@ -40,7 +40,10 @@ repository. In particular:
 - Anything that lets a relay operator read message content, join a group, or
   impersonate a member. This is the core guarantee; a break here is critical.
 - Key handling: the identity key, MLS group state, the account vault, the
-  circles backup, per-channel history keys.
+  circles backup, per-channel room keys, and the key directory that decides
+  which identity key speaks for which member.
+- Anything that lets one member write a log entry in another's name, or
+  rewrite or delete a line they did not write.
 - Authentication and authorization on the relay, including the invite gate.
 - Client-side execution: XSS, the sandboxed game iframe, the service worker.
 
@@ -63,8 +66,17 @@ wrong, but they will not be treated as vulnerabilities:
 - **Invite-link controls are server-enforced.** Expiry and max-uses can be
   bypassed by a malicious relay. Membership itself is cryptographic and
   cannot be.
-- **Kept history trades forward secrecy**, per channel, deliberately, and
-  says so in the UI.
+- **There is no forward secrecy for message content.** Every channel keeps
+  its conversation on the relay under a room key the whole roster holds, so
+  anyone admitted later can read the past and one leaked key opens
+  everything it ever covered. Deliberate, and said in the room header.
+- **A deletion cannot reach a device that already read the line.** The
+  relay drops the entry and readers fold a tombstone over it; that is all
+  it can do.
+- **The relay records which member appended each log entry.** It sees this
+  at write time regardless; keeping it is what authorizes a deletion and
+  what lets a device learn what it missed without downloading every
+  channel.
 - **Password vaults are offline-grindable by the server** for weak
   passwords. Argon2id (19 MiB, t=2). Passkey vaults have no such surface.
 

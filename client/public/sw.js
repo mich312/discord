@@ -93,10 +93,17 @@ self.addEventListener('fetch', (event) => {
   );
 });
 
-/** The circle's display name from the local store, or null. */
+/** The circle's display name from the local store, or null.
+ *
+ *  Opened WITHOUT a version on purpose. Naming one pins this reader to a
+ *  schema it does not own: asking for version 1 against a database the page
+ *  has already upgraded to 2 fails outright with a VersionError, and the
+ *  only symptom is push notifications quietly losing the circle's name.
+ *  Versionless open takes whatever exists and never triggers an upgrade,
+ *  which is what a read-only consumer of someone else's store wants. */
 function circleName(id) {
   return new Promise((resolve) => {
-    const req = indexedDB.open('e2ee-client', 1);
+    const req = indexedDB.open('e2ee-client');
     req.onerror = () => resolve(null);
     req.onsuccess = () => {
       const db = req.result;

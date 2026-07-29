@@ -39,7 +39,6 @@ export default function Modal({
   // Channel settings drafts (seeded from the modal payload when open).
   const meta = modal.type === 'channel' ? modal.meta ?? {} : {};
   const [topic, setTopic] = useState(meta.topic ?? '');
-  const [history, setHistory] = useState(!!meta.hid);
   const [retention, setRetention] = useState(meta.retention ?? 0);
   const [renameTo, setRenameTo] = useState(modal.type === 'channel' ? modal.channel ?? '' : '');
   const [serverName, setServerName] = useState(modal.type === 'circle' ? modal.name ?? '' : '');
@@ -410,7 +409,6 @@ export default function Modal({
                     await onChannelSettings(modal.server, modal.channel, {
                       topic: topic.trim(),
                       retention: Number(retention) || 0,
-                      history,
                     });
                     onClose();
                   });
@@ -426,19 +424,6 @@ export default function Modal({
                     data-testid="channel-topic"
                   />
                 </label>
-                <label className="field checkbox">
-                  <input
-                    type="checkbox"
-                    checked={history}
-                    onChange={(e) => setHistory(e.target.checked)}
-                    data-testid="channel-history"
-                  />
-                  <span>keep history for future joiners</span>
-                </label>
-                <p className="fineprint muted">
-                  On: people added later can read this room&rsquo;s past messages. Off: only
-                  the people here now can — messages live only on their devices.
-                </p>
                 <label className="field">
                   <span>auto-delete messages</span>
                   <select
@@ -454,9 +439,12 @@ export default function Modal({
                   </select>
                 </label>
                 <p className="fineprint muted">
-                  Auto-delete removes this room's messages from this device and the
-                  relay's history log. Other devices honor it when they next open the
-                  room — it is a shared setting, not a cryptographic guarantee.
+                  This room&rsquo;s messages live on the relay, encrypted under a key
+                  everyone in the circle holds — so anyone added later can read its
+                  past, and the circle keeps it when you sign in somewhere new.
+                  Auto-delete is how far back that reaches: the relay deletes
+                  entries past it, which is the one bound on what the room key ever
+                  unlocks.
                 </p>
                 <button className="button primary wide" disabled={busy} data-testid="channel-save">
                   {busy ? 'saving…' : 'save settings'}

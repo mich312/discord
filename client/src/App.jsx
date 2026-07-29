@@ -372,9 +372,12 @@ export default function App() {
   // Device-local unread counts for the sidebar pills — same digest the
   // hub uses, keyed on everything that can move it.
   const [unreads, setUnreads] = useState({});
-  // Load history whenever the active channel changes — or when stored
-  // messages changed underneath us (history backfill, auto-delete prune).
+  // Read the room whenever the active channel changes — or when its working
+  // copy moved underneath us (a page arrived, a mutation landed, retention
+  // pruned). The first read of a session fetches from the relay; there is no
+  // local archive to fall back on.
   const { server, channel } = state.active;
+  const [loadingOlder, setLoadingOlder] = useState(false);
   useEffect(() => {
     if (!server || !channel) return;
     let alive = true;
@@ -385,6 +388,15 @@ export default function App() {
       alive = false;
     };
   }, [server, channel, state.messagesRev]);
+
+  const loadOlder = useCallback(() => {
+    if (!server || !channel) return;
+    setLoadingOlder(true);
+    controllerRef.current
+      ?.loadOlderMessages(server, channel)
+      .catch((e) => dispatch({ type: 'toast', text: `could not read further back: ${e.message}` }))
+      .finally(() => setLoadingOlder(false));
+  }, [server, channel]);
 
   // Whatever is on screen is read: keep the device-local seen marker in
   // step so the hub's unread counts mean "since you last looked". Message
@@ -852,6 +864,9 @@ export default function App() {
                 channel={channel}
                 me={state.me}
                 messages={state.messages}
+                hasOlder={controllerRef.current?.hasOlderMessages(server, channel) ?? false}
+                loadingOlder={loadingOlder}
+                onLoadOlder={loadOlder}
                 onSend={(text, reply) =>
                   controllerRef.current
                     .sendChat(server, channel, text, reply)

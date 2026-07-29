@@ -2,20 +2,35 @@
 
 Small, persistent, invite-only groups (10–50 people) formed around
 something specific — a race team, a photo club, a project. **Discord's
-skeleton, Signal's social model.** End-to-end encrypted with
-**MLS (RFC 9420)**; the server stores ciphertext it can never read.
+skeleton, Signal's social model.** End-to-end encrypted; the server
+stores ciphertext it can never read.
 
-This is not a public server you stumble into. E2EE forbids scrollback for
-new members, so any positioning that depends on lurking-then-joining is
-structurally impossible. The differentiator (encryption) is invisible;
-the costs (no history for joiners by default, no server-side search, no
-content moderation) are visible — and the UI says so instead of hiding
-it. Channels can *opt in* to kept history via a shared room key — a
-deliberate, clearly-labeled forward-secrecy trade, not a loophole.
+**The conversation lives on the relay, encrypted under a key the whole
+circle holds.** Each channel has a room key that travels only inside the
+group's MLS messages, so joining is how you get it — and reading a room
+means reading it back from the relay, not from whatever this device
+happened to be awake for. Devices hold keys; they do not hold messages.
+That makes a new phone, a fresh sign-in and a new member all see the same
+room, and it is what the rest of the design now follows from.
+
+The cost is stated rather than buried: **forward secrecy for message
+content is given up**. Anyone admitted to a circle can read what its room
+keys unlock, and one leaked key opens everything that key ever covered.
+Per-channel auto-delete is the bound on that, and it is server-enforced.
+Membership is still cryptographic — MLS (RFC 9420) distributes and
+rotates the room keys, and the relay cannot join a circle or read a
+message. What it can now do is hold the whole conversation in ciphertext,
+which is the trade this design makes deliberately.
+
+The differentiator (encryption) is invisible; the remaining costs
+(no server-side search, no content moderation, no forward secrecy) are
+visible — and the UI says so instead of hiding it.
 
 The full design rationale lives in **[docs/BUILD_PLAN.md](docs/BUILD_PLAN.md)**;
-phases 1–7 of it are implemented. The plan's honest-assessment and
-threat-model sections still apply verbatim.
+phases 1–7 of it are implemented. Its §2 table — the one that says
+scrollback for joiners is impossible and each device keeps its own store
+— describes the design this replaced, and is annotated there rather than
+quietly rewritten. The honest-assessment section still applies verbatim.
 
 Also worth reading before you run one for other people:
 **[docs/THREAT_MODEL.md](docs/THREAT_MODEL.md)** (what the encryption does and
@@ -71,9 +86,12 @@ only thing that makes the claim falsifiable.
   can do both at once), soft join/leave chimes, and the call's own
   conversation thread — regular MLS-sealed chat scoped to the room under
   a `voice:<room>` channel id, never a sidebar room.
-- **Persistence** — MLS state snapshots in IndexedDB survive reloads
-  with live ratchets; the identity key is mirrored to localStorage and
-  exportable (file, paste-string, or passphrase-wrapped recovery file).
+- **Persistence** — the device stores keys, not messages: MLS state
+  snapshots in IndexedDB survive reloads with live ratchets, and the
+  identity key is mirrored to localStorage and exportable (file,
+  paste-string, or passphrase-wrapped recovery file). Rooms are read back
+  from the relay a page at a time, so what a device shows is what the
+  circle has rather than what that device was present for.
 - **Web Push** — members who didn't get a message live get an encrypted
   nudge (group id + kind only — content never exists server-side). The
   service worker enriches it with what the *device* already knows: the
@@ -103,50 +121,66 @@ only thing that makes the claim falsifiable.
   you are and (via the circles backup) what you knew — live group keys
   still lived on the old device, so sending needs a re-add.
 - **Channel settings** (admins, per channel) — a topic shown at the top
-  of the room, auto-delete, and kept history. Settings travel inside the
-  encryption like channel names; changes are announced in the channel.
-- **Kept history (opt-in, per channel)** — off by default: messages exist
-  only on devices that were present. Switched on, each message is *also*
-  sealed under a per-channel **room key** (AES-GCM) and parked on the
-  relay beneath an opaque log id. The room key travels only inside MLS
-  metadata, so being in the roster — joining — is exactly how you get it;
-  new members and your own next device read the channel's past. Honest
-  costs, shown in the UI: forward secrecy for that channel's content is
-  deliberately given up (anyone admitted later can read what the key
-  unlocks), and restored entries are authenticated by the room key, not
-  per-sender signatures.
+  of the room and auto-delete. Settings travel inside the encryption like
+  channel names; changes are announced in the channel. There is no switch
+  for whether a channel keeps history: every channel does.
+- **The channel log** — each message is sealed under its channel's
+  **room key** (AES-GCM) and appended to a log on the relay beneath an
+  opaque id it cannot map to a channel. Edits, deletions and reactions are
+  entries in the same log, so they survive a reload and reach a device
+  that was offline for them; readers fold them over the original in relay
+  order. Deleting also asks the relay to drop the original entry, which it
+  authorizes against the author it recorded at append time — so a later
+  joiner cannot read it with the room key. Nothing can reach a device that
+  already read the line, and the UI says so at the button.
+- **Signed entries** — the room key proves an entry came from someone in
+  the roster; it cannot say which member, since everyone holds it. So each
+  entry carries an Ed25519 signature by its author's MLS identity key —
+  the same key safety numbers are computed from — bound to the entry's
+  circle and channel so it cannot be replayed elsewhere. Readers check it
+  against a key directory built from the MLS roster (never from anything
+  the relay says) and drop entries that fail. A line that cannot be
+  attributed still renders, marked, and never shares a header with one
+  that can.
 - **Auto-delete** — per-channel retention (1 hour to 30 days). Entries in
   the relay's history log carry an expiry the server enforces; devices
   prune their local copies when they open the room. A shared setting
   honored by clients, not a cryptographic guarantee — and it usefully
   bounds what a kept-history room key can ever unlock.
-- **Circles backup / new-device restore** — the *shape* of your circles
-  (names, channels, settings, room keys) is parked on the relay encrypted
+- **Circles backup / new-device restore** — the *keys* to your circles
+  (names, channels, settings, room keys, and the directory of which
+  identity key speaks for which member) are parked on the relay encrypted
   under a key derived from your identity bundle — the same bytes the
   account vault already round-trips, so any device that can sign in can
   open it and the relay never can. Sign in somewhere new: your circles
-  reappear read-only, kept-history channels are readable immediately, and
-  a re-add (or invite link) makes them live again.
+  reappear read-only with their conversations intact, and a re-add (or
+  invite link) makes them live again.
 
 ## Architecture
 
 | Component | Directory | Stack |
 |---|---|---|
 | Crypto core | [`crypto-core/`](crypto-core/) | Rust + OpenMLS → WASM, runs in a Web Worker |
-| Relay | [`relay/`](relay/) | Rust (axum), WebSocket; ordered log + fan-out over opaque blobs; Postgres or in-memory |
+| Relay | [`relay/`](relay/) | Rust (axum), WebSocket; ordered log + fan-out over opaque blobs, plus the per-channel message logs; Postgres or in-memory |
 | Web client | [`client/`](client/) | React + Vite; the UI never touches key material |
 | Test harness | [`harness/`](harness/) | Bare two-tab Playwright e2e against the relay (no product UI) |
 
-The relay is a **delivery service and ordered log**, nothing more: it
+The relay is a **delivery service and an archive it cannot read**: it
 authenticates connections (challenge-response against each user's pinned
 MLS identity key — no passwords), stores ciphertext keyed by
-`(group_id, epoch, seq)`, hosts pre-published KeyPackages, invite
-blobs, per-channel history logs (opaque ids, AES-GCM ciphertext), and
-identity-encrypted circles backups, enforces per-group ordering, and
-fans out. It cannot read messages, membership, channel names, invite
-blobs, history entries, backups, or call signaling.
-It *can* observe metadata — who talks to whom, when, how often — and the
-docs say so plainly rather than overclaiming.
+`(group_id, epoch, seq)`, hosts pre-published KeyPackages, invite blobs,
+identity-encrypted circles backups, and the per-channel message logs
+(opaque ids, AES-GCM ciphertext, paged on read), enforces per-group
+ordering and retention, and fans out. It cannot read messages,
+membership, channel names, invite blobs, log entries, backups, or call
+signaling.
+
+It *can* observe metadata — who talks to whom, when, how often — and,
+since the conversation now lives there, rather more of it: how many
+entries each channel holds, when each landed, and which member appended
+it. That last one is recorded deliberately, because authorizing a
+deletion and counting what you missed both need an answer the ciphertext
+cannot give. The docs say so plainly rather than overclaiming.
 
 ## Running it
 
@@ -223,13 +257,14 @@ that auto-provisions Let's Encrypt certificates — see
 ## Testing
 
 ```sh
-cargo test                                            # 27 tests, in-memory store
+cargo test                                            # relay + crypto core, in-memory store
 TEST_DATABASE_URL=postgres://… cargo test             # + postgres contract tests
+cd client && npm test                                 # client unit tests
 cd client && npm run build && npm run e2e             # 18-step browser journey
 ```
 
 The client e2e drives five real browser profiles through onboarding,
-E2EE chat, the no-scrollback guarantee, reload persistence, invite-link
+E2EE chat, joiners reading a room's past, reload persistence, invite-link
 joins, identity recovery, encrypted attachments, safety numbers, and
 2-way + 3-way mesh voice calls.
 
@@ -248,8 +283,22 @@ joins, identity recovery, encrypted attachments, safety numbers, and
 
 ## Known limitations (by design or honestly deferred)
 
-- **No scrollback for joiners** — inherent to forward secrecy; shown as a
-  permanent watermark, not an error.
+- **No forward secrecy for message content** — the deliberate centre of
+  this design, not an oversight. A circle's messages sit on the relay
+  under room keys the roster holds, so anyone admitted later can read the
+  past, and one leaked key opens everything it ever covered. Removal
+  rotates the key forward (old keys are kept for reading, never dropped —
+  they are the only thing that opens those messages), auto-delete bounds
+  the window, and the room header says so where the messages are.
+- **Deleting is best-effort against readers who were there** — the relay
+  drops the entry and every reader folds a tombstone over it, but a device
+  that already read the line keeps it. Stated at the button.
+- **The relay records who appended each log entry** — it sees this at
+  write time regardless (the append arrives on that member's own
+  connection), but it is now kept, so a database dump maps entries to
+  speakers. It buys two things the ciphertext cannot answer: authorizing a
+  deletion, and counting what you have missed without your device
+  downloading every channel.
 - **Metadata is visible to the relay** — who, when, how often, group
   sizes, call participation. E2EE hides content, not traffic shape.
 - **Invite-link controls are weak** — expiry/max-uses are server-enforced;

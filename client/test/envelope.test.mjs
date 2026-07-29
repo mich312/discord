@@ -324,8 +324,30 @@ test('changing channel settings applies retention and re-reads history', () => {
   const { effects } = apply(r, { k: 'chanset', ch: 'general', meta: { hid: 'h1', retention: 3600 } });
   assert.deepEqual(r.chanMeta.general, { hid: 'h1', retention: 3600 });
   assert.deepEqual(kinds(effects), ['systemMessage', 'applyRetention', 'backfillHistory', 'backup']);
-  assert.match(find(effects, 'systemMessage').text, /history: kept for joiners/);
   assert.match(find(effects, 'systemMessage').text, /auto-delete: 1 hour/);
+});
+
+test('a chanset never drops a room key, whichever side minted it', () => {
+  // Two members can mint a key for the same channel at once. Picking a
+  // winner and dropping the loser would make the loser's messages
+  // unreadable forever — they are the only copy there is.
+  const r = circle({ chanMeta: { general: { hid: 'aaa', hkey: 'k-mine' } } });
+  apply(r, { k: 'chanset', ch: 'general', meta: { hid: 'bbb', hkey: 'k-theirs' } });
+  const meta = r.chanMeta.general;
+  assert.equal(meta.hid, 'aaa', 'the lowest log id wins, identically on every device');
+  assert.deepEqual(meta.alts, [{ hid: 'bbb', hkey: 'k-theirs' }], 'the other log is still read');
+  assert.ok(
+    [meta.hkey, ...(meta.hkeys ?? [])].includes('k-theirs'),
+    'and its key is kept so its entries still open'
+  );
+});
+
+test('a rotated key is archived rather than replaced', () => {
+  const r = circle({ chanMeta: { general: { hid: 'h1', hkey: 'old' } } });
+  apply(r, { k: 'chanset', ch: 'general', meta: { hid: 'h1', hkey: 'new' } });
+  const meta = r.chanMeta.general;
+  assert.ok([meta.hkey, ...(meta.hkeys ?? [])].includes('old'), 'entries before the rotation still open');
+  assert.ok([meta.hkey, ...(meta.hkeys ?? [])].includes('new'));
 });
 
 test('chanset on an unknown channel creates it', () => {
