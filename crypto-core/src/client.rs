@@ -8,6 +8,7 @@
 use openmls::prelude::*;
 use openmls_basic_credential::SignatureKeyPair;
 use openmls_rust_crypto::OpenMlsRustCrypto;
+use openmls_traits::crypto::OpenMlsCrypto;
 use openmls_traits::signatures::Signer;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
@@ -136,11 +137,52 @@ impl ChatClient {
     }
 
     /// Sign arbitrary bytes with the MLS identity key (used for the
-    /// relay's auth challenge — same key that signs MLS messages).
+    /// relay's auth challenge, and for authorship of server-log entries —
+    /// same key that signs MLS messages).
     pub fn sign(&self, message: &[u8]) -> Result<Vec<u8>, CoreError> {
         self.signer
             .sign(message)
             .map_err(|e| CoreError::Mls(format!("{e:?}")))
+    }
+
+    /// Check an Ed25519 signature made by `public_key` over `message`.
+    ///
+    /// The counterpart to `sign`, used to authenticate entries read back
+    /// from the relay's channel log. Those entries are encrypted under a
+    /// key the whole roster holds, so the room key proves only that *a*
+    /// member wrote it; the signature is what names which one.
+    pub fn verify(&self, public_key: &[u8], message: &[u8], signature: &[u8]) -> bool {
+        self.provider
+            .crypto()
+            .verify_signature(
+                CIPHERSUITE.signature_algorithm(),
+                message,
+                public_key,
+                signature,
+            )
+            .is_ok()
+    }
+
+    /// The group's roster as (handle, signature public key) pairs.
+    ///
+    /// This is the *cryptographic* answer to "which key speaks for whom",
+    /// taken from the ratchet tree rather than from anything the relay
+    /// says. The client keeps a directory built from this so it can check
+    /// the signature on a server-log entry written by someone who is not
+    /// online — and, after a restore, by someone whose key it can no longer
+    /// re-derive. A key learned here is only as good as the roster it came
+    /// from; a safety-number check is still what rules out substitution.
+    pub fn member_keys(&self, id: &str) -> Result<Vec<(String, Vec<u8>)>, CoreError> {
+        Ok(self
+            .group_ref(id)?
+            .members()
+            .filter_map(|m| {
+                // Two statements rather than a chain: the borrow of
+                // `m.credential` has to end before `m.signature_key` moves.
+                let name = identity_of(&m.credential)?;
+                Some((name, m.signature_key))
+            })
+            .collect())
     }
 
     // === persistence ======================================================

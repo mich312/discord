@@ -12,6 +12,14 @@
 
 ## 2. Non-negotiable consequences of E2EE
 
+> **Superseded in part — read §2.1 with it.** This table was written on the
+> assumption that forward secrecy for content was non-negotiable, and three
+> of its five rows follow from that assumption rather than from E2EE. The
+> implementation has since taken the other side of that trade deliberately.
+> The table is left standing because the reasoning is still correct *given
+> its premise*, and because a plan that quietly rewrites itself to match
+> what got built is worth nothing.
+
 | Constraint | Why | Product answer |
 |---|---|---|
 | No scrollback for new joiners | Sharing history means sharing old keys → kills forward secrecy | Permanent "you joined here" watermark at top of channel |
@@ -19,6 +27,38 @@
 | No content moderation | Server can't read anything | User reports + message franking (WhatsApp scheme) for provable origin |
 | No cross-device history sync (MVP) | Each device is its own MLS leaf | Accept it; per-device local store |
 | Metadata is not hidden | Server sees who talks to whom, when, how often | Say so in the docs. Don't overclaim. |
+
+### 2.1 What was actually built, and why it differs
+
+The premise above is that forward secrecy for message content must be kept.
+Drop that one assumption and rows 1 and 4 stop being consequences of E2EE at
+all — they are consequences of *forward secrecy*, which is a separate
+property with a separate price.
+
+The implementation drops it. Every channel has a **room key** that travels
+only inside the group's MLS messages; every message, edit, deletion and
+reaction is sealed under it and appended to a per-channel log on the relay.
+Devices keep keys, not messages.
+
+| Row | Status | What replaced it |
+|---|---|---|
+| No scrollback for joiners | **Gone.** Joining is how you get the room key, so a joiner reads the channel's past | The watermark now marks the start of the record, not the start of *your* record |
+| No cross-device sync | **Gone.** Any device that can sign in opens the backup, gets the room keys, and reads the same rooms | A new device still joins MLS afresh, which is a *sending* constraint, not a reading one |
+| No server-side search | Still true | Client-side, over what has been read back this session — narrower than before, and labelled |
+| No content moderation | Still true | Unchanged |
+| Metadata is not hidden | Still true, and there is more of it | The relay holds the logs, so it also sees their size, timing, and who appended each entry |
+
+What this costs is stated wherever it applies rather than here: anyone
+admitted to a circle can read its past, one leaked room key opens everything
+that key ever covered, and removal can only rotate forward. Auto-delete is
+the bound, and the relay enforces it by deleting entries.
+
+Two things that did **not** change, and are the reason this is still an E2EE
+product rather than a server-trust one: membership is cryptographic (MLS
+decides who holds a room key; the relay's ACL is advisory), and every log
+entry is signed by its author's identity key, so the room key proves an
+entry came from the roster while the signature says which member — a
+distinction the relay cannot fake and a fellow member cannot forge.
 
 ---
 

@@ -67,6 +67,27 @@ const commands = {
   sign({ bytes }) {
     return client.sign(bytes);
   },
+  /** Verify a batch of log-entry signatures in one crossing.
+      Batched on purpose: a channel page is hundreds of entries and a
+      postMessage per signature would cost more than the Ed25519 does.
+      `items` is [{key, message, sig}]; the result is a bool per item, in
+      order. Never throws for a bad signature — false is the answer. */
+  verifyEntries({ items }) {
+    return (items ?? []).map((it) => {
+      try {
+        return client.verify(it.key, it.message, it.sig);
+      } catch {
+        return false;
+      }
+    });
+  },
+  /** The group's roster as {handle: Uint8Array} — the key directory used
+      to check who signed a log entry. Read-only; turns no ratchet. */
+  memberKeys({ group }) {
+    const out = {};
+    for (const { name, key } of client.memberKeys(group)) out[name] = Uint8Array.from(key);
+    return out;
+  },
   exportIdentity() {
     return client.exportIdentity();
   },

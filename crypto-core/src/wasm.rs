@@ -3,7 +3,15 @@
 //! sees key material, only serialized ciphertext blobs and decrypted events.
 
 use crate::client::ChatClient;
+use serde::Serialize;
 use wasm_bindgen::prelude::*;
+
+/// One roster entry, as the client's key directory sees it.
+#[derive(Serialize)]
+struct MemberKey {
+    name: String,
+    key: Vec<u8>,
+}
 
 #[wasm_bindgen]
 pub struct AddResult {
@@ -106,6 +114,27 @@ impl Client {
 
     pub fn sign(&self, message: &[u8]) -> Result<Vec<u8>, JsError> {
         Ok(self.inner.sign(message)?)
+    }
+
+    /// Check one Ed25519 signature. Returns a plain bool rather than a
+    /// Result: a bad signature is an ordinary outcome on this path (the
+    /// log is writable by anyone holding the room key), not an error.
+    pub fn verify(&self, public_key: &[u8], message: &[u8], signature: &[u8]) -> bool {
+        self.inner.verify(public_key, message, signature)
+    }
+
+    /// `[{name, key}]` for the group's roster — the key directory the
+    /// client uses to check log-entry signatures. `key` arrives as a plain
+    /// array of byte values; the caller wraps it in a Uint8Array.
+    #[wasm_bindgen(js_name = memberKeys)]
+    pub fn member_keys(&self, id: &str) -> Result<JsValue, JsError> {
+        let entries: Vec<MemberKey> = self
+            .inner
+            .member_keys(id)?
+            .into_iter()
+            .map(|(name, key)| MemberKey { name, key })
+            .collect();
+        Ok(serde_wasm_bindgen::to_value(&entries)?)
     }
 
     #[wasm_bindgen(js_name = createGroup)]

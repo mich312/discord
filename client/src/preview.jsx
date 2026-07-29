@@ -129,10 +129,10 @@ const messages = [
   { sender: 'dana', text: 'thanks @alice — leave the intermediates too, forecast is shaky', ts: now - 1.0 * H },
   { sender: 'bob', text: 'grid slot confirmed: P4 (was P5)', ts: now - 0.9 * H, edited: true },
   { sender: 'charlie', ts: now - 0.85 * H, deleted: true },
-  // Restored from kept history: same sender as a live line and close enough
+  // Read back from the log but unattributable: same sender as a signed line and close enough
   // in time that the old grouping would have merged them under one header.
-  { sender: 'bob', text: 'wets are in the second truck if we need them', ts: now - 0.84 * H, fromHistory: true },
-  { sender: 'bob', text: 'and the spare set is under the awning', ts: now - 0.83 * H, fromHistory: true },
+  { sender: 'bob', text: 'wets are in the second truck if we need them', ts: now - 0.84 * H, auth: 'unknown' },
+  { sender: 'bob', text: 'and the spare set is under the awning', ts: now - 0.83 * H, auth: 'unknown' },
 ];
 
 // 2×2 png so the eager image-decrypt path renders something real.

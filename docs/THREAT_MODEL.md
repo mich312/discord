@@ -4,21 +4,34 @@ A maintained artifact, not prose. Review it on every release and whenever a
 component's trust boundary moves. Phase 7 of `HARDENING_PLAN.md` calls for
 this; it is the document an external reviewer should be handed first.
 
-Written against the branch that closed Phases 0 and 1.
+Written against the branch that closed Phases 0 and 1, and revised for the
+change that moved the conversation onto the relay — see §1, which is where
+that shows up.
 
 ---
 
 ## 1. What is being protected
 
 **The primary asset is message plaintext**, and everything that decrypts it:
-MLS group state, the identity key, per-channel kept-history keys, the
-account vault, and the circles backup.
+the per-channel room keys, MLS group state, the identity key, the account
+vault, and the circles backup.
 
 **The primary guarantee** is that a relay operator — including one who is
 compromised, coerced, or malicious from the start — cannot read message
 content or join a group.
 
 Everything else in this document is secondary to whether that holds.
+
+**What that guarantee no longer includes.** Message content used to be
+forward-secret: it existed on the devices that were present, and the
+relay's copy was an opt-in convenience. The relay now holds every
+channel's conversation, sealed under a room key the whole roster has. The
+operator still cannot read it — but the ciphertext is all in one place,
+one leaked room key opens everything that key ever covered, and anyone
+admitted to a circle can read its past. That is a deliberate trade for a
+product where a new device, a new member and a fresh sign-in all see the
+same room. It is the single largest change to this document, and §5
+carries it as an accepted risk rather than a footnote.
 
 ## 2. Actors
 
@@ -57,7 +70,9 @@ Everything else in this document is secondary to whether that holds.
 |---|---|---|
 | **S** | Relay substitutes a KeyPackage to join a group as a member | **Mitigated.** `add_member` binds the credential identity and the relay-pinned signature key. TOFU, not proof — see 6.1. |
 | **S** | Verified ✓ survives a key change | **Mitigated.** Verification stores the safety number, re-checked on every membership change. |
-| **T** | Forged kept-history entries | **Accepted.** Entries are authenticated by the room key, not per-sender signatures; any current or former key holder can forge one. Stated in the UI. |
+| **T** | Forged log entries | **Mitigated.** Each entry carries an Ed25519 signature by its author's MLS identity key, bound to the entry's circle and log id, checked against a key directory built from the MLS roster rather than from anything the relay says. An entry that fails is dropped; one that cannot be attributed (written before signatures, or by a member whose key this device never learned) renders marked and never shares a header with one that can. Mutations — edit, delete, react — apply only when verified. |
+| **T** | A room-key holder rewrites someone else's line | **Mitigated.** An edit or deletion applies only to a line by the same signed author, so the signature is the ACL. |
+| **I** | A removed member reads what the circle says next | **Mitigated.** Removal rotates every room key; superseded keys are kept for reading, never dropped, since they are the only thing that opens the messages written under them. |
 | **I** | Ratchet state readable at rest | **Open.** Plaintext in IndexedDB. Plan §5.2 specified a non-extractable `CryptoKey`; never implemented. |
 | **D** | Concurrent commits fork the group irrecoverably | **Mitigated.** Commits stage until the relay's epoch CAS accepts them. Groups forked *before* that fix stay forked. |
 | **E** | Removed member retains future access | **Mitigated.** MLS re-key, plus history-key rotation and invite revocation on removal. |
@@ -72,7 +87,9 @@ Everything else in this document is secondary to whether that holds.
 | **T** | Reorder or drop log entries | **Accepted.** The relay is the log; it can withhold. It cannot forge content or membership. |
 | **R** | Operator denies serving targeted code | **Accepted and unfixable as designed.** See 6.2. |
 | **I** | Read message content | **Mitigated by construction.** Ciphertext only. |
-| **I** | Metadata: social graph, timing, group sizes, handles, push endpoints | **Accepted, documented.** This is the design's central cost. |
+| **I** | Metadata: social graph, timing, group sizes, handles, push endpoints | **Accepted, documented.** This is the design's central cost, and it grew: the relay now holds every channel's log, so it also sees how much each channel holds, when each entry landed, and — recorded deliberately — which member appended it. That last is what authorizes a deletion and answers "what have I missed" without the device downloading every channel. The relay saw all three at write time regardless; what changed is that authorship is now durable, so a database dump maps entries to speakers. |
+| **D** | A client is made to download an unbounded log | **Mitigated.** Reads are paged and the page size is clamped server-side. |
+| **E** | Redact another member's entry | **Mitigated.** Authorship is checked inside the delete predicate, not by a prior read — so it neither races a concurrent write nor becomes an oracle for who wrote what. Admins may redact any entry in their circle. |
 | **D** | Fill the disk via unauthenticated blob writes | **Mitigated.** Single-use upload tickets bound to one id. |
 | **D** | Exhaust rate limits from one IPv6 allocation | **Mitigated.** Buckets keyed on the /64. |
 | **D** | One busy circle starves the rest | **Mitigated.** Per-group send locks; the DB write left the global mutex. |
@@ -117,10 +134,21 @@ the README and `SECURITY.md`.
    turns a targeted bundle into something detectable. It is not yet
    demonstrated off one runner image, and nobody is doing the comparison
    routinely; a packaged, signed client would still be stronger.
-3. **Kept history trades forward secrecy**, per channel, opt-in.
-4. **Invite-link controls are server-enforced** and so bypassable by a
+3. **There is no forward secrecy for message content.** Every channel keeps
+   its conversation on the relay under a room key the roster holds. Anyone
+   admitted later reads the past; one leaked key opens everything it ever
+   covered. Per-channel auto-delete is the only bound, and it is enforced
+   by the relay deleting entries — honest-weak in the same way invite-link
+   controls are. Removal rotates keys forward, which protects what is said
+   next and nothing that was said before.
+4. **Deleting is not erasure for readers who were there.** The relay drops
+   the entry and every reader folds a tombstone over it, so a later joiner
+   cannot read it with the room key — but a device that already fetched the
+   line keeps it, and nothing on the relay can reach into that. Stated at
+   the button.
+5. **Invite-link controls are server-enforced** and so bypassable by a
    malicious relay. Membership is not.
-5. **Password vaults are offline-grindable** by the server for weak
+6. **Password vaults are offline-grindable** by the server for weak
    passwords. Passkey vaults are not.
 
 ## 6. Where the guarantee is weakest
@@ -154,9 +182,16 @@ builds remain the only real fix, for the same reason they were before.
 ### 6.3 The identity key is a master key
 
 `SHA-256("quorum-circles-backup-v1" ‖ identity)` opens the circles backup,
-which carries every channel's history key. One compromise of the identity —
-a stolen device, an XSS, a cracked weak password — retroactively unlocks
-every kept-history channel in every circle. **There is still no rotation.**
+which carries every channel's room key. One compromise of the identity — a
+stolen device, an XSS, a cracked weak password — retroactively unlocks
+every channel in every circle. **There is still no rotation.**
+
+This got worse, not better, and deliberately so. When the relay held only
+the channels that opted into kept history, the identity key unlocked those.
+It now unlocks every conversation the account is in, all of which sit on the
+relay in one place. Identity key rotation plus per-channel re-keying was
+already the fix; it is now the highest-value unscheduled work in this
+document, and the ranking below reflects that.
 
 Device revocation now exists, and is **forward-only by decision**. Each
 enrolled device holds the identity sealed under its own passkey's PRF
@@ -168,9 +203,10 @@ identity from the relay. Be precise about the two halves:
   normal case, not the exotic one: without revocation a recovered or cloned
   keychain keeps pulling the identity down indefinitely.
 - **What it cannot touch.** A device that already holds the identity in
-  local storage. Nothing running on the relay can reach into it, so a device
-  lost while signed in keeps everything it had synced, kept history
-  included. The UI says so at the button rather than in a help page.
+  local storage. Nothing running on the relay can reach into it, so a
+  device lost while signed in keeps the room keys it holds — and with them
+  every conversation those keys open, as far back as retention allows. The
+  UI says so at the button rather than in a help page.
 
 So revocation narrows the window, and does not close §6.3. Closing it needs
 identity key rotation plus per-channel history re-keying, which is a
@@ -191,12 +227,14 @@ an enrolment oracle.
 Not defended against, deliberately: a compromised endpoint device beyond
 what post-compromise security gives; global passive adversaries correlating
 traffic; a malicious *member* screenshotting or exfiltrating content they
-can legitimately read; availability against a determined operator (they can
-simply stop serving).
+can legitimately read — which now means a circle's whole past, not just
+what arrived while they were in it; availability against a determined
+operator (they can simply stop serving).
 
 ## 8. Review triggers
 
 Revisit this document when any of these change: the ciphersuite; how the
 client is delivered; where the identity key lives; the account/vault flow;
-anything touching kept-history keys; the addition of any server-side feature
-that requires reading content.
+anything touching room keys, the key directory, or what a log entry's
+signature covers; what the relay records alongside a log entry; the
+addition of any server-side feature that requires reading content.

@@ -1017,9 +1017,11 @@ Both move to Phase 1.
   "revoke a device" means burning the handle. Enterprise requires real
   revocation, key rotation, and session termination. Substantial work, no
   conflict with the thesis.
-- **Room key rotation on member removal.** The kept-history key is minted once
-  (`controller.js:1084-1089`) and never rotates, so a removed member decrypts
-  *future* messages in that channel. Rotate on every removal.
+- ~~**Room key rotation on member removal.**~~ **Done.** Every removal mints
+  a fresh key per channel and archives the old ones for reading. The archive
+  is uncapped: it used to keep the newest eight, which was a reasonable
+  trim of a convenience copy and became silent destruction of the circle's
+  own past once the log was the only copy.
 - **Org-level multi-tenancy**, per-org policy (retention floors/ceilings,
   kept-history allowed or forbidden), and data residency.
 
@@ -1125,10 +1127,17 @@ time. Phase 6 is unbounded until the product decisions in it are made.
    fact that the operator serves the code and can target one user invisibly.
    Signal's model differs categorically. Reproducible builds narrow the gap;
    only a signed native client closes it.
-3. **Is kept history a default, a per-channel option, or removed?** It is the
-   feature most in tension with the product's thesis, and the source of two
-   findings in this plan. Non-technical users will not reason about its
-   consequences.
+3. ~~**Is kept history a default, a per-channel option, or removed?**~~
+   **Decided: the default, and the only mode.** The relay's per-channel log
+   is now where messages live, and the per-channel switch is gone. This
+   answers the question in the direction the plan warned about — it is the
+   feature most in tension with the original thesis, and it won — so the
+   consequence is that "no forward secrecy for content" is a property of
+   the product rather than of a checkbox a non-technical user might tick.
+   It is stated in the room header, the README, and `THREAT_MODEL.md` §5.
+   The follow-on it creates is §6.3 of the threat model: the identity key
+   now unlocks every conversation the account is in, which makes identity
+   rotation the highest-value unscheduled work in this repo.
 
 ## Immediate next four changes
 

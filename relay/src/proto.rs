@@ -130,9 +130,41 @@ pub enum ClientMsg {
         expires_at: Option<u64>,
         payload: String,
     },
-    /// The history log for `hid` after seq `after`, expired entries
-    /// excluded. Members only.
-    HistoryFetch { rid: u64, group: String, hid: String, after: u64 },
+    /// A page of the channel log for `hid`, expired entries excluded.
+    /// Members only.
+    ///
+    /// Two directions, because the log is now the whole conversation
+    /// rather than a backfill of one:
+    ///   - `before: None`  — the oldest `limit` entries with seq > `after`.
+    ///     Forward catch-up from a cursor.
+    ///   - `before: Some(b)` — the newest `limit` entries with seq < `b`.
+    ///     Opening a channel (`b` = u64::MAX) and paging back through it.
+    /// `limit` is clamped server-side; see `HISTORY_PAGE_MAX`.
+    HistoryFetch {
+        rid: u64,
+        group: String,
+        hid: String,
+        after: u64,
+        #[serde(default)]
+        before: Option<u64>,
+        #[serde(default)]
+        limit: Option<u32>,
+    },
+    /// Delete one entry the caller wrote. Unlike `del` inside the log —
+    /// which is a tombstone every reader folds away — this removes the
+    /// ciphertext, so a member who joins later cannot read the original
+    /// with the room key. The relay authorizes it against the author it
+    /// recorded at append time: the entry's writer, or a group admin.
+    HistoryRedact { rid: u64, group: String, hid: String, seq: u64 },
+    /// How many entries each log has gained since a timestamp, excluding
+    /// the caller's own. Members only.
+    ///
+    /// This is what makes unread counts possible without a local copy of
+    /// every message: the relay already knows how many entries a log holds
+    /// and when they landed, so counting them leaks nothing it cannot
+    /// already see — and the alternative is every client downloading and
+    /// decrypting every channel on every boot just to render a badge.
+    HistoryCounts { rid: u64, group: String, logs: Vec<HistoryCursor> },
     /// Delete history entries with ts < `before_ts` (retention shrank, or
     /// history was turned off). Group admins only. Server-enforced — i.e.
     /// weak: a malicious relay can keep the ciphertext, it just can't
@@ -230,7 +262,11 @@ pub enum ServerMsg {
     /// feed straight into `RTCPeerConnection({ iceServers })`.
     IceInfo { rid: u64, servers: String },
     Eph { group: String, sender: String, payload: String },
-    History { rid: u64, hid: String, entries: Vec<HistoryEntryOut> },
+    /// `complete` is true when this page reached the start of the log, so
+    /// the client can stop offering "load older" instead of guessing from
+    /// a short page.
+    History { rid: u64, hid: String, entries: Vec<HistoryEntryOut>, complete: bool },
+    HistoryCount { rid: u64, counts: Vec<HistoryCountOut> },
     Backup { rid: u64, #[serde(skip_serializing_if = "Option::is_none")] payload: Option<String> },
     VaultStatus { rid: u64, kind: Option<String> },
     /// WebAuthn ceremony payloads (JSON passthrough).
@@ -267,6 +303,26 @@ pub struct HistoryEntryOut {
     pub ts: u64,
     pub payload: String,
 }
+
+/// One log's "what have I missed" cursor, in a `HistoryCounts` request.
+#[derive(Debug, Clone, Deserialize)]
+pub struct HistoryCursor {
+    pub hid: String,
+    pub after_ts: u64,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct HistoryCountOut {
+    pub hid: String,
+    pub n: u64,
+}
+
+/// Largest page `HistoryFetch` will return, however much is asked for.
+/// A channel's log is unbounded; a client that opens a two-year-old room
+/// must not pull all of it into memory to render the last screen.
+pub const HISTORY_PAGE_MAX: u32 = 200;
+/// Page size when a client asks for none.
+pub const HISTORY_PAGE_DEFAULT: u32 = 50;
 
 /// Domain separator for the connection challenge. v2 binds the handle into
 /// the signed bytes: v1 signed only `context || nonce`, so a signature

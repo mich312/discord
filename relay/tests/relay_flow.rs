@@ -837,6 +837,107 @@ async fn history_log_gates_on_membership_and_prune_on_admin() {
     assert_eq!(reply["entries"].as_array().unwrap().len(), 0, "pruned");
 }
 
+/// The log is the conversation now, so three things have to hold over the
+/// wire: a client can page it without pulling all of it, a member can
+/// remove what they wrote (and only that), and a device can learn what it
+/// missed without decrypting every channel.
+#[tokio::test]
+async fn history_pages_redacts_and_counts_over_the_wire() {
+    let addr = spawn_relay().await;
+    let mut alice =
+        TestClient::connect(addr, ChatClient::new("alice").unwrap(), "alice").await.unwrap();
+    let mut bob = TestClient::connect(addr, ChatClient::new("bob").unwrap(), "bob").await.unwrap();
+
+    alice.request(json!({"t": "create_group", "group": "g1"})).await;
+    alice.request(json!({"t": "allow", "group": "g1", "user": "bob"})).await;
+
+    for i in 1..=4u64 {
+        let who = if i % 2 == 0 { &mut bob } else { &mut alice };
+        let reply = who
+            .request(json!({
+                "t": "history_append", "group": "g1", "hid": "h1",
+                "ts": i * 10, "expires_at": null, "payload": B64.encode(format!("e{i}").as_bytes()),
+            }))
+            .await;
+        assert_eq!(reply["seq"], i);
+    }
+
+    // Opening the room: the newest page, ascending, with "there is older".
+    let reply = bob
+        .request(json!({
+            "t": "history_fetch", "group": "g1", "hid": "h1",
+            "after": 0, "before": u64::MAX, "limit": 2,
+        }))
+        .await;
+    let entries = reply["entries"].as_array().unwrap();
+    assert_eq!(entries.len(), 2);
+    assert_eq!(entries[0]["seq"], 3);
+    assert_eq!(entries[1]["seq"], 4);
+    assert_eq!(reply["complete"], false);
+
+    // Paging back reaches the start and says so.
+    let reply = bob
+        .request(json!({
+            "t": "history_fetch", "group": "g1", "hid": "h1",
+            "after": 0, "before": 3, "limit": 50,
+        }))
+        .await;
+    assert_eq!(reply["entries"].as_array().unwrap().len(), 2);
+    assert_eq!(reply["complete"], true);
+
+    // A limit past the cap is clamped rather than honored.
+    let reply = bob
+        .request(json!({
+            "t": "history_fetch", "group": "g1", "hid": "h1",
+            "after": 0, "limit": 100_000,
+        }))
+        .await;
+    assert_eq!(reply["entries"].as_array().unwrap().len(), 4);
+
+    // Unread without decrypting: the caller's own entries never count.
+    let reply = bob
+        .request(json!({
+            "t": "history_counts", "group": "g1",
+            "logs": [{"hid": "h1", "after_ts": 0}, {"hid": "ghost", "after_ts": 0}],
+        }))
+        .await;
+    assert_eq!(reply["t"], "history_count");
+    assert_eq!(reply["counts"][0]["n"], 2, "alice wrote two of the four");
+    assert_eq!(reply["counts"][1]["n"], 0, "an unknown log is empty, not an error");
+
+    // Redaction removes the ciphertext, so a later joiner cannot read it
+    // with the room key — unlike the in-log tombstone, which only asks
+    // readers to fold it away. Someone else's entry does not go.
+    let reply = bob
+        .request(json!({"t": "history_redact", "group": "g1", "hid": "h1", "seq": 1}))
+        .await;
+    assert_eq!(reply["t"], "ok", "answered the same as a successful redaction");
+    let reply = bob
+        .request(json!({"t": "history_redact", "group": "g1", "hid": "h1", "seq": 2}))
+        .await;
+    assert_eq!(reply["t"], "ok");
+    let reply = alice
+        .request(json!({"t": "history_fetch", "group": "g1", "hid": "h1", "after": 0}))
+        .await;
+    let left: Vec<u64> = reply["entries"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|e| e["seq"].as_u64().unwrap())
+        .collect();
+    assert_eq!(left, vec![1, 3, 4], "bob's own entry went; alice's stayed");
+
+    // An admin may redact anyone's.
+    let reply = alice
+        .request(json!({"t": "history_redact", "group": "g1", "hid": "h1", "seq": 3}))
+        .await;
+    assert_eq!(reply["t"], "ok");
+    let reply = alice
+        .request(json!({"t": "history_fetch", "group": "g1", "hid": "h1", "after": 0}))
+        .await;
+    assert_eq!(reply["entries"].as_array().unwrap().len(), 2);
+}
+
 #[tokio::test]
 async fn backup_blob_roundtrips_per_user() {
     let addr = spawn_relay().await;

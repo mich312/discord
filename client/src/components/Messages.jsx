@@ -7,7 +7,7 @@ import { fold, dayLabel } from '../lib/fold.js';
 import { AlertTriangle, Lock, Paperclip, Clock, Archive, Wave, Gamepad, Check, Plus, Reply, Pencil, Trash, X } from './icons.jsx';
 
 // The reaction palette: small on purpose. Reactions ride MLS like any
-// message and live on the stored message; kept-history skips them.
+// message and live on the folded message; each is its own log entry.
 const EMOJI = ['👍', '🔥', '😂', '❤️', '💀', '😮'];
 
 // Display-only reaction pills under a line. The add trigger lives in the
@@ -96,7 +96,7 @@ function MessageActions({ message, me, onReact, onReply, onEdit, onDelete }) {
         (confirmDel ? (
           <button
             className="msg-act danger"
-            title="click again to delete for everyone (the sealed history copy stays)"
+            title="click again to delete for everyone — the entry is removed from the relay, but not from devices that already read it"
             data-testid="msg-del-confirm"
             onClick={() => {
               setConfirmDel(false);
@@ -367,6 +367,9 @@ export default function Messages({
   onType,
   onEdit,
   onDelete,
+  hasOlder = false,
+  loadingOlder = false,
+  onLoadOlder,
 }) {
   const [draft, setDraft] = useState('');
   const [replyTo, setReplyTo] = useState(null);
@@ -491,29 +494,27 @@ export default function Messages({
           </span>
         )}
         {/* The forward-secrecy trade, stated wherever it applies rather than
-            once in a system chip that scrolls out of view. `hid` present means
-            this room keeps an encrypted history that anyone added later can
-            read back — the README calls this a clearly-labeled trade, and it
-            is only clearly labeled if it is still on screen. */}
-        {meta.hid || meta.retention ? (
-          <span className="sealed-note">
-            {meta.hid ? (
-              <span
-                className="kept-note"
-                data-testid="kept-history-note"
-                title="This room keeps an encrypted history. Anyone added to the circle later can read it back, so messages here are not forward-secret."
-              >
-                <Archive size={11} /> history kept — new members can read back
-              </span>
-            ) : null}
-            {meta.hid && meta.retention ? <span className="note-sep">·</span> : null}
-            {meta.retention ? (
+            once in a system chip that scrolls out of view. Every room keeps
+            its history now, so this is not a per-room exception any more —
+            but it is still the cost, and it is only clearly labeled if it is
+            on screen where the messages are. */}
+        <span className="sealed-note">
+          <span
+            className="kept-note"
+            data-testid="kept-history-note"
+            title="This room's messages are stored on the relay, encrypted under a key everyone in the circle holds. Anyone added later can read its past, so messages here are not forward-secret."
+          >
+            <Archive size={11} /> kept for the circle — anyone added later can read back
+          </span>
+          {meta.retention ? (
+            <>
+              <span className="note-sep">·</span>
               <span className="retention-note" title="auto-delete is on for this room">
                 <Clock size={11} /> auto-deletes {describeRetention(meta.retention)} after sending
               </span>
-            ) : null}
-          </span>
-        ) : null}
+            </>
+          ) : null}
+        </span>
         {inCallHere && onOpenStage ? (
           <button className="button pane-call live" data-testid="pane-open-call" onClick={onOpenStage}>
             <Wave size={13} />
@@ -554,10 +555,26 @@ export default function Messages({
           pinned.current = el.scrollHeight - el.scrollTop - el.clientHeight < 80;
         }}
       >
-        <div className="watermark" data-testid="watermark">
-          <span className="wm-tag">start of record — #{channel}</span>
-          Beginning of <strong>#{channel}</strong> as this device knows it.
-        </div>
+        {/* The top of the room is either "there is more, fetch it" or "this
+            is where the record starts". It used to be only the second, and
+            it used to mean "as far back as this device happened to be
+            awake for" — the log means the answer is now the circle's, not
+            this device's. */}
+        {hasOlder ? (
+          <button
+            className="button ghost wide load-older"
+            data-testid="load-older"
+            disabled={loadingOlder}
+            onClick={onLoadOlder}
+          >
+            {loadingOlder ? 'reading…' : `read further back in #${channel}`}
+          </button>
+        ) : (
+          <div className="watermark" data-testid="watermark">
+            <span className="wm-tag">start of record — #{channel}</span>
+            Beginning of <strong>#{channel}</strong>.
+          </div>
+        )}
         {folded.map((item) => {
           if (item.kind === 'day') {
             return (
@@ -581,17 +598,20 @@ export default function Messages({
               <Seal name={item.sender} size={34} title={item.sender} />
               <div className="msg-head">
                 <span className={item.sender === me ? 'sender self' : 'sender'}>{item.sender}</span>
-                {/* The check means "this line was signed by a key I checked".
-                    A restored line was never signed by its sender — it was
-                    sealed with the room key, which every current and former
-                    member holds — so it cannot carry the badge, and says what
-                    it is instead. */}
-                {item.fromHistory ? (
+                {/* Two different claims, and they must not be confused.
+                    `auth` is whether this line's own signature checked out
+                    against the key the roster holds for its sender — a line
+                    read back from the relay can now carry that, which it
+                    could not when the log was authenticated by the room key
+                    alone. The check on top of it means "and I compared that
+                    key's safety number myself". A line we cannot attribute
+                    says so rather than borrowing either. */}
+                {item.auth && item.auth !== 'signed' ? (
                   <span
                     className="sender-history"
                     role="img"
-                    aria-label="from kept history — sealed with the room key, not signed by the sender"
-                    title="from kept history — sealed with the room key, not signed by the sender"
+                    aria-label="sealed with the room key but not signed by its sender — authorship unverified"
+                    title="sealed with the room key but not signed by its sender — authorship unverified"
                   >
                     <Archive size={10} />
                   </span>
@@ -657,7 +677,7 @@ export default function Messages({
                         <>
                           <MessageText text={m.text ?? ''} members={server.members} me={me} />
                           {m.edited && (
-                            <span className="edited-tag" title="edited — the kept-history copy keeps the original">
+                            <span className="edited-tag" title="edited — the original entry stays in the log beneath it">
                               (edited)
                             </span>
                           )}

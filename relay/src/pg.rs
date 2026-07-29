@@ -3,8 +3,8 @@
 //! plan. Uses runtime queries (no compile-time DB dependency).
 
 use crate::store::{
-    HistoryEntry, InviteRecord, PasskeyDevice, PasskeyWrap, RegisterOutcome, Store, StoreError,
-    StoredMessage, StoredWelcome, VaultRecord,
+    HistoryEntry, HistoryPage, InviteRecord, PasskeyDevice, PasskeyWrap, RegisterOutcome, Store,
+    StoreError, StoredMessage, StoredWelcome, VaultRecord,
 };
 use async_trait::async_trait;
 use sqlx::{postgres::PgPoolOptions, PgPool, Row};
@@ -167,6 +167,15 @@ impl PgStore {
                 payload bytea NOT NULL,
                 PRIMARY KEY (group_id, hid, seq)
             );
+            -- The authenticated writer of each entry. Needed to authorize a
+            -- redaction and to count what someone else has said since you
+            -- last looked; never returned to clients. Existing rows predate
+            -- it and get '', which matches no handle — so an old entry can
+            -- be redacted by an admin but not by its (unrecorded) author.
+            ALTER TABLE history ADD COLUMN IF NOT EXISTS author text NOT NULL DEFAULT '';
+            -- Paging reads a channel newest-first; unread counts read by ts.
+            CREATE INDEX IF NOT EXISTS history_page_idx ON history (group_id, hid, seq DESC);
+            CREATE INDEX IF NOT EXISTS history_ts_idx ON history (group_id, hid, ts);
             -- Seqs outlive expiry/prune deletions (see append_history):
             -- re-issuing numbers would make client cursors skip entries.
             CREATE TABLE IF NOT EXISTS history_counters (
@@ -466,6 +475,7 @@ impl Store for PgStore {
         &self,
         group: &str,
         hid: &str,
+        author: &str,
         ts: u64,
         expires_at: Option<u64>,
         payload: Vec<u8>,
@@ -494,8 +504,8 @@ impl Store for PgStore {
         .map_err(backend)?;
         let seq: i64 = row.get("last_seq");
         sqlx::query(
-            "INSERT INTO history (group_id, hid, seq, ts, expires_at, payload)
-             VALUES ($1, $2, $3, $4, $5, $6)",
+            "INSERT INTO history (group_id, hid, seq, ts, expires_at, payload, author)
+             VALUES ($1, $2, $3, $4, $5, $6, $7)",
         )
         .bind(group)
         .bind(hid)
@@ -503,6 +513,7 @@ impl Store for PgStore {
         .bind(ts as i64)
         .bind(expires_at.map(|t| t as i64))
         .bind(payload)
+        .bind(author)
         .execute(&mut *tx)
         .await
         .map_err(backend)?;
@@ -519,13 +530,13 @@ impl Store for PgStore {
         Ok(done.rows_affected())
     }
 
-    async fn history_after(
+    async fn history_page(
         &self,
         group: &str,
         hid: &str,
-        after: u64,
+        page: HistoryPage,
         now: u64,
-    ) -> Result<Vec<HistoryEntry>, StoreError> {
+    ) -> Result<(Vec<HistoryEntry>, bool), StoreError> {
         let exists = sqlx::query("SELECT 1 FROM groups WHERE group_id = $1")
             .bind(group)
             .fetch_optional(&self.pool)
@@ -542,25 +553,104 @@ impl Store for PgStore {
             .execute(&self.pool)
             .await
             .map_err(backend)?;
-        let rows = sqlx::query(
-            "SELECT seq, ts, expires_at, payload FROM history
-             WHERE group_id = $1 AND hid = $2 AND seq > $3 ORDER BY seq",
-        )
-        .bind(group)
-        .bind(hid)
-        .bind(after as i64)
-        .fetch_all(&self.pool)
-        .await
-        .map_err(backend)?;
-        Ok(rows
+        // Both directions ask for one row more than the caller wanted: the
+        // extra row is how "is there anything older" is answered without a
+        // second COUNT over the log.
+        let (sql, bound, limit) = match page {
+            HistoryPage::After { after, limit } => (
+                "SELECT seq, ts, expires_at, payload, author FROM history
+                 WHERE group_id = $1 AND hid = $2 AND seq > $3 ORDER BY seq ASC LIMIT $4",
+                after,
+                limit,
+            ),
+            HistoryPage::Before { before, limit } => (
+                "SELECT seq, ts, expires_at, payload, author FROM history
+                 WHERE group_id = $1 AND hid = $2 AND seq < $3 ORDER BY seq DESC LIMIT $4",
+                before,
+                limit,
+            ),
+        };
+        let rows = sqlx::query(sql)
+            .bind(group)
+            .bind(hid)
+            .bind(bound as i64)
+            .bind(limit as i64 + 1)
+            .fetch_all(&self.pool)
+            .await
+            .map_err(backend)?;
+        let more = rows.len() > limit as usize;
+        let mut entries: Vec<HistoryEntry> = rows
             .into_iter()
+            .take(limit as usize)
             .map(|r| HistoryEntry {
                 seq: r.get::<i64, _>("seq") as u64,
                 ts: r.get::<i64, _>("ts") as u64,
                 expires_at: r.get::<Option<i64>, _>("expires_at").map(|t| t as u64),
                 payload: r.get("payload"),
+                author: r.get("author"),
             })
-            .collect())
+            .collect();
+        let complete = match page {
+            // A forward page only reaches the log's start when it began there.
+            HistoryPage::After { after, .. } => after == 0 && !more,
+            HistoryPage::Before { .. } => !more,
+        };
+        // Descending is a query-plan detail; callers always read ascending.
+        if matches!(page, HistoryPage::Before { .. }) {
+            entries.reverse();
+        }
+        Ok((entries, complete))
+    }
+
+    async fn history_count(
+        &self,
+        group: &str,
+        hid: &str,
+        after_ts: u64,
+        exclude: &str,
+        now: u64,
+    ) -> Result<u64, StoreError> {
+        let row = sqlx::query(
+            "SELECT count(*) AS n FROM history
+             WHERE group_id = $1 AND hid = $2 AND ts > $3 AND author <> $4
+               AND (expires_at IS NULL OR expires_at >= $5)",
+        )
+        .bind(group)
+        .bind(hid)
+        .bind(after_ts as i64)
+        .bind(exclude)
+        .bind(now as i64)
+        .fetch_one(&self.pool)
+        .await
+        .map_err(backend)?;
+        Ok(row.get::<i64, _>("n") as u64)
+    }
+
+    async fn redact_history(
+        &self,
+        group: &str,
+        hid: &str,
+        seq: u64,
+        caller: &str,
+        admin: bool,
+    ) -> Result<bool, StoreError> {
+        // Authorship is checked inside the predicate rather than by a prior
+        // read, for the same reason device deletion is (threat model §6.3):
+        // a read-then-check races a concurrent write and turns the endpoint
+        // into an oracle for who wrote what.
+        let done = sqlx::query(
+            "DELETE FROM history
+             WHERE group_id = $1 AND hid = $2 AND seq = $3 AND ($4 OR author = $5)",
+        )
+        .bind(group)
+        .bind(hid)
+        .bind(seq as i64)
+        .bind(admin)
+        .bind(caller)
+        .execute(&self.pool)
+        .await
+        .map_err(backend)?;
+        Ok(done.rows_affected() > 0)
     }
 
     async fn prune_history(&self, group: &str, hid: &str, before_ts: u64) -> Result<(), StoreError> {

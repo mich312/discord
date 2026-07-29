@@ -5,8 +5,9 @@
 //      should inherit
 //   2. bob onboards; alice adds him by handle; encrypted chat both ways in
 //      two channels
-//   3. bob reloads — MLS state comes back from IndexedDB: history is intact
-//      AND live ratchets still work (can send/receive after reload)
+//   3. bob reloads — the room reads back from the relay's log (no message
+//      is stored on the device) AND live ratchets still work, since the MLS
+//      state does come back from IndexedDB
 //   4. bob's recovery file + code restore his identity in a fresh browser
 //      profile (account survives; group state intentionally does not)
 // Run after: npm run build, cargo build -p relay.
@@ -137,7 +138,7 @@ try {
   await alice.waitForSelector('[data-testid=overview-notice]', { timeout: 10000 });
   // Into the first room to post.
   await alice.click('[data-testid=channel-general]');
-  await alice.fill('[data-testid=composer]', 'first message — should be invisible to bob later');
+  await alice.fill('[data-testid=composer]', 'first message — bob should read this back later');
   await alice.press('[data-testid=composer]', 'Enter');
 
   console.log('3. bob onboards');
@@ -190,10 +191,12 @@ try {
   await bob.press('[data-testid=composer]', 'Enter');
   await alice.waitForSelector('text=glad to be here', { timeout: 10000 });
 
-  // The pre-join message must NOT be visible to bob (no scrollback).
-  if (await bob.locator('text=should be invisible to bob').count()) {
-    throw new Error('bob can see pre-join history — E2EE scrollback violation!');
-  }
+  // The pre-join message MUST be readable by bob. The circle's messages
+  // live on the relay under a room key the whole roster holds, and joining
+  // is how you get that key — so a joiner reads the room's past. This is
+  // the inverse of what this step asserted when each device held its own
+  // copy, and it is the change the whole design turns on.
+  await bob.waitForSelector('text=bob should read this back later', { timeout: 10000 });
 
   console.log('6. second channel propagates encrypted');
   await alice.click('[data-testid=new-channel]');
@@ -336,10 +339,9 @@ try {
   await alice.fill('[data-testid=composer]', 'welcome charlie');
   await alice.press('[data-testid=composer]', 'Enter');
   await charlie.waitForSelector('text=welcome charlie', { timeout: 10000 });
-  // And charlie must not see anything pre-join.
-  if (await charlie.locator('text=should be invisible to bob').count()) {
-    throw new Error('charlie can see pre-join history — E2EE scrollback violation!');
-  }
+  // And a link joiner reads the past too — the room key rides the encrypted
+  // metadata they inherit on joining, exactly as an added member's does.
+  await charlie.waitForSelector('text=bob should read this back later', { timeout: 10000 });
 
   console.log('11. IndexedDB wiped: identity survives via localStorage');
   await bob.evaluate(() => {

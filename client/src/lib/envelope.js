@@ -87,8 +87,11 @@ export function describeRetention(seconds) {
 /** Human-readable summary of a channel's settings for system messages. */
 export function describeChanMeta(meta = {}) {
   const parts = [];
-  parts.push(meta.hid ? 'history: kept for joiners' : 'history: this-device-only');
-  if (meta.retention) parts.push(`auto-delete: ${describeRetention(meta.retention)}`);
+  // History is no longer a switch — every channel keeps one, because the
+  // relay's log is where messages live. Retention is what varies, and it is
+  // the setting worth announcing: it is what bounds how far back the room
+  // key ever reaches.
+  parts.push(meta.retention ? `auto-delete: ${describeRetention(meta.retention)}` : 'auto-delete: off');
   if (meta.topic) parts.push(`topic: “${meta.topic}”`);
   return ` (${parts.join(', ')})`;
 }
@@ -175,6 +178,84 @@ export function adminRequirement(content) {
 }
 
 /* ---------------------------------------------------------- the parse -- */
+
+/**
+ * Merge two views of one channel's settings without ever losing a key.
+ *
+ * Settings (topic, retention) have a clear owner: whoever sent the change.
+ * Room keys do not, and they are not interchangeable with settings —
+ * discarding one destroys every message it opens, which is now the only
+ * copy of those messages.
+ *
+ * Two members can legitimately mint different keys for the same channel:
+ * a channel with no key yet gets one from whoever next writes to it, and
+ * two people writing at once both mint. So rather than pick a winner and
+ * drop the loser, every (log id, key) pair either side knows is kept:
+ *
+ *   - `hid`/`hkey` — the log this device writes to. The winner is simply
+ *     the lowest log id, which every device computes identically without
+ *     talking to anyone, so a split converges by itself.
+ *   - `alts`       — other logs that exist and still hold messages. Read,
+ *     never written. Empty in the ordinary case.
+ *   - `hkeys`      — every superseded key, for any of those logs. Reads try
+ *     all of them, so a rotation or a race costs a decrypt attempt, not a
+ *     stretch of the conversation.
+ *
+ * `mineWins` picks who owns the *settings* — false for an explicit
+ * `chanset` (the sender is announcing a change), true for a metadata
+ * rebroadcast (which only ever gap-fills).
+ */
+export function mergeChanKeys(mine = {}, theirs = {}, { mineWins = false } = {}) {
+  const { hid: _mh, hkey: _mk, hkeys: _mks, alts: _ma, ...mySettings } = mine ?? {};
+  const { hid: _th, hkey: _tk, hkeys: _tks, alts: _ta, ...theirSettings } = theirs ?? {};
+  const settings = mineWins
+    ? { ...theirSettings, ...mySettings }
+    : { ...mySettings, ...theirSettings };
+
+  // Every log either side knows about, and every key that has ever opened
+  // it. A key with no log id is unusable, and vice versa.
+  // A log id with no key yet is still the log this channel writes to, so it
+  // is tracked with an empty key set rather than dropped.
+  const logs = new Map();
+  const note = (hid, keys) => {
+    if (!hid) return;
+    const set = logs.get(hid) ?? new Set();
+    for (const k of keys) if (k) set.add(k);
+    logs.set(hid, set);
+  };
+  for (const side of [mine, theirs]) {
+    if (!side) continue;
+    note(side.hid, [side.hkey, ...(side.hkeys ?? [])]);
+    for (const alt of side.alts ?? []) note(alt?.hid, [alt?.hkey]);
+    // A superseded key can outlive knowledge of which log it belonged to;
+    // keep it against the side's own log rather than dropping it.
+    note(side.hid, side.hkeys ?? []);
+  }
+  if (!logs.size) return settings;
+
+  const hids = [...logs.keys()].sort();
+  const primary = hids[0];
+  // Prefer a current key someone is actually writing under.
+  const preferred = [mine?.hid === primary && mine.hkey, theirs?.hid === primary && theirs.hkey]
+    .filter(Boolean)
+    .sort();
+  const hkey = preferred[0] ?? [...logs.get(primary)][0];
+  const hkeys = [...new Set([...logs.values()].flatMap((s) => [...s]))].filter(
+    (k) => k && k !== hkey
+  );
+  const alts = hids
+    .slice(1)
+    .map((hid) => ({ hid, hkey: [...logs.get(hid)][0] }))
+    .filter((a) => a.hkey);
+
+  return {
+    ...settings,
+    hid: primary,
+    ...(hkey ? { hkey } : {}),
+    ...(hkeys.length ? { hkeys } : {}),
+    ...(alts.length ? { alts } : {}),
+  };
+}
 
 /**
  * Parse an envelope body. A payload that is not JSON is treated as a plain
@@ -294,6 +375,11 @@ export function applyEnvelope(record, sender, content, ctx = {}) {
         emo,
         op,
         by: sender,
+        // The mutation's own timestamp, not its target's. It is what makes
+        // this the same event as the log entry the sender also wrote —
+        // (sender, kind, ts) — so the two collapse instead of applying
+        // twice, and it is what orders two edits of the same line.
+        at: messageTs(content.ts, now),
       });
       emit({ t: 'refreshMessages' });
       break;
@@ -303,10 +389,18 @@ export function applyEnvelope(record, sender, content, ctx = {}) {
       const ts = Number(content.to?.ts);
       const text = String(content.text ?? '');
       if (!Number.isFinite(ts) || !text) break;
-      // Keyed on (sender, ts): the patch lands only if a line with this
-      // authenticated sender and ts exists locally, so no one can edit
-      // anyone else's message and a joiner without the line simply no-ops.
-      emit({ t: 'editMessage', server: record.id, channel: String(content.ch ?? ''), sender, ts, text });
+      // Keyed on (sender, ts): the edit lands only on a line with this
+      // authenticated sender and ts, so no one can edit anyone else's
+      // message and a reader without the line simply no-ops.
+      emit({
+        t: 'editMessage',
+        server: record.id,
+        channel: String(content.ch ?? ''),
+        sender,
+        ts,
+        text,
+        at: messageTs(content.ts, now),
+      });
       emit({ t: 'refreshMessages' });
       break;
     }
@@ -314,10 +408,19 @@ export function applyEnvelope(record, sender, content, ctx = {}) {
     case 'del': {
       const ts = Number(content.to?.ts);
       if (!Number.isFinite(ts)) break;
-      // Same (sender, ts) self-scoping as edit. The sealed history copy and
-      // any device that already received the line are untouched — a delete
-      // is not a redaction, and the UI says so.
-      emit({ t: 'deleteMessage', server: record.id, channel: String(content.ch ?? ''), sender, ts });
+      // Same (sender, ts) self-scoping as edit. A tombstone: readers fold it
+      // over the original. Removing the original from the relay's log is a
+      // separate, authorized request the sender makes — see
+      // `Controller.deleteMessage` — and neither can reach a device that
+      // already fetched the line.
+      emit({
+        t: 'deleteMessage',
+        server: record.id,
+        channel: String(content.ch ?? ''),
+        sender,
+        ts,
+        at: messageTs(content.ts, now),
+      });
       emit({ t: 'refreshMessages' });
       break;
     }
@@ -337,11 +440,16 @@ export function applyEnvelope(record, sender, content, ctx = {}) {
       break;
 
     case 'chanset': {
-      // A channel's settings changed: topic, auto-delete, or history (the
-      // history key itself rides in `meta.hkey` — inside MLS, so the relay
-      // never sees it). The sender's copy is authoritative.
+      // A channel's settings changed: topic or auto-delete. The room key
+      // rides in `meta.hkey` — inside MLS, so the relay never sees it. The
+      // sender's copy is authoritative for the settings, but never for the
+      // keys: see `mergeChanKeys`.
       if (!record.channels.includes(content.ch)) record.channels.push(content.ch);
-      record.chanMeta = { ...(record.chanMeta ?? {}), [content.ch]: content.meta ?? {} };
+      const incoming = content.meta ?? {};
+      record.chanMeta = {
+        ...(record.chanMeta ?? {}),
+        [content.ch]: mergeChanKeys(record.chanMeta?.[content.ch], incoming),
+      };
       emit({
         t: 'systemMessage',
         server: record.id,
@@ -587,11 +695,13 @@ function applyMeta(record, content, emit) {
   }
 
   // Gap-fill channel settings (a joiner has none): explicit changes arrive as
-  // their own `chanset` events, so never clobber here.
+  // their own `chanset` events, so this never clobbers a setting. Keys are
+  // the exception and are merged rather than picked between — see
+  // `mergeChanKeys`.
   if (content.chanMeta) {
     const mine = record.chanMeta ?? {};
     for (const [ch, meta] of Object.entries(content.chanMeta)) {
-      mine[ch] = { ...meta, ...(mine[ch] ?? {}) };
+      mine[ch] = mergeChanKeys(mine[ch], meta, { mineWins: true });
     }
     record.chanMeta = mine;
     emit({ t: 'backfillHistory' });

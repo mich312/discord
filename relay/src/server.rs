@@ -1130,18 +1130,36 @@ async fn handle_request(
                 Ok(b) => b,
                 Err(e) => return err(rid, e),
             };
-            match app.store.append_history(&group, &hid, ts, expires_at, payload).await {
+            match app.store.append_history(&group, &hid, user, ts, expires_at, payload).await {
                 Ok(seq) => Some(ServerMsg::Ok { rid, seq: Some(seq) }),
                 Err(e) => err(rid, e),
             }
         }
 
-        ClientMsg::HistoryFetch { rid, group, hid, after } => {
+        ClientMsg::HistoryFetch { rid, group, hid, after, before, limit } => {
             if let Err(e) = require_member(app, &group, user).await {
                 return err(rid, e);
             }
-            match app.store.history_after(&group, &hid, after, now_unix()).await {
-                Ok(entries) => Some(ServerMsg::History {
+            // Clamped, not trusted: the log is unbounded and a client asking
+            // for all of it would pin a page of memory per request.
+            let limit = limit
+                .unwrap_or(crate::proto::HISTORY_PAGE_DEFAULT)
+                .clamp(1, crate::proto::HISTORY_PAGE_MAX);
+            let page = match before {
+                // Clamped to what a signed 64-bit column can hold: a client
+                // saying "before the end of the log" naturally sends a very
+                // large number, and Postgres compares against a bigint.
+                Some(before) => crate::store::HistoryPage::Before {
+                    before: before.min(i64::MAX as u64),
+                    limit,
+                },
+                None => crate::store::HistoryPage::After {
+                    after: after.min(i64::MAX as u64),
+                    limit,
+                },
+            };
+            match app.store.history_page(&group, &hid, page, now_unix()).await {
+                Ok((entries, complete)) => Some(ServerMsg::History {
                     rid,
                     hid,
                     entries: entries
@@ -1152,9 +1170,43 @@ async fn handle_request(
                             payload: B64.encode(&e.payload),
                         })
                         .collect(),
+                    complete,
                 }),
                 Err(e) => err(rid, e),
             }
+        }
+
+        ClientMsg::HistoryRedact { rid, group, hid, seq } => {
+            if let Err(e) = require_member(app, &group, user).await {
+                return err(rid, e);
+            }
+            // An admin may redact anything in their circle; anyone else only
+            // what they wrote. `redact_history` decides both inside one
+            // predicate, and answers "not yours" exactly like "not there".
+            let admin = require_admin(app, &group, user).await.is_ok();
+            match app.store.redact_history(&group, &hid, seq, user, admin).await {
+                Ok(_) => Some(ServerMsg::Ok { rid, seq: None }),
+                Err(e) => err(rid, e),
+            }
+        }
+
+        ClientMsg::HistoryCounts { rid, group, logs } => {
+            if let Err(e) = require_member(app, &group, user).await {
+                return err(rid, e);
+            }
+            let now = now_unix();
+            let mut counts = Vec::with_capacity(logs.len());
+            for cursor in logs.into_iter().take(crate::proto::HISTORY_PAGE_MAX as usize) {
+                match app
+                    .store
+                    .history_count(&group, &cursor.hid, cursor.after_ts, user, now)
+                    .await
+                {
+                    Ok(n) => counts.push(crate::proto::HistoryCountOut { hid: cursor.hid, n }),
+                    Err(e) => return err(rid, e),
+                }
+            }
+            Some(ServerMsg::HistoryCount { rid, counts })
         }
 
         ClientMsg::HistoryPrune { rid, group, hid, before_ts } => {

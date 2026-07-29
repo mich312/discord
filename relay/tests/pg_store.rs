@@ -3,7 +3,7 @@
 //! Each run uses uniquely-named rows so reruns don't collide.
 
 use relay::pg::PgStore;
-use relay::store::{RegisterOutcome, Store, StoredWelcome};
+use relay::store::{HistoryPage, RegisterOutcome, Store, StoredWelcome};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -193,25 +193,80 @@ async fn history_log_orders_expires_and_prunes() {
     let group = unique("g");
     s.create_group(&group, "alice").await.unwrap();
 
-    assert_eq!(s.append_history(&group, "h1", 10, None, b"one".to_vec()).await.unwrap(), 1);
-    assert_eq!(s.append_history(&group, "h1", 20, Some(50), b"two".to_vec()).await.unwrap(), 2);
-    assert_eq!(s.append_history(&group, "h2", 30, None, b"other".to_vec()).await.unwrap(), 1);
-    assert!(s.append_history(&unique("missing"), "h1", 0, None, b"x".to_vec()).await.is_err());
+    assert_eq!(s.append_history(&group, "h1", "alice", 10, None, b"one".to_vec()).await.unwrap(), 1);
+    assert_eq!(s.append_history(&group, "h1", "alice", 20, Some(50), b"two".to_vec()).await.unwrap(), 2);
+    assert_eq!(s.append_history(&group, "h2", "alice", 30, None, b"other".to_vec()).await.unwrap(), 1);
+    assert!(s.append_history(&unique("missing"), "h1", "alice", 0, None, b"x".to_vec()).await.is_err());
 
-    let all = s.history_after(&group, "h1", 0, 40).await.unwrap();
+    let all = page_after(&s, &group, "h1", 0, 40).await;
     assert_eq!(all.len(), 2);
     assert_eq!(all[0].payload, b"one".to_vec());
-    assert_eq!(s.history_after(&group, "h1", 1, 40).await.unwrap().len(), 1);
+    assert_eq!(page_after(&s, &group, "h1", 1, 40).await.len(), 1);
 
     // Expired entries are deleted on read; seqs keep counting afterwards.
-    assert_eq!(s.history_after(&group, "h1", 0, 60).await.unwrap().len(), 1);
-    assert_eq!(s.append_history(&group, "h1", 70, None, b"three".to_vec()).await.unwrap(), 3);
+    assert_eq!(page_after(&s, &group, "h1", 0, 60).await.len(), 1);
+    assert_eq!(s.append_history(&group, "h1", "alice", 70, None, b"three".to_vec()).await.unwrap(), 3);
 
     s.prune_history(&group, "h1", 70).await.unwrap();
-    let left = s.history_after(&group, "h1", 0, 0).await.unwrap();
+    let left = page_after(&s, &group, "h1", 0, 0).await;
     assert_eq!(left.len(), 1);
     assert_eq!(left[0].payload, b"three".to_vec());
-    assert_eq!(s.history_after(&group, "h2", 0, 0).await.unwrap().len(), 1, "other log untouched");
+    assert_eq!(page_after(&s, &group, "h2", 0, 0).await.len(), 1, "other log untouched");
+}
+
+async fn page_after(
+    s: &PgStore,
+    group: &str,
+    hid: &str,
+    from: u64,
+    now: u64,
+) -> Vec<relay::store::HistoryEntry> {
+    s.history_page(group, hid, HistoryPage::After { after: from, limit: 100 }, now)
+        .await
+        .unwrap()
+        .0
+}
+
+/// The paging, counting and redaction contract, against real SQL. The
+/// memory store asserts the same shapes; this is where the LIMIT/ORDER and
+/// the authorship predicate are actually exercised.
+#[tokio::test]
+async fn history_pages_counts_and_redacts() {
+    let s = require_store!();
+    let group = unique("g");
+    s.create_group(&group, "alice").await.unwrap();
+    for i in 1..=5u64 {
+        let author = if i % 2 == 0 { "bob" } else { "alice" };
+        s.append_history(&group, "h1", author, i, None, vec![i as u8]).await.unwrap();
+    }
+
+    // Newest page first, returned ascending however the query ordered it.
+    let (newest, complete) = s
+        .history_page(&group, "h1", HistoryPage::Before { before: i64::MAX as u64, limit: 2 }, 0)
+        .await
+        .unwrap();
+    assert_eq!(newest.iter().map(|e| e.seq).collect::<Vec<_>>(), vec![4, 5]);
+    assert!(!complete);
+
+    let (oldest, complete) = s
+        .history_page(&group, "h1", HistoryPage::Before { before: 4, limit: 10 }, 0)
+        .await
+        .unwrap();
+    assert_eq!(oldest.iter().map(|e| e.seq).collect::<Vec<_>>(), vec![1, 2, 3]);
+    assert!(complete, "the page reached the start of the log");
+
+    // Counts skip the caller's own entries.
+    assert_eq!(s.history_count(&group, "h1", 0, "alice", 0).await.unwrap(), 2);
+    assert_eq!(s.history_count(&group, "h1", 2, "alice", 0).await.unwrap(), 1);
+
+    // Redaction is authorship-scoped, and identical for "not yours" and
+    // "not there".
+    assert!(!s.redact_history(&group, "h1", 2, "alice", false).await.unwrap());
+    assert!(!s.redact_history(&group, "h1", 99, "alice", false).await.unwrap());
+    assert!(s.redact_history(&group, "h1", 1, "alice", false).await.unwrap());
+    assert!(s.redact_history(&group, "h1", 2, "carol", true).await.unwrap());
+    let left = page_after(&s, &group, "h1", 0, 0).await;
+    assert_eq!(left.iter().map(|e| e.seq).collect::<Vec<_>>(), vec![3, 4, 5]);
 }
 
 #[tokio::test]

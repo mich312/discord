@@ -46,14 +46,17 @@
 //                                   on (sender, ts) and the sender is the
 //                                   authenticated MLS sender, so an edit can
 //                                   only ever touch its author's message —
-//                                   no separate ACL needed. Not replayed into
-//                                   kept history: the sealed original stands
-//                                   (stated in the UI), same as reactions
+//                                   no separate ACL needed. The live half of
+//                                   a log entry the sender also writes, and
+//                                   carries that entry's own `ts` so the two
+//                                   are one event rather than two
 //   {k:'del', ch, to:{ts}}        — tombstone one of MY OWN lines: same
-//                                   (sender, ts) self-scoping as edit. A
-//                                   tombstone for live/future readers, not a
-//                                   redaction — devices that already saw it,
-//                                   and the kept-history copy, keep the text
+//                                   (sender, ts) self-scoping as edit. The
+//                                   tombstone is what readers fold over the
+//                                   line; removing the original entry from
+//                                   the relay is a separate authorized
+//                                   request. Neither reaches a device that
+//                                   already read it
 //   {k:'type', ch}                — ephemeral typing signal: the sender is
 //                                   composing in channel `ch` right now.
 //                                   Same discipline as presence — fanned out
@@ -73,12 +76,22 @@ import { applyVerified, applyMismatch, retireMismatch } from './trust.js';
 import {
   generateHistoryId,
   generateHistoryKey,
-  messageFingerprint,
   openBackup,
-  openHistoryEntry,
+  openLogEntry,
   sealBackup,
-  sealHistoryEntry,
+  sealLogEntry,
+  verifyEntries,
 } from './history.js';
+import {
+  addEntries,
+  addLocalEntry,
+  addSystemMessage,
+  createChannelLog,
+  messageId,
+  pruneLog,
+  renderLog,
+} from './log.js';
+import { keyDirectory, mergeKeyDirectory } from './keys.js';
 import { VoiceManager } from './voice.js';
 import {
   b64url,
@@ -122,11 +135,24 @@ import {
 // here keep working; they now live beside the reducer that uses them.
 export { callChatChannel, describeRetention, isCallChat, messageTs } from './envelope.js';
 
-/** How many superseded kept-history keys a channel carries for reading.
-    Each removal adds one; the cap stops the metadata growing without bound
-    in a circle with heavy churn, at the cost of the oldest entries becoming
-    unreadable — which auto-delete would have reclaimed anyway. */
-const MAX_ARCHIVED_HISTORY_KEYS = 8;
+/** Superseded room keys a channel carries for reading.
+    Every removal mints a new key and archives the old one. There is no cap:
+    when the relay's log was a convenience copy, dropping the ninth-oldest
+    key cost a little scrollback nobody was promised. It is now the only
+    copy of the conversation, so forgetting a key destroys the messages it
+    opens — a circle with heavy churn would silently lose its own past.
+    Keys are 32 bytes; a hundred removals is three kilobytes of backup. */
+const HISTORY_PAGE = 50;
+/** Cache key for one channel's working copy. The separator cannot occur in
+    either half — channel names are slugged and circle ids are base64url. */
+const LOG_SEP = '\u0000';
+const logKey = (serverId, channel) => `${serverId}${LOG_SEP}${channel}`;
+
+/** Every key that might open an entry in this channel: the current one,
+    the ones a removal superseded, and any alternate log's. Reads try them
+    all — see `mergeChanKeys` for why a channel can have more than one. */
+const channelKeys = (meta) =>
+  [meta?.hkey, ...(meta?.hkeys ?? []), ...(meta?.alts ?? []).map((a) => a?.hkey)].filter(Boolean);
 const KP_TOPUP = 2; // fresh KeyPackages published per connect
 const INVITE_TTL_SECONDS = 7 * 24 * 3600;
 // Typing signals: readers treat one as stale ~6s after it was sent, and a
@@ -155,6 +181,12 @@ export class Controller {
     this.relay = null;
     this.servers = new Map(); // id -> record
     this.me = null;
+    // `${server}\u0000${channel}` -> channel log. In memory for the
+    // session and never written to disk: the relay's log is the
+    // conversation, and this is the working copy of the pages we have
+    // fetched. A reload re-reads it, which is what makes a fresh device
+    // and a two-year-old one show the same room.
+    this.logs = new Map();
     // §1.1's fourth part: tell a permanently forked circle apart from the
     // ordinary undecryptable blob. In memory on purpose — see fork.js.
     this.forks = new ForkWatch();
@@ -385,6 +417,11 @@ export class Controller {
               }
             });
           this.refreshRoles(record.id);
+          // The roster is the only trustworthy source for who holds which
+          // key, and it is what log-entry signatures are checked against.
+          this.refreshKeyDirectory(record).catch((e) =>
+            console.warn(`key directory ${record.id}: ${e.message}`)
+          );
         }
         // A fresh sign-in has an identity but no circles: pull the
         // encrypted backup (if one was parked) and restore what this
@@ -417,8 +454,8 @@ export class Controller {
         // device saw live and what senders parked (deduplicated), and is
         // what populates a just-restored device.
         for (const record of this.servers.values()) {
-          this.backfillHistory(record).catch((e) =>
-            console.warn(`history backfill ${record.id}: ${e.message}`)
+          this.catchUpLogs(record).catch((e) =>
+            console.warn(`log catch-up ${record.id}: ${e.message}`)
           );
         }
         // One-shot per session: rebroadcast our own view of each circle's
@@ -526,7 +563,6 @@ export class Controller {
       overview: prior?.overview,
       notices: prior?.notices ?? [],
       seen: prior?.seen ?? {},
-      hcursor: prior?.hcursor ?? {},
       verified: prior?.verified,
       verifiedSn: prior?.verifiedSn,
       mismatched: prior?.mismatched,
@@ -553,7 +589,7 @@ export class Controller {
     this.dispatch({ type: 'servers', servers: this.snapshotServers() });
     await this.relay.request({ t: 'subscribe', group, after: msg.after });
     this.refreshRoles(group);
-    this.backfillHistory(record).catch((e) => console.warn(`history: ${e.message}`));
+    this.catchUpLogs(record).catch((e) => console.warn(`log catch-up: ${e.message}`));
     this.scheduleBackup();
   }
 
@@ -651,8 +687,10 @@ export class Controller {
           );
         }
         // A membership change is when a key can enter or re-enter the group,
-        // so re-check every badge against the key it was granted for.
+        // so re-check every badge against the key it was granted for — and
+        // pick up the joiner's key, so their log entries can be attributed.
         await this.revalidateVerified(record);
+        await this.refreshKeyDirectory(record);
         // Every epoch change kills parked GroupInfo blobs; refresh ours.
         await this.refreshInvites(record);
         this.refreshRoles(record.id);
@@ -706,35 +744,61 @@ export class Controller {
   async runEffects(record, effects) {
     for (const e of effects) {
       switch (e.t) {
+        // The live half of the log. Every one of these is the same event
+        // the sender also wrote to the relay, carrying the same author and
+        // the same timestamp — so when the log page for it arrives later,
+        // the fold collapses the two into one rather than applying it
+        // twice. MLS already authenticated the sender, which is why these
+        // enter the fold as 'signed' without a second signature check.
         case 'storeMessage':
-          await this.storeMessage(e.message);
+          this.applyLiveEntry(e.message.server, e.message.channel, {
+            k: e.message.file ? 'file' : e.message.game ? 'game' : 'chat',
+            sender: e.message.sender,
+            ts: e.message.ts,
+            ...(e.message.file
+              ? { file: e.message.file }
+              : e.message.game
+                ? { game: e.message.game }
+                : { text: e.message.text }),
+            ...(e.message.reply ? { reply: e.message.reply } : {}),
+          });
+          this.dispatch({ type: 'newMessage', message: e.message });
           break;
         case 'systemMessage':
-          await this.addSystemMessage(e.server, e.text, e.channel);
+          this.addSystemMessage(e.server, e.text, e.channel);
           break;
         case 'reaction':
-          await this.applyReaction(e.server, e.channel, e.target, e.emo, e.op, e.by);
+          this.applyLiveEntry(e.server, e.channel, {
+            k: 'react',
+            sender: e.by,
+            ts: e.at,
+            to: e.target,
+            emo: e.emo,
+            op: e.op === 'del' ? 'del' : 'add',
+          });
           break;
         case 'editMessage':
-          await this.db.msgPatch(e.server, e.channel, e.sender, e.ts, (m) =>
-            m.deleted ? m : { ...m, text: e.text, edited: true }
-          );
+          this.applyLiveEntry(e.server, e.channel, {
+            k: 'edit',
+            sender: e.sender,
+            ts: e.at,
+            to: { ts: e.ts },
+            text: e.text,
+          });
           break;
         case 'deleteMessage':
-          // Strip the body to a tombstone; reactions go with it.
-          await this.db.msgPatch(e.server, e.channel, e.sender, e.ts, (m) => ({
-            sender: m.sender,
-            server: m.server,
-            channel: m.channel,
-            ts: m.ts,
-            deleted: true,
-          }));
+          this.applyLiveEntry(e.server, e.channel, {
+            k: 'del',
+            sender: e.sender,
+            ts: e.at,
+            to: { ts: e.ts },
+          });
           break;
         case 'renameMessages':
-          await this.db.msgsRename(e.server, e.from, e.to);
+          this.renameChannelLog(e.server, e.from, e.to);
           break;
         case 'deleteMessages':
-          await this.db.msgsDelete(e.server, e.channel);
+          this.forgetChannelLog(e.server, e.channel);
           break;
         case 'applyRetention':
           await this.applyRetention(record, e.channel);
@@ -761,9 +825,9 @@ export class Controller {
           await this.voice.leave();
           break;
         case 'backfillHistory':
-          // Fire-and-forget by design: a history fetch must never hold up
-          // applying the rest of the log.
-          this.backfillHistory(record).catch((err) => console.warn(`history: ${err.message}`));
+          // Fire-and-forget by design: a log fetch must never hold up
+          // applying the rest of the MLS stream.
+          this.catchUpLogs(record).catch((err) => console.warn(`log catch-up: ${err.message}`));
           break;
         case 'backup':
           this.scheduleBackup();
@@ -794,6 +858,9 @@ export class Controller {
       lastSeq: 0,
       joinedAt: Date.now(),
     };
+    // Every channel has a room key from the moment it exists — there is no
+    // other place its messages could live.
+    this.ensureChannelKeys(record, 'general');
     this.servers.set(id, record);
     await this.db.serverPut(record);
     this.dispatch({ type: 'servers', servers: this.snapshotServers() });
@@ -866,7 +933,12 @@ export class Controller {
     if (!ch || record.channels.includes(ch)) return;
     record.channels.push(ch);
     this.clearChannelDeleted(record, ch);
+    // Mint the room key with the room, so the first message written into it
+    // has somewhere to live. Doing it here rather than lazily also means one
+    // author, so no two members can mint competing keys for a new channel.
+    this.ensureChannelKeys(record, ch);
     await this.sendContent(serverId, { k: 'chan', ch });
+    await this.sendContent(serverId, { k: 'chanset', ch, meta: record.chanMeta[ch] });
     // The `chan` event above is dropped by any peer that doesn't yet see us
     // as an admin (stale role cache, or a global admin who is only a circle
     // member). Follow it with a meta snapshot so the ungated union repairs
@@ -877,12 +949,17 @@ export class Controller {
     this.scheduleBackup();
   }
 
-  /** Change a channel's settings: topic, auto-delete (retention, seconds),
-      and whether the channel keeps encrypted history for joiners. The UI
-      gates this to admins; inside the group it is a visible, announced
-      change like channel creation — MLS can't enforce roles, so the
-      roster's own eyes are the enforcement. */
-  async setChannelSettings(serverId, channel, { topic, retention, history }) {
+  /** Change a channel's settings: topic and auto-delete (retention, in
+      seconds). The UI gates this to admins; inside the group it is a
+      visible, announced change like channel creation — MLS can't enforce
+      roles, so the roster's own eyes are the enforcement.
+
+      There is no longer a switch for whether the channel keeps history.
+      Every channel does: the relay's log is where messages live, so a
+      channel without a room key would be one nobody could read tomorrow.
+      Retention is the lever that remains, and it is the real one — it is
+      what bounds how far back a leaked room key ever reaches. */
+  async setChannelSettings(serverId, channel, { topic, retention }) {
     const record = this.servers.get(serverId);
     const prev = record.chanMeta?.[channel] ?? {};
     const meta = { ...prev };
@@ -895,23 +972,9 @@ export class Controller {
       if (retention) meta.retention = retention;
       else delete meta.retention;
     }
-    if (history !== undefined) {
-      if (history && !meta.hid) {
-        // Turning history on mints the channel's key. From here on, every
-        // message is also sealed under it and parked on the relay; anyone
-        // who joins gets the key with the metadata and can read back.
-        meta.hid = generateHistoryId();
-        meta.hkey = generateHistoryKey();
-      } else if (!history && meta.hid) {
-        // Off: stop writing, drop the key, and ask the relay to delete the
-        // ciphertext (server-enforced deletion — honest-weak, but the key
-        // is gone from future meta shares either way).
-        this.relay
-          .request({ t: 'history_prune', group: serverId, hid: meta.hid, before_ts: Number.MAX_SAFE_INTEGER })
-          .catch((e) => console.warn(`history wipe: ${e.message}`));
-        delete meta.hid;
-        delete meta.hkey;
-      }
+    if (!meta.hid || !meta.hkey) {
+      meta.hid = meta.hid ?? generateHistoryId();
+      meta.hkey = meta.hkey ?? generateHistoryKey();
     }
 
     record.chanMeta = { ...(record.chanMeta ?? {}), [channel]: meta };
@@ -934,7 +997,7 @@ export class Controller {
         })
         .catch((e) => console.warn(`history prune: ${e.message}`));
     }
-    await this.applyRetention(record, channel);
+    this.applyRetention(record, channel);
     await this.db.serverPut(record);
     this.dispatch({ type: 'servers', servers: this.snapshotServers() });
     this.dispatch({ type: 'refreshMessages' });
@@ -993,7 +1056,8 @@ export class Controller {
     // meant every later message from a device minutes behind us arrived
     // already "seen" and never counted unread. Anchor on the newest message
     // this channel actually holds, falling back to now for an empty room.
-    const newest = (await this.db.msgsFor(record.id, channel))
+    const log = this.logs.get(logKey(record.id, channel));
+    const newest = renderLog(log ?? createChannelLog())
       .filter((m) => !m.system)
       .reduce((max, m) => Math.max(max, Number(m.ts) || 0), 0);
     const anchor = newest || Date.now();
@@ -1001,21 +1065,58 @@ export class Controller {
     await this.db.serverPut(record);
   }
 
-  /** Per-room digest for the home base: unread-since-last-look and the
-      latest line, straight from this device's own store. */
+  /**
+   * How many entries each of a circle's logs has gained since this device
+   * last looked, asked of the relay rather than counted locally.
+   *
+   * The relay already knows how many entries a log holds, when each landed
+   * and who appended it — that is the metadata it cannot help seeing. So
+   * counting them there costs no privacy that was not already spent, and
+   * it is the only way a device that holds no messages can render an
+   * unread badge without downloading and decrypting every channel first.
+   * Your own entries never count: they are read by definition.
+   */
+  async fetchUnread(record) {
+    const logs = [];
+    for (const channel of record.channels ?? []) {
+      const meta = record.chanMeta?.[channel];
+      if (!meta?.hid) continue;
+      logs.push({
+        channel,
+        hid: meta.hid,
+        after_ts: Math.floor(seenFloor(record, channel) / 1000),
+      });
+    }
+    if (!logs.length) return {};
+    try {
+      const reply = await this.relay.request({
+        t: 'history_counts',
+        group: record.id,
+        logs: logs.map(({ hid, after_ts }) => ({ hid, after_ts })),
+      });
+      const byHid = Object.fromEntries((reply.counts ?? []).map((c) => [c.hid, c.n]));
+      return Object.fromEntries(logs.map((l) => [l.channel, byHid[l.hid] ?? 0]));
+    } catch (e) {
+      console.warn(`unread ${record.id}: ${e.message}`);
+      return {};
+    }
+  }
+
+  /** Per-room digest for the home base: unread-since-last-look, and the
+      latest line for the rooms whose pages this session has already read.
+      The count comes from the relay; the preview needs the room key, so a
+      room this device has not opened yet shows a count without a quote. */
   async channelDigest(serverId) {
     const record = this.servers.get(serverId);
     if (!record) return [];
-    const out = [];
-    for (const channel of record.channels) {
-      const msgs = (await this.db.msgsFor(serverId, channel))
-        .filter((m) => !m.system)
-        .sort((a, b) => a.ts - b.ts);
-      const unread = countUnread(msgs, seenFloor(record, channel), this.me);
+    const unreads = await this.fetchUnread(record);
+    return record.channels.map((channel) => {
+      const log = this.logs.get(logKey(serverId, channel));
+      const msgs = log ? renderLog(log).filter((m) => !m.system) : [];
       const last = msgs.at(-1);
-      out.push({
+      return {
         channel,
-        unread,
+        unread: unreads[channel] ?? 0,
         last: last
           ? {
               sender: last.sender,
@@ -1023,48 +1124,41 @@ export class Controller {
               ts: last.ts,
             }
           : null,
-      });
-    }
-    return out;
+      };
+    });
   }
 
   /** Unread totals per circle, for the rail. Without this the rail is pure
       identity: nothing on screen says a circle you are not looking at has
       moved, so anyone in more than two circles has to click through them to
-      find out — which is what made the multi-circle model unusable.
-
-      One pass over every circle rather than one call per tile: the read is
-      device-local IndexedDB, but it is O(channels) transactions and the
-      callers refresh it on every arriving message. */
+      find out — which is what made the multi-circle model unusable. */
   async circleUnreads() {
     const out = {};
     for (const record of this.servers.values()) {
-      let unread = 0;
-      for (const channel of record.channels) {
-        unread += countUnread(await this.db.msgsFor(record.id, channel), seenFloor(record, channel), this.me);
-      }
-      out[record.id] = unread;
+      const per = await this.fetchUnread(record);
+      out[record.id] = Object.values(per).reduce((n, v) => n + v, 0);
     }
     return out;
   }
 
-  /** Search every message this device holds, across every circle.
-      Necessarily device-local: the relay stores ciphertext and cannot index
-      it, so the answer is exactly what this device has decrypted and kept —
-      a phone that joined last week will not find last year. That limit is
-      stated in the UI rather than hidden.
-
-      A linear scan, deliberately: an inverted index would have to live in
-      the same IndexedDB as the plaintext it indexes, buying speed at the
-      cost of a second copy of every message to keep consistent and to purge
-      on retention and on leave. At the scale this app is for, the scan is
-      the cheaper correctness story. */
+  /**
+   * Search the messages this session has loaded, across every circle.
+   *
+   * Necessarily client-side: the relay holds ciphertext and cannot index
+   * it. What changed with the log is the *scope* — this used to search
+   * everything the device had ever kept, and now it searches what has been
+   * read back into memory, which is a room's most recent page until you
+   * scroll further. Narrower, and the UI says so rather than implying the
+   * whole archive was consulted.
+   */
   async searchMessages(query, opts = {}) {
     if (String(query ?? '').trim().length < MIN_QUERY) return { hits: [], truncated: false };
     const rows = [];
     for (const record of this.servers.values()) {
       for (const channel of record.channels) {
-        for (const message of await this.db.msgsFor(record.id, channel)) {
+        const log = this.logs.get(logKey(record.id, channel));
+        if (!log) continue;
+        for (const message of renderLog(log)) {
           rows.push({ server: record.id, channel, message });
         }
       }
@@ -1077,11 +1171,15 @@ export class Controller {
     };
   }
 
-  /** Local half of auto-delete: drop this device's copies past retention. */
-  async applyRetention(record, channel) {
+  /** Reader half of auto-delete: drop what is past retention from the
+      working copy. The relay enforces the same expiry on the log itself,
+      which is where it actually bites — this only stops a page fetched
+      before the cutoff from lingering on screen. */
+  applyRetention(record, channel) {
     const retention = record.chanMeta?.[channel]?.retention;
-    if (!retention) return;
-    await this.db.msgsPrune(record.id, channel, Date.now() - retention * 1000);
+    if (!retention) return 0;
+    const log = this.logs.get(logKey(record.id, channel));
+    return log ? pruneLog(log, Date.now() - retention * 1000) : 0;
   }
 
   /** Create a named voice room. Like text rooms, the name travels inside the
@@ -1119,7 +1217,7 @@ export class Controller {
       record.chanMeta = { ...record.chanMeta, [ch]: record.chanMeta[from] };
       delete record.chanMeta[from];
     }
-    await this.db.msgsRename(serverId, from, ch);
+    this.renameChannelLog(serverId, from, ch);
     await this.sendContent(serverId, { k: 'chan-ren', ch: from, to: ch });
     await this.addSystemMessage(serverId, `#${from} renamed to #${ch}`, ch);
     await this.db.serverPut(record);
@@ -1139,7 +1237,7 @@ export class Controller {
       record.chanMeta = { ...record.chanMeta };
       delete record.chanMeta[channel];
     }
-    await this.db.msgsDelete(serverId, channel);
+    this.forgetChannelLog(serverId, channel);
     await this.sendContent(serverId, { k: 'chan-del', ch: channel });
     await this.db.serverPut(record);
     this.dispatch({ type: 'servers', servers: this.snapshotServers() });
@@ -1182,70 +1280,55 @@ export class Controller {
 
   async sendChat(serverId, channel, text, reply) {
     // The timestamp is the sender's, carried on the wire, so every device —
-    // and the kept-history log — stamps this message identically. Otherwise
-    // each recipient's own receive-clock ts would (a) order messages
-    // differently per member and (b) defeat the history dedup, which keys on
-    // ts, duplicating every backfilled line. See `messageTs`.
-    //
-    // Store-then-send: the user's own line renders immediately and, if the
-    // network send fails (offline, half-open socket), it stays visible as
-    // *failed* with a retry — instead of silently vanishing from the input.
+    // and the channel log — stamps this message identically. Otherwise each
+    // recipient's own receive-clock ts would (a) order messages differently
+    // per member and (b) defeat the dedup between the live MLS copy and the
+    // log entry, which keys on (sender, ts). See `messageTs`.
     const ts = Date.now();
     const quote = normalizeReply(reply);
-    await this.storeMessage({
-      server: serverId,
-      channel,
-      sender: this.me,
-      text,
-      ts,
-      pending: true,
-      ...(quote ? { reply: quote } : {}),
-    });
-    // Sending a line means I've stopped composing — drop my own typing
-    // signal so a peer's "is typing" clears the instant the message lands.
     await this.deliverChat(serverId, channel, text, ts, quote);
   }
 
-  /** Network half of sendChat; also the retry path for a failed line. */
+  /** Network half of sendChat; also the retry path for a failed line.
+      Two writes, deliberately: the log entry is the message (it is what
+      every later reader gets), the MLS send is what makes it arrive now. */
   async deliverChat(serverId, channel, text, ts, reply) {
     const quote = normalizeReply(reply);
-    try {
-      await this.sendContent(serverId, {
-        k: 'chat',
-        ch: channel,
-        text,
-        ts,
-        ...(quote ? { reply: quote } : {}),
-      });
-    } catch (e) {
-      await this.db.msgPatch(serverId, channel, this.me, ts, (m) => ({
-        ...m,
-        pending: false,
-        failed: true,
-      }));
-      this.dispatch({ type: 'refreshMessages' });
-      throw e;
-    }
-    await this.db.msgPatch(serverId, channel, this.me, ts, ({ pending, failed, ...m }) => m);
-    this.dispatch({ type: 'refreshMessages' });
-    this.appendHistory(serverId, channel, {
-      server: serverId,
-      channel,
-      sender: this.me,
+    const seq = await this.appendLog(serverId, channel, {
+      k: 'chat',
+      ts,
+      text,
+      ...(quote ? { reply: quote } : {}),
+    });
+    this.markLocalState(serverId, channel, ts, { failed: seq === null });
+    if (seq === null) throw new Error('the message could not be written to the circle');
+    await this.sendContent(serverId, {
+      k: 'chat',
+      ch: channel,
       text,
       ts,
       ...(quote ? { reply: quote } : {}),
+    }).catch((e) => {
+      // The log has it, so it is not lost and everyone will see it on their
+      // next read — only the instant delivery failed. Not worth a retry
+      // affordance that would double-write the log.
+      console.warn(`live send #${channel}: ${e.message}`);
     });
   }
 
-  /** Retry a message that failed to send (still stored locally). */
-  async retryMessage(serverId, channel, message) {
-    await this.db.msgPatch(serverId, channel, this.me, message.ts, (m) => ({
-      ...m,
-      pending: true,
-      failed: false,
-    }));
+  /** Flag a line this device wrote — failed, pending — on the working copy.
+      Presentation only: the log entry itself carries no such field. */
+  markLocalState(serverId, channel, ts, patch) {
+    const log = this.logs.get(logKey(serverId, channel));
+    const message = log?.base.get(messageId(this.me, ts));
+    if (!message) return;
+    Object.assign(message, patch);
     this.dispatch({ type: 'refreshMessages' });
+  }
+
+  /** Retry a line whose log append failed. */
+  async retryMessage(serverId, channel, message) {
+    this.markLocalState(serverId, channel, message.ts, { failed: false });
     await this.deliverChat(serverId, channel, message.text, message.ts, message.reply);
   }
 
@@ -1256,10 +1339,8 @@ export class Controller {
     const ref = normalizeGameRef(game);
     if (!ref) return;
     const ts = Date.now();
+    await this.appendLog(serverId, channel, { k: 'game', ts, game: ref });
     await this.sendContent(serverId, { k: 'game', ch: channel, game: ref, ts });
-    const message = { server: serverId, channel, sender: this.me, game: ref, ts };
-    await this.storeMessage(message);
-    this.appendHistory(serverId, channel, message);
   }
 
   /** Ephemeral rich presence: tell the circle which game I'm in (or that
@@ -1343,72 +1424,88 @@ export class Controller {
     this.dispatch({ type: 'servers', servers: this.snapshotServers() });
   }
 
-  /** Toggle my reaction on one message. The reaction set lives on the
-      stored message; deduped per (member, emoji). */
+  /** Toggle my reaction on one message. Written to the log like anything
+      else: a reaction that lived only on the devices that were online would
+      disappear on reload now that the log is the conversation. */
   async react(serverId, channel, target, emo) {
     const record = this.servers.get(serverId);
     if (!record) return;
-    const mine = await this.applyReaction(serverId, channel, target, emo, 'toggle', this.me);
-    this.dispatch({ type: 'refreshMessages' });
+    const log = this.channelLog(serverId, channel);
+    const current = renderLog(log).find(
+      (m) => m.sender === target.sender && m.ts === target.ts
+    );
+    const mine = !current?.reacts?.[emo]?.includes(this.me);
+    const op = mine ? 'add' : 'del';
+    const at = Date.now();
+    await this.appendLog(serverId, channel, {
+      k: 'react',
+      ts: at,
+      to: { sender: target.sender, ts: target.ts },
+      emo,
+      op,
+    });
     await this.sendContent(serverId, {
       k: 'react',
       ch: channel,
       to: { sender: target.sender, ts: target.ts },
       emo,
-      op: mine ? 'add' : 'del',
+      op,
+      ts: at,
     });
   }
 
-  /** Mutate a stored message's reaction map. Returns whether `who` ends up
-      reacted (for toggle senders). Not written to kept-history — reactions
-      are decoration, the message is the record. */
-  async applyReaction(serverId, channel, target, emo, op, who) {
-    let present = false;
-    await this.db.msgPatch(serverId, channel, target.sender, target.ts, (m) => {
-      const reacts = { ...(m.reacts ?? {}) };
-      const set = new Set(reacts[emo] ?? []);
-      const want = op === 'toggle' ? !set.has(who) : op === 'add';
-      want ? set.add(who) : set.delete(who);
-      present = want;
-      if (set.size) reacts[emo] = [...set];
-      else delete reacts[emo];
-      return { ...m, reacts };
-    });
-    return present;
-  }
-
-  /** Edit one of my own lines. Optimistic: patch locally, then fan out an
-      `edit` envelope keyed on the message ts. Only text messages are
-      editable (a file/game card has nothing to retype). Kept history is
-      left alone — the sealed original stands, and the UI says so. */
+  /** Edit one of my own lines. Only text messages are editable (a file or
+      game card has nothing to retype). The edit is an entry in the log, so
+      it survives a reload and reaches a device that was not online for it —
+      the sealed original stays in place beneath it, and readers fold the
+      newer entry over it. */
   async editMessage(serverId, channel, message, text) {
     const record = this.servers.get(serverId);
     if (!record || message.sender !== this.me) return;
     const next = String(text ?? '').trim();
     if (!next || next === message.text) return;
-    await this.db.msgPatch(serverId, channel, this.me, message.ts, (m) =>
-      m.deleted ? m : { ...m, text: next, edited: true }
-    );
-    this.dispatch({ type: 'refreshMessages' });
-    await this.sendContent(serverId, { k: 'edit', ch: channel, to: { ts: message.ts }, text: next });
+    const at = Date.now();
+    await this.appendLog(serverId, channel, {
+      k: 'edit',
+      ts: at,
+      to: { ts: message.ts },
+      text: next,
+    });
+    await this.sendContent(serverId, {
+      k: 'edit',
+      ch: channel,
+      to: { ts: message.ts },
+      text: next,
+      ts: at,
+    });
   }
 
-  /** Delete one of my own lines — a tombstone, not a redaction. Patches the
-      local copy to a stub and fans out a `del`; devices that already have
-      the line, and the kept-history copy, are untouched (the UI is explicit
-      that a delete can't reach back). */
+  /**
+   * Delete one of my own lines.
+   *
+   * Two things happen, and they do different jobs. The tombstone entry is
+   * what every reader folds over the original, so the line reads as deleted
+   * everywhere. The redaction asks the relay to drop the original entry's
+   * ciphertext, so somebody who joins tomorrow cannot simply read it with
+   * the room key — which a tombstone alone would not prevent, because the
+   * original would still be sitting in the log.
+   *
+   * The relay authorizes the redaction against the author it recorded when
+   * the entry was appended. What it cannot reach is a device that already
+   * fetched the line; the UI says so at the button.
+   */
   async deleteMessage(serverId, channel, message) {
     const record = this.servers.get(serverId);
     if (!record || message.sender !== this.me) return;
-    await this.db.msgPatch(serverId, channel, this.me, message.ts, (m) => ({
-      sender: m.sender,
-      server: m.server,
-      channel: m.channel,
-      ts: m.ts,
-      deleted: true,
-    }));
-    this.dispatch({ type: 'refreshMessages' });
-    await this.sendContent(serverId, { k: 'del', ch: channel, to: { ts: message.ts } });
+    const at = Date.now();
+    await this.appendLog(serverId, channel, { k: 'del', ts: at, to: { ts: message.ts } });
+    const hid = record.chanMeta?.[channel]?.hid;
+    if (hid && Number.isFinite(message.seq)) {
+      await this.relay
+        .request({ t: 'history_redact', group: serverId, hid, seq: message.seq })
+        .catch((e) => console.warn(`redact #${channel}: ${e.message}`));
+    }
+    await this.sendContent(serverId, { k: 'del', ch: channel, to: { ts: message.ts }, ts: at });
   }
 
   /** Answer the hub's next-event card. Keyed to the event timestamp, so
@@ -1425,123 +1522,272 @@ export class Controller {
     await this.sendContent(serverId, { k: 'rsvp', at, going: !!going });
   }
 
-  /** Sender-side write into the channel's encrypted relay history log —
-      only if this channel keeps history. Best-effort: the MLS message is
-      the message; the log is a convenience copy. */
-  appendHistory(serverId, channel, message) {
-    const meta = this.servers.get(serverId)?.chanMeta?.[channel];
-    if (!meta?.hkey || !meta?.hid) return;
-    const tsSecs = Math.floor(message.ts / 1000);
-    const entry = {
-      sender: message.sender,
-      ts: message.ts,
-      ...(message.file
-        ? { file: message.file }
-        : message.game
-          ? { game: message.game }
-          : { text: message.text }),
-      // A reply's quote rides into kept history too, so a joiner reading the
-      // channel back sees what each answer was answering.
-      ...(message.reply ? { reply: message.reply } : {}),
-    };
-    sealHistoryEntry(meta.hkey, entry)
-      .then((payload) =>
-        this.relay.request({
-          t: 'history_append',
-          group: serverId,
-          hid: meta.hid,
-          ts: tsSecs,
-          expires_at: meta.retention ? tsSecs + meta.retention : null,
-          payload,
-        })
-      )
-      .catch((e) => console.warn(`history append: ${e.message}`));
+  // === the channel log ====================================================
+  //
+  // The relay's per-channel log is the conversation. Everything below either
+  // writes an entry to it, reads a page back, or keeps the in-memory working
+  // copy in step. Nothing here touches IndexedDB: what a device holds is a
+  // cache of what the relay already has, and it dies with the tab.
+
+  /** The in-memory working copy of one channel, created on first touch. */
+  channelLog(serverId, channel) {
+    const key = logKey(serverId, channel);
+    let log = this.logs.get(key);
+    if (!log) {
+      log = createChannelLog();
+      this.logs.set(key, log);
+    }
+    return log;
   }
 
-  /** Pull new entries from every kept-history channel of `record`, decrypt
-      them with the channel keys, and store the ones this device doesn't
-      already have (deduplicated by content against live-received MLS
-      copies). This is what fills a joiner's or restored device's past. */
-  async backfillHistory(record) {
-    const chanMeta = record.chanMeta ?? {};
-    let restoredTotal = 0;
-    for (const [channel, meta] of Object.entries(chanMeta)) {
-      if (!meta?.hkey || !meta?.hid) continue;
-      const cursor = record.hcursor?.[meta.hid] ?? 0;
-      let reply;
-      try {
-        reply = await this.relay.request({
-          t: 'history_fetch',
-          group: record.id,
-          hid: meta.hid,
-          after: cursor,
-        });
-      } catch (e) {
-        console.warn(`history fetch #${channel}: ${e.message}`);
-        continue;
-      }
-      if (!reply.entries?.length) continue;
-      const existing = await this.db.msgsFor(record.id, channel);
-      const seen = new Set(existing.filter((m) => !m.system).map(messageFingerprint));
-      // Also key by (sender, ts): a line that was edited or deleted locally
-      // has a different body than its sealed original, so a content-only
-      // dedup would re-add that original from history — resurrecting a
-      // deleted line, or duplicating an edited one. The identity key blocks
-      // both; the edited/tombstoned local copy is the one that stands.
-      const known = new Set(existing.filter((m) => !m.system).map((m) => `${m.sender}:${m.ts}`));
-      const cutoff = meta.retention ? Date.now() - meta.retention * 1000 : 0;
-      let added = 0;
-      let maxSeq = cursor;
-      for (const e of reply.entries) {
-        maxSeq = Math.max(maxSeq, e.seq);
-        let entry;
-        // Current key first, then keys superseded by a removal — entries
-        // parked before a rotation are still legitimately readable.
-        for (const key of [meta.hkey, ...(meta.hkeys ?? [])]) {
-          try {
-            entry = await openHistoryEntry(key, e.payload);
-            break;
-          } catch {
-            /* try the next key */
-          }
+  forgetChannelLog(serverId, channel) {
+    this.logs.delete(logKey(serverId, channel));
+  }
+
+  forgetCircleLogs(serverId) {
+    for (const key of [...this.logs.keys()]) {
+      if (key.startsWith(`${serverId}${LOG_SEP}`)) this.logs.delete(key);
+    }
+  }
+
+  /** Sign log-entry bytes with this device's MLS identity key. */
+  async signEntry(bytes) {
+    return new Uint8Array(await this.crypto('sign', { bytes }));
+  }
+
+  /** Batch-verify entry signatures in the worker. */
+  verifyBatch = (items) => this.crypto('verifyEntries', { items });
+
+  /**
+   * Give `channel` a room key if it has none.
+   *
+   * Every channel has one now — the log is where messages live, so a
+   * channel without a key would be a channel nobody can read tomorrow.
+   * Minting is idempotent-ish rather than coordinated: two admins racing
+   * produce two keys, both of which readers keep (see `chanset` merging),
+   * so the loser's entries stay readable instead of being lost.
+   */
+  ensureChannelKeys(record, channel) {
+    const meta = record.chanMeta?.[channel];
+    if (meta?.hid && meta?.hkey) return null;
+    const next = {
+      ...(meta ?? {}),
+      hid: meta?.hid ?? generateHistoryId(),
+      hkey: meta?.hkey ?? generateHistoryKey(),
+    };
+    record.chanMeta = { ...(record.chanMeta ?? {}), [channel]: next };
+    return next;
+  }
+
+  /**
+   * Write one entry to a channel's log, and show it locally at once.
+   *
+   * The MLS message that carries the same content to whoever is online is
+   * sent separately: it is what makes the room feel live. This is what
+   * makes it durable, and it is the copy every later reader gets.
+   */
+  async appendLog(serverId, channel, entry) {
+    const record = this.servers.get(serverId);
+    if (!record) return;
+    const minted = this.ensureChannelKeys(record, channel);
+    const meta = record.chanMeta[channel];
+    if (minted) {
+      // A freshly minted key is no use to anyone who cannot read it: tell
+      // the roster before the first entry sealed under it lands.
+      await this.sendContent(serverId, { k: 'chanset', ch: channel, meta }).catch((e) =>
+        console.warn(`announce room key #${channel}: ${e.message}`)
+      );
+      await this.db.serverPut(record);
+      this.scheduleBackup();
+    }
+    const full = { sender: this.me, ...entry };
+    addLocalEntry(this.channelLog(serverId, channel), full, { server: serverId, channel });
+    this.dispatch({ type: 'refreshMessages' });
+    const tsSecs = Math.floor(full.ts / 1000);
+    try {
+      const payload = await sealLogEntry(meta.hkey, serverId, meta.hid, full, (bytes) =>
+        this.signEntry(bytes)
+      );
+      const sent = await this.relay.request({
+        t: 'history_append',
+        group: serverId,
+        hid: meta.hid,
+        ts: tsSecs,
+        expires_at: meta.retention ? tsSecs + meta.retention : null,
+        payload,
+      });
+      return sent.seq;
+    } catch (e) {
+      // The line is on screen but not in the log, which means it is not in
+      // the conversation. Say so rather than letting it look delivered.
+      console.warn(`log append #${channel}: ${e.message}`);
+      this.toast(`a message could not be saved to the circle: ${e.message}`);
+      return null;
+    }
+  }
+
+  /**
+   * Decrypt and authenticate a page of raw log entries.
+   *
+   * Two independent checks, in order. The room key says the entry belongs
+   * to this channel and nobody outside the roster wrote it; the signature
+   * says which member did. An entry that fails the first is skipped (a
+   * superseded key, or damage); one that fails the second is dropped
+   * outright by the fold — that is somebody with the room key writing in
+   * another member's name.
+   */
+  async openPage(record, channel, entries, hid = null) {
+    const meta = record.chanMeta?.[channel];
+    if (!meta?.hid) return [];
+    const keys = channelKeys(meta);
+    const opened = [];
+    for (const e of entries) {
+      let entry = null;
+      // Current key first, then keys superseded by a removal, then any
+      // alternate log's — entries parked before a rotation, or in a log
+      // this device does not write to, are still legitimately readable.
+      for (const key of keys) {
+        try {
+          entry = await openLogEntry(key, e.payload);
+          break;
+        } catch {
+          /* try the next key */
         }
-        if (!entry) continue; // no key opens it — damaged, or rotated past the cap
-        // Whitelist fields: an entry is authored by whoever holds the room
-        // key, so it must never override where it lands (server/channel)
-        // or dress itself up as a system line.
-        const gameRef = entry.game ? normalizeGameRef(entry.game) : null;
-        const message = {
-          server: record.id,
-          channel,
-          sender: String(entry.sender ?? ''),
-          ts: Number(entry.ts) || 0,
-          ...(entry.file
-            ? { file: entry.file }
-            : gameRef
-              ? { game: gameRef }
-              : { text: String(entry.text ?? '') }),
-          ...(normalizeReply(entry.reply) ? { reply: normalizeReply(entry.reply) } : {}),
-          fromHistory: true,
-        };
-        const id = `${message.sender}:${message.ts}`;
-        if (message.ts < cutoff || seen.has(messageFingerprint(message)) || known.has(id)) continue;
-        seen.add(messageFingerprint(message));
-        known.add(id);
-        await this.db.msgAdd(message);
-        added += 1;
       }
-      record.hcursor = { ...(record.hcursor ?? {}), [meta.hid]: maxSeq };
-      if (added > 0) {
-        restoredTotal += added;
-        await this.addSystemMessage(
-          record.id,
-          `${added} earlier message${added === 1 ? '' : 's'} restored from encrypted history — sealed by the channel key, senders not individually verified`,
-          channel
+      if (entry) opened.push({ seq: e.seq, entry });
+    }
+    const auths = await verifyEntries(
+      record.id,
+      hid ?? meta.hid,
+      opened.map((o) => o.entry),
+      keyDirectory(record),
+      this.verifyBatch
+    );
+    return opened.map((o, i) => ({ ...o, auth: auths[i] }));
+  }
+
+  /** One page of a channel, folded into the working copy. Returns how many
+      entries were new, and whether the log's start has been reached. */
+  async fetchPage(record, channel, { before, after = 0, limit = HISTORY_PAGE } = {}) {
+    const meta = record.chanMeta?.[channel];
+    if (!meta?.hid || !meta?.hkey) return { added: 0, complete: true };
+    const log = this.channelLog(record.id, channel);
+    let reply;
+    try {
+      reply = await this.relay.request({
+        t: 'history_fetch',
+        group: record.id,
+        hid: meta.hid,
+        after,
+        before: before ?? null,
+        limit,
+      });
+    } catch (e) {
+      console.warn(`log fetch #${channel}: ${e.message}`);
+      return { added: 0, complete: false };
+    }
+    const opened = await this.openPage(record, channel, reply.entries ?? []);
+    const added = addEntries(log, opened, { server: record.id, channel });
+    if (before !== undefined && reply.complete) log.complete = true;
+    return { added, complete: !!reply.complete };
+  }
+
+  /**
+   * Drain any alternate logs this channel has.
+   *
+   * A channel ends up with more than one log only when two members minted
+   * a key for it at the same moment (see `mergeChanKeys`), so this is
+   * normally a no-op. When it is not, the alternate holds real messages
+   * that would otherwise be invisible, so it is read once, whole, and
+   * folded in beside the primary — page cursors track the primary only.
+   */
+  async drainAlternateLogs(record, channel) {
+    const alts = record.chanMeta?.[channel]?.alts ?? [];
+    if (!alts.length) return;
+    const log = this.channelLog(record.id, channel);
+    for (const alt of alts) {
+      if (!alt?.hid) continue;
+      let after = 0;
+      for (let page = 0; page < 20; page++) {
+        let reply;
+        try {
+          reply = await this.relay.request({
+            t: 'history_fetch',
+            group: record.id,
+            hid: alt.hid,
+            after,
+            before: null,
+            limit: HISTORY_PAGE,
+          });
+        } catch (e) {
+          console.warn(`alternate log #${channel}: ${e.message}`);
+          break;
+        }
+        const entries = reply.entries ?? [];
+        if (!entries.length) break;
+        const opened = await this.openPage(record, channel, entries, alt.hid);
+        // Alternate entries keep the relay's seq for decryption but must
+        // not move the primary log's cursors, which page a different log.
+        addEntries(
+          log,
+          opened.map((o) => ({ ...o, seq: undefined })),
+          { server: record.id, channel }
         );
+        after = entries.at(-1).seq;
       }
     }
-    await this.db.serverPut(record);
-    if (restoredTotal > 0) this.dispatch({ type: 'refreshMessages' });
+  }
+
+  /** Forward catch-up across every channel of a circle: what landed while
+      this device was away, for the rooms it already has open. */
+  async catchUpLogs(record) {
+    let total = 0;
+    for (const channel of record.channels ?? []) {
+      const log = this.logs.get(logKey(record.id, channel));
+      // Never opened: it loads on demand, whole, when someone looks at it.
+      if (!log?.loaded) continue;
+      const { added } = await this.fetchPage(record, channel, { after: log.newest });
+      total += added;
+    }
+    if (total > 0) this.dispatch({ type: 'refreshMessages' });
+  }
+
+  /** Fold an entry that arrived live over MLS into the working copy.
+      MLS authenticated the sender, so it enters as 'signed'; it is marked
+      local so the relay's copy — which carries the real seq, and so is what
+      a redaction can name — supersedes it when the page arrives. */
+  applyLiveEntry(serverId, channel, entry) {
+    if (!entry.sender || !entry.ts) return;
+    addLocalEntry(this.channelLog(serverId, channel), entry, { server: serverId, channel });
+    this.dispatch({ type: 'refreshMessages' });
+  }
+
+  /** Move a channel's working copy when the channel is renamed. */
+  renameChannelLog(serverId, from, to) {
+    const log = this.logs.get(logKey(serverId, from));
+    if (!log) return;
+    for (const m of log.base.values()) m.channel = to;
+    this.logs.delete(logKey(serverId, from));
+    this.logs.set(logKey(serverId, to), log);
+  }
+
+  /** Rebuild this circle's key directory from the MLS roster — the only
+      source for it that does not require trusting the relay. */
+  async refreshKeyDirectory(record) {
+    if (record.restored) return; // no MLS state to ask
+    try {
+      const roster = await this.crypto('memberKeys', { group: record.id });
+      const { changed, conflicts } = mergeKeyDirectory(record, roster);
+      for (const handle of conflicts) {
+        console.warn(`${handle} presents a different identity key than we had recorded`);
+      }
+      if (changed) {
+        await this.db.serverPut(record);
+        this.scheduleBackup();
+      }
+    } catch (e) {
+      console.warn(`key directory ${record.id}: ${e.message}`);
+    }
   }
 
   async addMember(serverId, user) {
@@ -1651,15 +1897,16 @@ export class Controller {
     }
   }
 
-  /** Mint a fresh kept-history key for every channel that has one, keeping
-      the old keys for reading.
+  /** Mint a fresh room key for every channel, keeping the old ones for
+      reading.
 
-      Removing someone re-keys MLS, so they can decrypt no further *messages*.
-      The per-channel history key was a separate story: it was minted once
-      when history was switched on and never rotated, so a removed member
-      kept a valid key for that channel's future entries too. Only the
-      relay's ACL stood in the way, and the ACL is the deliberately weak
-      boundary — cached ciphertext or a hostile relay defeated it.
+      Removing someone re-keys MLS, so they can decrypt no further *live*
+      messages. The room key is a separate story: without rotation a removed
+      member would keep a valid key for everything written into that channel
+      afterwards — and since the log is now where messages live, that is the
+      whole conversation, not a copy of it. Only the relay's ACL would stand
+      in the way, and the ACL is the deliberately weak boundary — cached
+      ciphertext or a hostile relay defeats it.
 
       Old keys are archived rather than discarded: the removed member was
       present for those entries anyway, so destroying them would punish the
@@ -1670,7 +1917,10 @@ export class Controller {
     const rotated = [];
     for (const [channel, meta] of Object.entries(record.chanMeta ?? {})) {
       if (!meta?.hid || !meta?.hkey) continue;
-      const archive = [meta.hkey, ...(meta.hkeys ?? [])].slice(0, MAX_ARCHIVED_HISTORY_KEYS);
+      // Every superseded key is kept. The entries it opens are the only
+      // copy of those messages, so dropping one destroys a stretch of the
+      // circle's own past rather than trimming a cache.
+      const archive = [meta.hkey, ...(meta.hkeys ?? [])];
       record.chanMeta = {
         ...record.chanMeta,
         [channel]: { ...meta, hkey: generateHistoryKey(), hkeys: archive },
@@ -1840,7 +2090,7 @@ export class Controller {
     this.forkWarned.add(key);
     console.error(`fork detected in ${record.id}: ${text}`);
     this.toast(text);
-    this.addSystemMessage(record.id, text).catch(() => {});
+    this.addSystemMessage(record.id, text);
   }
 
   async forgetServerLocal(serverId) {
@@ -1860,7 +2110,7 @@ export class Controller {
       console.warn(`forget group ${serverId}: ${e.message}`);
     }
     await this.db.serverDelete(serverId);
-    await this.db.msgsDeleteServer(serverId);
+    this.forgetCircleLogs(serverId);
     if (wasActiveCall) await this.voice.leave().catch(() => {});
     this.dispatch({ type: 'servers', servers: this.snapshotServers() });
     // Re-park the backup without this circle so a restore won't resurrect it.
@@ -1883,12 +2133,11 @@ export class Controller {
       - Additive envelopes (create a channel, edit the home base) fail
         *open*. A wrong guess leaves a stray channel, and the meta snapshot
         that trails these repairs the opposite error anyway.
-      - Destructive envelopes fail *closed*. `chan-del` reaches
-        `db.msgsDelete` and irreversibly drops this device's only copy of a
-        room's history — in an E2EE app with no server-side backup, no later
-        role sync can undo that. `chanset` counts as destructive too: it
-        carries the kept-history and retention switches, so applying one
-        from an unverified sender is a forward-secrecy downgrade. */
+      - Destructive envelopes fail *closed*. `chan-del` drops the room
+        from the circle's shape and its working copy with it, and `chanset`
+        carries retention — which the relay enforces by deleting log
+        entries, so applying one from an unverified sender destroys the
+        circle's messages for everyone, not just here. */
   async senderIsAdmin(record, sender, { destructive = false } = {}) {
     const cached = record.roles?.[sender];
     if (cached === 'admin') return true;
@@ -1972,6 +2221,12 @@ export class Controller {
         channels: r.channels,
         voiceChannels: r.voiceChannels ?? ['lounge'],
         chanMeta: r.chanMeta ?? {},
+        // The key directory rides the backup too. Without it a restored
+        // device could read every message (it has the room keys) but could
+        // not say who wrote any of them — and asking the relay to name the
+        // keys would make the relay the authority on authorship, which is
+        // the one thing this design will not do. See keys.js.
+        keys: r.keys ?? {},
         overview: r.overview ?? null,
         notices: r.notices ?? [],
       }));
@@ -2002,6 +2257,7 @@ export class Controller {
         channels: s.channels?.length ? s.channels : ['general'],
         voiceChannels: s.voiceChannels ?? ['lounge'],
         chanMeta: s.chanMeta ?? {},
+        keys: s.keys ?? {},
         overview: normalizeOverview(s.overview),
         notices: (Array.isArray(s.notices) ? s.notices : [])
           .map((n) => normalizeNotice(n, n?.author))
@@ -2014,12 +2270,12 @@ export class Controller {
       };
       this.servers.set(s.id, record);
       await this.db.serverPut(record);
-      await this.addSystemMessage(
+      this.addSystemMessage(
         s.id,
-        `restored from your encrypted backup — saved history is readable, but ask to be re-added before you can send`
+        `restored from your encrypted backup — the circle's messages are readable, but ask to be re-added before you can send`
       );
       this.refreshRoles(s.id);
-      await this.backfillHistory(record).catch((e) => console.warn(`history: ${e.message}`));
+      await this.catchUpLogs(record).catch((e) => console.warn(`log catch-up: ${e.message}`));
     }
     if (backup.servers?.length) {
       this.dispatch({ type: 'servers', servers: this.snapshotServers() });
@@ -2151,10 +2407,8 @@ export class Controller {
       key: b64.enc(key),
     };
     const ts = Date.now();
+    await this.appendLog(serverId, channel, { k: 'file', ts, file });
     await this.sendContent(serverId, { k: 'file', ch: channel, file, ts });
-    const message = { server: serverId, channel, sender: this.me, file, ts };
-    await this.storeMessage(message);
-    this.appendHistory(serverId, channel, message);
   }
 
   async fetchFile(file) {
@@ -2431,7 +2685,6 @@ export class Controller {
       overview: prior?.overview,
       notices: prior?.notices ?? [],
       seen: prior?.seen ?? {},
-      hcursor: prior?.hcursor ?? {},
       verified: prior?.verified,
       verifiedSn: prior?.verifiedSn,
       mismatched: prior?.mismatched,
@@ -2452,7 +2705,7 @@ export class Controller {
     this.dispatch({ type: 'servers', servers: this.snapshotServers() });
     await this.relay.request({ t: 'subscribe', group, after: sent.seq });
     this.refreshRoles(group);
-    this.backfillHistory(record).catch((e) => console.warn(`history: ${e.message}`));
+    this.catchUpLogs(record).catch((e) => console.warn(`log catch-up: ${e.message}`));
     this.scheduleBackup();
   }
 
@@ -2476,13 +2729,20 @@ export class Controller {
     return sent.seq;
   }
 
-  async storeMessage(message) {
-    await this.db.msgAdd(message);
+  /** A device-local notice in a room's stream. Session-lived: it is derived
+      from something this device watched happen, and writing it to the log
+      would give every member their own copy of the same line. */
+  addSystemMessage(serverId, text, channel = 'general') {
+    const message = {
+      server: serverId,
+      channel,
+      sender: '',
+      text,
+      ts: Date.now(),
+      system: true,
+    };
+    addSystemMessage(this.channelLog(serverId, channel), message);
     this.dispatch({ type: 'newMessage', message });
-  }
-
-  async addSystemMessage(serverId, text, channel = 'general') {
-    await this.storeMessage({ server: serverId, channel, sender: '', text, ts: Date.now(), system: true });
   }
 
   /** Ask the browser not to evict our storage, and say so when it refuses.
@@ -2557,15 +2817,49 @@ export class Controller {
       }));
   }
 
+  /**
+   * The messages to render for a channel.
+   *
+   * Opening a room this session fetches its newest page from the relay
+   * first — there is no local copy to fall back on, which is the point:
+   * what you see is what the circle has, not what this device happened to
+   * be awake for.
+   */
   async loadMessages(serverId, channel) {
+    const record = this.servers.get(serverId);
+    if (!record) return [];
+    const log = this.channelLog(serverId, channel);
+    if (!log.loaded) {
+      log.loaded = true;
+      // `before` with no bound means "the newest page".
+      await this.fetchPage(record, channel, { before: Number.MAX_SAFE_INTEGER });
+      await this.drainAlternateLogs(record, channel).catch((e) =>
+        console.warn(`alternate logs #${channel}: ${e.message}`)
+      );
+    }
     // Auto-delete is enforced at read time (and on setting changes) —
     // there is no background process in a browser tab to rely on.
+    this.applyRetention(record, channel);
+    return renderLog(log);
+  }
+
+  /** Page further back in a channel. Returns whether anything older
+      remains, so the UI can retire the affordance at the start. */
+  async loadOlderMessages(serverId, channel) {
     const record = this.servers.get(serverId);
-    if (record) await this.applyRetention(record, channel);
-    const messages = await this.db.msgsFor(serverId, channel);
-    // Backfilled history lands after live messages in insertion order;
-    // present by time.
-    return messages.sort((a, b) => a.ts - b.ts);
+    const log = this.channelLog(serverId, channel);
+    if (!record || log.complete) return { more: false };
+    const { complete } = await this.fetchPage(record, channel, {
+      before: log.oldest ?? Number.MAX_SAFE_INTEGER,
+    });
+    this.dispatch({ type: 'refreshMessages' });
+    return { more: !complete };
+  }
+
+  /** Whether this channel has more to show above what is on screen. */
+  hasOlderMessages(serverId, channel) {
+    const log = this.logs.get(logKey(serverId, channel));
+    return !!log?.loaded && !log.complete;
   }
 
   toast(text) {
