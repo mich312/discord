@@ -551,6 +551,24 @@ kbd {
   opacity: 1;
 }
 .circle-tile.add:hover { color: var(--ink); border-color: var(--ink-mute); }
+/* Circles are fetched from the relay, so the rail has a real "we don't know
+   yet" state. It borrows the attachment skeleton's shimmer rather than a
+   spinner: the placeholder is the shape of the answer, which is what makes
+   it read as loading instead of as a control. The reduced-motion rule at the
+   top of the file already collapses the animation. */
+.circle-tile.loading {
+  display: block;
+  cursor: default;
+  opacity: 1;
+  background: linear-gradient(
+    100deg,
+    var(--raised) 30%,
+    color-mix(in srgb, var(--ink-mute) 12%, var(--raised)) 50%,
+    var(--raised) 70%
+  );
+  background-size: 220% 100%;
+  animation: skeleton-shimmer 1.3s linear infinite;
+}
 
 .rail-slot { position: relative; display: flex; }
 /* An inactive tile sits at 0.62 — which reads as "nothing here". A circle

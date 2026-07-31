@@ -105,7 +105,7 @@ docker compose logs -f quorum | grep subscribed
 Online-but-not-subscribed is a real state. If a user connects and never
 subscribes, their client is failing between authentication and joining the
 group's fan-out — usually a corrupt local state. Have them sign out and back
-in; their circles come back from the encrypted backup.
+in; their circles are re-fetched from the relay on the next connect.
 
 **4. Everything looks right and one person still cannot read messages.**
 
@@ -266,10 +266,22 @@ docker run --rm -v quorum_blobs:/data -v "$PWD":/out alpine \
 into a throwaway stack and check that `/healthz` reports a plausible user
 count.
 
-What backups cannot give you: message *content* for a member who lost their
-device. The relay never had it. Their circles come back from the encrypted
-backup when they sign in; the messages come back only for kept-history
-channels.
+**The `backups` table is not optional, and not a spare.** It holds each
+account's circles — names, rooms, settings, and the room keys that open
+every channel log — sealed client-side, which is why you can copy it and
+still not read it. Devices no longer keep their own copy, so if you lose
+that table you do not lose a convenience: every user loses the structure of
+every circle they are in and the keys to every message in it, and no client
+can re-park what it never had. The message ciphertext in `history` survives
+the loss and becomes permanently unreadable, which is the worst shape a
+data-loss incident can take — everything still there, nothing openable.
+Dump the whole database, not a subset.
+
+What backups cannot give you: the MLS ratchets. Those live only on devices,
+by design, so a restored relay hands every member their circles read-only
+until an admin re-adds them. That is working as intended, not a failed
+restore — but tell people it is coming, because "I can read everything and
+send nothing" reads as a bug.
 
 ---
 

@@ -357,12 +357,41 @@ async fn history_prune_drops_older_entries_only() {
 async fn backups_are_per_user_and_replace() {
     let s = store();
     assert!(s.get_backup("alice").await.unwrap().is_none());
-    s.set_backup("alice", b"blob-1".to_vec()).await.unwrap();
-    s.set_backup("bob", b"bob-blob".to_vec()).await.unwrap();
-    assert_eq!(s.get_backup("alice").await.unwrap(), Some(b"blob-1".to_vec()));
-    s.set_backup("alice", b"blob-2".to_vec()).await.unwrap();
-    assert_eq!(s.get_backup("alice").await.unwrap(), Some(b"blob-2".to_vec()));
-    assert_eq!(s.get_backup("bob").await.unwrap(), Some(b"bob-blob".to_vec()));
+    assert_eq!(s.set_backup("alice", b"blob-1".to_vec(), None).await.unwrap(), 1);
+    assert_eq!(s.set_backup("bob", b"bob-blob".to_vec(), None).await.unwrap(), 1);
+    assert_eq!(s.get_backup("alice").await.unwrap(), Some((b"blob-1".to_vec(), 1)));
+    assert_eq!(s.set_backup("alice", b"blob-2".to_vec(), Some(1)).await.unwrap(), 2);
+    assert_eq!(s.get_backup("alice").await.unwrap(), Some((b"blob-2".to_vec(), 2)));
+    assert_eq!(s.get_backup("bob").await.unwrap(), Some((b"bob-blob".to_vec(), 1)));
+}
+
+/// The blob is where a circle's shape and room keys live, so a blind
+/// overwrite from a second signed-in device is how a circle disappears from
+/// an account. The store refuses the stale write instead; merging is the
+/// client's job, because only the client can read either side.
+#[tokio::test]
+async fn a_stale_backup_write_is_refused_rather_than_applied() {
+    let s = store();
+    s.set_backup("alice", b"v1".to_vec(), None).await.unwrap();
+    s.set_backup("alice", b"v2".to_vec(), Some(1)).await.unwrap();
+
+    // A device still holding version 1 writes: refused, and the stored blob
+    // is untouched.
+    assert!(matches!(
+        s.set_backup("alice", b"stale".to_vec(), Some(1)).await,
+        Err(StoreError::BackupConflict)
+    ));
+    assert_eq!(s.get_backup("alice").await.unwrap(), Some((b"v2".to_vec(), 2)));
+
+    // "I believe nothing is parked" is equally stale once something is.
+    assert!(matches!(
+        s.set_backup("alice", b"blind".to_vec(), None).await,
+        Err(StoreError::BackupConflict)
+    ));
+    assert_eq!(s.get_backup("alice").await.unwrap(), Some((b"v2".to_vec(), 2)));
+
+    // Re-reading and retrying is what gets through.
+    assert_eq!(s.set_backup("alice", b"merged".to_vec(), Some(2)).await.unwrap(), 3);
 }
 
 /// Concurrent commits must serialize: the log accepts exactly one commit per

@@ -93,11 +93,18 @@ self.addEventListener('fetch', (event) => {
   );
 });
 
-/** The circle's display name from the local store, or null.
+/** The circle's display name from the local name cache, or null.
+ *
+ *  Read from `kv/circleNames` rather than from a circle record, because
+ *  there are no circle records on the device any more — they live on the
+ *  relay, sealed under a key derived from the identity bundle. A service
+ *  worker cannot reach that key (it has no localStorage), so it could not
+ *  open the blob even if it fetched it, and it runs precisely when the page
+ *  that could is closed. The cache exists for this one caller.
  *
  *  Opened WITHOUT a version on purpose. Naming one pins this reader to a
  *  schema it does not own: asking for version 1 against a database the page
- *  has already upgraded to 2 fails outright with a VersionError, and the
+ *  has already upgraded to 3 fails outright with a VersionError, and the
  *  only symptom is push notifications quietly losing the circle's name.
  *  Versionless open takes whatever exists and never triggers an upgrade,
  *  which is what a read-only consumer of someone else's store wants. */
@@ -108,10 +115,10 @@ function circleName(id) {
     req.onsuccess = () => {
       const db = req.result;
       try {
-        const get = db.transaction('servers').objectStore('servers').get(id);
+        const get = db.transaction('kv').objectStore('kv').get('circleNames');
         get.onsuccess = () => {
           db.close();
-          resolve(get.result?.name ?? null);
+          resolve(get.result?.[id] ?? null);
         };
         get.onerror = () => {
           db.close();

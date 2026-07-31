@@ -50,13 +50,13 @@ carries it as an accepted risk rather than a footnote.
 ```
  ┌──────── device ─────────┐
  │  UI thread              │   identity key (localStorage, plaintext)
- │    │ postMessage        │   ← boundary is porous by design; see 5.2
+ │    │ postMessage        │   cursors + verifications (IndexedDB)
  │  Web Worker  ── WASM ───┼── MLS state, ratchets
  └────────────┬────────────┘
-              │  TLS
- ┌────────────┴────────────┐
- │ relay: ordered log      │   ciphertext + metadata. Never plaintext.
- │ Postgres · blob store   │
+              │  TLS         ↑ the device holds keys. Circles — names,
+ ┌────────────┴────────────┐   rooms, settings, room keys — are fetched
+ │ relay: ordered log      │   from the relay and held in memory only.
+ │ Postgres · blob store   │   ciphertext + metadata. Never plaintext.
  └─────────────────────────┘
               │  P2P (no relay)
         WebRTC media ──────────  IP addresses visible to peers
@@ -89,6 +89,8 @@ carries it as an accepted risk rather than a footnote.
 | **I** | Read message content | **Mitigated by construction.** Ciphertext only. |
 | **I** | Metadata: social graph, timing, group sizes, handles, push endpoints | **Accepted, documented.** This is the design's central cost, and it grew: the relay now holds every channel's log, so it also sees how much each channel holds, when each entry landed, and — recorded deliberately — which member appended it. That last is what authorizes a deletion and answers "what have I missed" without the device downloading every channel. The relay saw all three at write time regardless; what changed is that authorship is now durable, so a database dump maps entries to speakers. |
 | **D** | A client is made to download an unbounded log | **Mitigated.** Reads are paged and the page size is clamped server-side. |
+| **D** | Withhold the circles blob and the account has no circles at all | **Accepted, and newly true.** A circle's shape and room keys now live only in the relay-parked blob, so a relay that authenticates a connection but refuses `backup_get` leaves the client with nothing to show — where before the device held its own copy and could at least render the rooms. This is the availability half of the same bargain the log already made: the relay is the archive, and an archive that will not answer is indistinguishable from an empty one. What it still cannot do is *lie*: the blob is sealed client-side, so it can withhold circles but not invent, alter or read them. The client refuses to write a backup until it has read one, so a withheld read cannot be escalated into a destroyed backup. |
+| **T** | Roll a user back to an older circles blob | **Accepted.** The relay stores the blob and its version and could serve a stale pair, un-joining a circle or reviving a deleted room on the next device that reads. Detecting it needs a signed, monotonic counter the relay does not hold — the same shape of problem as reordering the log, and unfixed for the same reason. |
 | **E** | Redact another member's entry | **Mitigated.** Authorship is checked inside the delete predicate, not by a prior read — so it neither races a concurrent write nor becomes an oracle for who wrote what. Admins may redact any entry in their circle. |
 | **D** | Fill the disk via unauthenticated blob writes | **Mitigated.** Single-use upload tickets bound to one id. |
 | **D** | Exhaust rate limits from one IPv6 allocation | **Mitigated.** Buckets keyed on the /64. |
@@ -106,6 +108,7 @@ carries it as an accepted risk rather than a footnote.
 | **D** | Silent message loss on crash | **Mitigated.** Ratchet persists after the message and cursor. |
 | **D** | Total data loss to WebKit's 7-day eviction | **Mitigated.** Persistence requested every boot, checked, and surfaced. |
 | **I** | Identity key in localStorage | **Open.** Any script execution on the origin takes the account. |
+| **I** | Room keys readable at rest on a stolen device | **Narrowed.** They are no longer written to IndexedDB: a circle's room keys live in the relay-parked blob and are held only in memory for the session. This is a smaller win than it looks — the identity key in localStorage opens that blob (6.3), so a full image of a live device still yields everything. What it removes is the weaker case: an image of a device whose localStorage was evicted, or whose IndexedDB was recovered on its own. |
 | **T** | A service worker outlives the page and re-serves a targeted bundle | **Narrowed, newly relevant.** The offline shell caches app code, so code delivery now has a persistent component. `sw.js` is never cached (it must be able to replace itself); `index.html` is network-first, so a targeted payload survives only until the next successful online navigation; assets are content-hashed and the cache is version-scoped, so nothing outlives its deploy. Search results and message content are never cached — only the shell. |
 | **D** | Attachments fill the origin quota via the shell cache | **Mitigated.** Nothing is cached at runtime; the precache list is fixed at build time and excludes `/blob/`. |
 
@@ -181,7 +184,7 @@ builds remain the only real fix, for the same reason they were before.
 
 ### 6.3 The identity key is a master key
 
-`SHA-256("quorum-circles-backup-v1" ‖ identity)` opens the circles backup,
+`SHA-256("quorum-circles-backup-v1" ‖ identity)` opens the circles blob,
 which carries every channel's room key. One compromise of the identity — a
 stolen device, an XSS, a cracked weak password — retroactively unlocks
 every channel in every circle. **There is still no rotation.**
@@ -189,7 +192,9 @@ every channel in every circle. **There is still no rotation.**
 This got worse, not better, and deliberately so. When the relay held only
 the channels that opted into kept history, the identity key unlocked those.
 It now unlocks every conversation the account is in, all of which sit on the
-relay in one place. Identity key rotation plus per-channel re-keying was
+relay in one place — and since the blob became the only copy of a circle's
+room keys rather than a spare, the identity key is not merely *a* way in, it
+is the way in. Identity key rotation plus per-channel re-keying was
 already the fix; it is now the highest-value unscheduled work in this
 document, and the ranking below reflects that.
 

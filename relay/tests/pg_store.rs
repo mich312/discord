@@ -3,7 +3,7 @@
 //! Each run uses uniquely-named rows so reruns don't collide.
 
 use relay::pg::PgStore;
-use relay::store::{HistoryPage, RegisterOutcome, Store, StoredWelcome};
+use relay::store::{HistoryPage, RegisterOutcome, Store, StoreError, StoredWelcome};
 use std::sync::atomic::{AtomicU64, Ordering};
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -275,7 +275,20 @@ async fn backups_replace_per_user() {
     let user = unique("alice");
     s.register_user(&user, b"k").await.unwrap();
     assert!(s.get_backup(&user).await.unwrap().is_none());
-    s.set_backup(&user, b"blob-1".to_vec()).await.unwrap();
-    s.set_backup(&user, b"blob-2".to_vec()).await.unwrap();
-    assert_eq!(s.get_backup(&user).await.unwrap(), Some(b"blob-2".to_vec()));
+    assert_eq!(s.set_backup(&user, b"blob-1".to_vec(), None).await.unwrap(), 1);
+    assert_eq!(s.set_backup(&user, b"blob-2".to_vec(), Some(1)).await.unwrap(), 2);
+    assert_eq!(s.get_backup(&user).await.unwrap(), Some((b"blob-2".to_vec(), 2)));
+
+    // Same compare-and-swap contract as the memory store — and this is the
+    // one that has to hold under two connections, which is why the whole
+    // read-modify-write is a single statement.
+    assert!(matches!(
+        s.set_backup(&user, b"stale".to_vec(), Some(1)).await,
+        Err(StoreError::BackupConflict)
+    ));
+    assert!(matches!(
+        s.set_backup(&user, b"blind".to_vec(), None).await,
+        Err(StoreError::BackupConflict)
+    ));
+    assert_eq!(s.get_backup(&user).await.unwrap(), Some((b"blob-2".to_vec(), 2)));
 }

@@ -171,10 +171,17 @@ pub enum ClientMsg {
     /// read it.
     HistoryPrune { rid: u64, group: String, hid: String, before_ts: u64 },
     /// Store/replace this user's client-side-encrypted circles backup
-    /// (group records + channel history keys, sealed under a key derived
+    /// (group records + channel room keys, sealed under a key derived
     /// from the identity key — the relay stores a blob it cannot read).
-    BackupSet { rid: u64, payload: String },
-    /// Retrieve the backup blob, if any.
+    ///
+    /// `version` is the one the writer last read; the store swaps on it and
+    /// refuses a stale write, so a second signed-in device cannot silently
+    /// overwrite a circle this one just joined. Absent means "I believe
+    /// nothing is parked" — an older client that never reads a version
+    /// therefore only succeeds against an empty slot, which is the safe
+    /// direction for it to fail.
+    BackupSet { rid: u64, payload: String, #[serde(default)] version: Option<i64> },
+    /// Retrieve the backup blob and its version, if any.
     BackupGet { rid: u64 },
     /// Store/replace this user's account vault (client-side-encrypted
     /// identity bundle + retrieval gate). Authenticated users only.
@@ -267,7 +274,17 @@ pub enum ServerMsg {
     /// a short page.
     History { rid: u64, hid: String, entries: Vec<HistoryEntryOut>, complete: bool },
     HistoryCount { rid: u64, counts: Vec<HistoryCountOut> },
-    Backup { rid: u64, #[serde(skip_serializing_if = "Option::is_none")] payload: Option<String> },
+    /// The parked blob and the version it is at. `version` is 0 when
+    /// nothing is parked, which is exactly what the client should then send
+    /// back on its first `BackupSet`.
+    Backup {
+        rid: u64,
+        #[serde(skip_serializing_if = "Option::is_none")]
+        payload: Option<String>,
+        version: i64,
+    },
+    /// A backup write landed; `version` is what the next one must carry.
+    BackupOk { rid: u64, version: i64 },
     VaultStatus { rid: u64, kind: Option<String> },
     /// WebAuthn ceremony payloads (JSON passthrough).
     Passkey { rid: u64, payload: String },

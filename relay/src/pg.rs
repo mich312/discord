@@ -194,6 +194,16 @@ impl PgStore {
                 payload bytea NOT NULL,
                 updated_at timestamptz NOT NULL DEFAULT now()
             );
+            -- Compare-and-swap counter for the circles backup. The blob went
+            -- from a convenience copy to the only place a circle's shape and
+            -- room keys live, so two signed-in devices writing blind means one
+            -- of them loses a circle. `set_backup` now swaps on this.
+            --
+            -- Additive with a default, so SCHEMA_VERSION does not move: an
+            -- older relay's INSERT (which never names the column) still
+            -- succeeds at 0, and every existing row starts there — which is
+            -- also what a client that has not read a version yet sends.
+            ALTER TABLE backups ADD COLUMN IF NOT EXISTS version bigint NOT NULL DEFAULT 0;
             -- (invite, user) pairs that have already counted a use. The
             -- join flow presents an invite twice (Hello, then RedeemInvite),
             -- so uses are counted per claimant, not per presentation.
@@ -669,26 +679,46 @@ impl Store for PgStore {
         Ok(())
     }
 
-    async fn set_backup(&self, user: &str, payload: Vec<u8>) -> Result<(), StoreError> {
-        sqlx::query(
-            "INSERT INTO backups (user_id, payload) VALUES ($1, $2)
-             ON CONFLICT (user_id) DO UPDATE SET payload = $2, updated_at = now()",
+    async fn set_backup(
+        &self,
+        user: &str,
+        payload: Vec<u8>,
+        expected: Option<i64>,
+    ) -> Result<i64, StoreError> {
+        // One statement, so the read-modify-write cannot interleave with
+        // another connection's. `expected = None` means the writer believes
+        // no blob exists: the INSERT fires, and the DO UPDATE branch is
+        // guarded so a row that appeared in between is left alone.
+        //
+        // A guarded DO UPDATE that matches nothing does not return a row,
+        // which is exactly how a stale write is detected — `fetch_optional`
+        // gives None and the caller gets BackupConflict.
+        let row = sqlx::query(
+            "INSERT INTO backups (user_id, payload, version) VALUES ($1, $2, 1)
+             ON CONFLICT (user_id) DO UPDATE
+                SET payload = $2, version = backups.version + 1, updated_at = now()
+                WHERE backups.version = $3
+             RETURNING version",
         )
         .bind(user)
         .bind(payload)
-        .execute(&self.pool)
+        .bind(expected.unwrap_or(0))
+        .fetch_optional(&self.pool)
         .await
         .map_err(backend)?;
-        Ok(())
+        match row {
+            Some(r) => Ok(r.get("version")),
+            None => Err(StoreError::BackupConflict),
+        }
     }
 
-    async fn get_backup(&self, user: &str) -> Result<Option<Vec<u8>>, StoreError> {
-        let row = sqlx::query("SELECT payload FROM backups WHERE user_id = $1")
+    async fn get_backup(&self, user: &str) -> Result<Option<(Vec<u8>, i64)>, StoreError> {
+        let row = sqlx::query("SELECT payload, version FROM backups WHERE user_id = $1")
             .bind(user)
             .fetch_optional(&self.pool)
             .await
             .map_err(backend)?;
-        Ok(row.map(|r| r.get("payload")))
+        Ok(row.map(|r| (r.get("payload"), r.get("version"))))
     }
 
     async fn set_vault(&self, user: &str, vault: VaultRecord) -> Result<(), StoreError> {

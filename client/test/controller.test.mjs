@@ -6,13 +6,11 @@ import assert from 'node:assert/strict';
 import { Controller, freshTyping } from '../src/lib/controller.js';
 import { FORK_THRESHOLD } from '../src/lib/fork.js';
 import { b64 } from '../src/lib/relay.js';
-import { openBackup, openLogEntry, sealLogEntry } from '../src/lib/history.js';
+import { openBackup, openLogEntry, sealBackup, sealLogEntry } from '../src/lib/history.js';
 import { renderLog } from '../src/lib/log.js';
 
 function fakeDb() {
   return {
-    serverPut: async () => {},
-    serverDelete: async () => {},
     kvPut: async () => {},
     kvGet: async () => null,
   };
@@ -277,16 +275,19 @@ test('overview edit from a genuine non-admin is dropped', async () => {
   clearTimeout(c.backupTimer);
 });
 
-test('the uploaded backup includes restored circles (their history keys must survive)', async () => {
+test('the uploaded backup includes restored circles (their room keys must survive)', async () => {
   let parked = null;
   const { c } = makeController({
     relayHandler: (msg) => {
       if (msg.t === 'backup_set') parked = msg.payload;
-      return Promise.resolve({ seq: 1 });
+      return Promise.resolve({ seq: 1, version: 4 });
     },
   });
   const identity = new Uint8Array(32).fill(7);
   c.identityBytes = () => identity;
+  // The blob is the circles, so a device that has not managed to read it
+  // is not allowed to write one. Every upload test has to say it has read.
+  c.circlesLoaded = true;
   c.servers.set('live', record({ id: 'live', name: 'live circle' }));
   c.servers.set(
     'old',
@@ -303,6 +304,126 @@ test('the uploaded backup includes restored circles (their history keys must sur
   const ids = opened.servers.map((s) => s.id).sort();
   assert.deepEqual(ids, ['live', 'old'], 'restored circle was not dropped from the backup');
   assert.equal(opened.servers.find((s) => s.id === 'old').chanMeta.general.hid, 'h1');
+  assert.equal(c.backupVersion, 4, 'the version the next write must swap against is kept');
+});
+
+test('a device that has never read the circles refuses to write over them', async () => {
+  // The failure this closes: relay up enough to authenticate, `backup_get`
+  // failing, this device holding no circles — and one debounce later
+  // parking that emptiness as the truth for every other device.
+  let parked = null;
+  const { c } = makeController({
+    relayHandler: (msg) => {
+      if (msg.t === 'backup_set') parked = msg.payload;
+      return Promise.resolve({ seq: 1 });
+    },
+  });
+  c.identityBytes = () => new Uint8Array(32).fill(7);
+  await c.uploadBackup();
+  assert.equal(parked, null, 'nothing was written');
+});
+
+test('losing the compare-and-swap merges the other device\'s circles instead of clobbering them', async () => {
+  // Two signed-in devices. Ours edits "mine" while theirs joins "theirs".
+  // A blind overwrite drops one of the two — which, now that the blob is
+  // the only copy, means a circle simply disappears from the account.
+  const identity = new Uint8Array(32).fill(9);
+  const theirs = await sealBackup(identity, {
+    v: 2,
+    servers: [
+      { id: 'theirs', name: 'joined elsewhere', channels: ['general'], chanMeta: {} },
+      { id: 'mine', name: 'stale name', channels: ['general'], chanMeta: {} },
+    ],
+  });
+  const writes = [];
+  let first = true;
+  const { c } = makeController({
+    relayHandler: (msg) => {
+      if (msg.t === 'backup_get') return Promise.resolve({ payload: theirs, version: 8 });
+      if (msg.t === 'backup_set') {
+        writes.push(msg);
+        if (first) {
+          first = false;
+          return Promise.reject(new Error('backup conflict: another device wrote a newer backup'));
+        }
+        return Promise.resolve({ version: 9 });
+      }
+      return Promise.resolve({ seq: 1 });
+    },
+  });
+  c.identityBytes = () => identity;
+  c.circlesLoaded = true;
+  c.backupVersion = 7;
+  c.servers.set('mine', record({ id: 'mine', name: 'my newer name' }));
+
+  await c.uploadBackup();
+
+  assert.equal(writes.length, 2, 'the rejected write was retried, once');
+  assert.equal(writes[0].version, 7, 'the first write swapped against what we had read');
+  assert.equal(writes[1].version, 8, 'the retry swapped against what we re-read');
+  const opened = await openBackup(identity, writes[1].payload);
+  const byId = Object.fromEntries(opened.servers.map((s) => [s.id, s]));
+  assert.deepEqual(Object.keys(byId).sort(), ['mine', 'theirs'], 'neither circle was lost');
+  assert.equal(byId.mine.name, 'my newer name', 'our edit — the reason for this write — wins');
+  assert.ok(c.servers.has('theirs'), 'and the circle the merge rescued is now on screen');
+});
+
+test('circles are loaded from the relay on connect, not from this device', async () => {
+  const identity = new Uint8Array(32).fill(3);
+  const payload = await sealBackup(identity, {
+    v: 2,
+    servers: [
+      {
+        id: 'srv',
+        name: 'from the relay',
+        channels: ['general'],
+        chanMeta: { general: { hid: 'h1', hkey: b64.enc(new Uint8Array(32)) } },
+      },
+    ],
+  });
+  const { c } = makeController({
+    relayHandler: (msg) =>
+      msg.t === 'backup_get'
+        ? Promise.resolve({ payload, version: 2 })
+        : Promise.resolve({ seq: 1, entries: [], complete: true }),
+  });
+  c.identityBytes = () => identity;
+  c.deviceState = {};
+
+  const fresh = await c.loadCircles();
+
+  assert.equal(fresh.length, 1);
+  const r = c.servers.get('srv');
+  assert.equal(r.name, 'from the relay');
+  assert.equal(r.chanMeta.general.hid, 'h1', 'the room key came with it');
+  assert.equal(r.restored, true, 'no MLS state on this device: readable, not sendable');
+  assert.equal(c.backupVersion, 2);
+});
+
+test('a circle this device holds MLS state for loads live, with its own cursor', async () => {
+  const identity = new Uint8Array(32).fill(3);
+  const payload = await sealBackup(identity, {
+    v: 2,
+    servers: [{ id: 'srv', name: 'live one', channels: ['general'], chanMeta: {} }],
+  });
+  const { c } = makeController({
+    relayHandler: (msg) =>
+      msg.t === 'backup_get'
+        ? Promise.resolve({ payload, version: 1 })
+        : Promise.resolve({ seq: 1, entries: [], complete: true }),
+  });
+  c.identityBytes = () => identity;
+  // What the device kept: its place in the stream and what it had read.
+  // Neither is in the blob, and neither should be — another device of the
+  // same account is somewhere else entirely.
+  c.deviceState = { srv: { live: true, lastSeq: 42, seen: { general: 1234 } } };
+
+  await c.loadCircles();
+
+  const r = c.servers.get('srv');
+  assert.ok(!r.restored, 'this device can send');
+  assert.equal(r.lastSeq, 42, 'and resumes where it left off');
+  assert.equal(r.seen.general, 1234, 'with its own read markers');
 });
 
 test('presence rides the ephemeral fan-out, not the group log', async () => {
@@ -842,10 +963,6 @@ test('the receive cursor is durable before the ratchet snapshot is', async () =>
   const baseDb = c.db;
   c.db = {
     ...baseDb,
-    serverPut: async (r) => {
-      writes.push('cursor');
-      return baseDb.serverPut(r);
-    },
     kvPut: async (k, v) => {
       writes.push(`kv:${k}`);
       return baseDb.kvPut(k, v);
@@ -866,7 +983,9 @@ test('the receive cursor is durable before the ratchet snapshot is', async () =>
   await c.onGroupMessage({ group: 'srv', seq: 7, epoch: 1, sender: 'bob', payload: 'AAAA' });
 
   const ratchetAt = writes.indexOf('kv:mlsState');
-  const cursorAt = writes.indexOf('cursor');
+  // The cursor moved stores — it is device state now, not part of a circle
+  // record — but the ordering question it answers is unchanged.
+  const cursorAt = writes.indexOf('kv:deviceState');
   assert.ok(ratchetAt !== -1, 'the ratchet was persisted');
   assert.ok(cursorAt !== -1 && cursorAt < ratchetAt, 'the cursor lands before the ratchet');
   // The message itself is no longer part of this ordering question: it is

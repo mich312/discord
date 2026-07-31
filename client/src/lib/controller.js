@@ -1,6 +1,14 @@
-// Orchestration: worker (crypto) <-> relay (transport) <-> IndexedDB
-// (persistence) <-> React (render). The controller owns the canonical
-// in-memory server records; React state is a projection of them.
+// Orchestration: worker (crypto) <-> relay (transport + circle storage)
+// <-> IndexedDB (this device's keys and cursors) <-> React (render). The
+// controller owns the canonical in-memory server records; React state is a
+// projection of them.
+//
+// Where those records come from changed. They used to be read from
+// IndexedDB at boot and written back on every mutation, with a backup
+// parked on the relay as a fallback for a fresh sign-in. The relay's blob
+// is now the only copy: circles load from it on connect and every change
+// is written back to it. See circles.js for which fields go where, and
+// db.js for what is left on the device.
 //
 // Message content is a JSON envelope INSIDE the MLS plaintext, so channel
 // structure and server names are invisible to the relay:
@@ -92,6 +100,7 @@ import {
   renderLog,
 } from './log.js';
 import { keyDirectory, mergeKeyDirectory } from './keys.js';
+import { deviceHalf, hydrate, mergeBackups, sharedHalf } from './circles.js';
 import { VoiceManager } from './voice.js';
 import {
   b64url,
@@ -154,6 +163,14 @@ const logKey = (serverId, channel) => `${serverId}${LOG_SEP}${channel}`;
 const channelKeys = (meta) =>
   [meta?.hkey, ...(meta?.hkeys ?? []), ...(meta?.alts ?? []).map((a) => a?.hkey)].filter(Boolean);
 const KP_TOPUP = 2; // fresh KeyPackages published per connect
+/** Wire version of the parked circles blob.
+    v1 carried a circle's shape and room keys as a fallback for a fresh
+    sign-in. v2 is the same blob promoted to the only copy, so it also
+    carries what the local record used to hold alone: invite fragment keys
+    (a link stops being refreshed without them), deletion tombstones (a
+    deleted room comes back without them), and RSVPs. v1 opens unchanged —
+    it is a subset — and is rewritten as v2 by the first change. */
+const BACKUP_VERSION = 2;
 const INVITE_TTL_SECONDS = 7 * 24 * 3600;
 // Typing signals: readers treat one as stale ~6s after it was sent, and a
 // composing client re-sends every ~3s while the draft grows, so the "is
@@ -180,6 +197,9 @@ export class Controller {
     this.relayUrl = relayUrl;
     this.relay = null;
     this.servers = new Map(); // id -> record
+    // circle id -> this device's half of it (cursors, read markers,
+    // verifications). Loaded from IndexedDB at boot; see circles.js.
+    this.deviceState = {};
     this.me = null;
     // `${server}\u0000${channel}` -> channel log. In memory for the
     // session and never written to disk: the relay's log is the
@@ -214,16 +234,13 @@ export class Controller {
       const result = await this.crypto('boot', { state });
       this.me = result.name;
       await this.persistState(result.state);
-      for (const record of await this.db.serversAll()) {
-        // `serverPut` persists whatever is on the record, so a fork verdict
-        // written during the last session would come back with it. Drop it
-        // and re-earn it from live traffic: a stale "this circle is broken"
-        // surviving a successful rejoin is worse than taking a few messages
-        // to say it again. See fork.js.
-        delete record.outOfSync;
-        this.servers.set(record.id, record);
-      }
-      this.dispatch({ type: 'booted', me: this.me, servers: this.snapshotServers() });
+      await this.loadDeviceState();
+      // No circles yet: they live on the relay now, so they arrive with the
+      // connection rather than with the database. The rail says it is
+      // loading until `loadCircles` answers, which is the honest report —
+      // an empty rail would read as "you are in no circles".
+      this.dispatch({ type: 'booted', me: this.me, servers: [] });
+      this.dispatch({ type: 'circlesLoading', loading: true });
       // Every boot, not just onboarding: a grant can be revoked, and a site
       // refused once may qualify later once the user has engaged with it.
       this.requestPersistentStorage();
@@ -317,9 +334,80 @@ export class Controller {
     await this.db.kvPut('session', { name: this.me, createdAt: Date.now() });
     await this.db.kvPut('securedLocal', securedLocal);
     await this.requestPersistentStorage();
+    await this.loadDeviceState();
     this.dispatch({ type: 'booted', me: this.me, servers: this.snapshotServers() });
+    // A brand-new identity has nothing parked, but a sign-in on a new
+    // device does — and this is the path it takes. Say "loading" either
+    // way; `loadCircles` clears it the moment it knows.
+    this.dispatch({ type: 'circlesLoading', loading: true });
     this.connectRelay();
     this.setupServiceWorker();
+  }
+
+  // === persistence ========================================================
+  //
+  // Two seams, and which one a mutation uses is the same question circles.js
+  // asks: did the circle change, or did only this device's view of it?
+  //
+  //   persistCircle — the shape moved (a room, a setting, a room key, the
+  //                   home base). Writes this device's half too, then parks
+  //                   a new backup blob.
+  //   persistDevice — only a cursor, a read marker or a verification moved.
+  //                   Never touches the relay, because no other device of
+  //                   this account is entitled to that answer.
+  //
+  // Nothing writes a circle record to IndexedDB any more. There is no
+  // `servers` store to write it to.
+
+  /** Load this device's per-circle state (cursors, read markers,
+      verifications) — the half of a record that is not in the backup. */
+  async loadDeviceState() {
+    this.deviceState = (await this.db.kvGet('deviceState')) ?? {};
+    return this.deviceState;
+  }
+
+  /** Persist the device half of `record`, leaving the relay alone. */
+  async persistDevice(record) {
+    if (!record?.id) return;
+    this.deviceState = { ...(this.deviceState ?? {}), [record.id]: deviceHalf(record) };
+    await this.db.kvPut('deviceState', this.deviceState);
+  }
+
+  /** Persist both halves: the device's, and — via the debounced upload —
+      the circle's, on the relay. */
+  async persistCircle(record) {
+    await this.persistDevice(record);
+    await this.persistCircleNames();
+    this.scheduleBackup();
+  }
+
+  /**
+   * The one piece of circle content still written to this device: a map of
+   * circle id to display name, for the service worker.
+   *
+   * Kept deliberately, and deliberately small. A push carries a group id
+   * and a kind — never content — and the worker turns that into "new
+   * message in Sunday Cyclists" using what the device knows. It cannot use
+   * the circles blob: opening that needs the identity bundle from
+   * localStorage, which a service worker has no access to, and the worker
+   * runs exactly when the page that could open it is closed.
+   *
+   * So the choice is a name cache or notifications that cannot say which
+   * circle they are about. This is the cache, and it is the only exception
+   * to circles living on the relay.
+   */
+  async persistCircleNames() {
+    const names = {};
+    for (const record of this.servers.values()) names[record.id] = record.name;
+    await this.db.kvPut('circleNames', names);
+  }
+
+  /** Drop every trace of a circle from this device's state. */
+  async forgetDeviceState(serverId) {
+    if (!this.deviceState?.[serverId]) return;
+    this.deviceState = { ...this.deviceState };
+    delete this.deviceState[serverId];
+    await this.db.kvPut('deviceState', this.deviceState);
   }
 
   // === relay ==============================================================
@@ -394,10 +482,28 @@ export class Controller {
         // Whether the relay treats us as a global admin (RELAY_ADMINS).
         this.globalAdmin = !!msg.global_admin;
         this.dispatch({ type: 'admin', globalAdmin: this.globalAdmin });
+        // The circles themselves come from the relay, so this is the first
+        // moment they can exist at all. Everything below operates on what
+        // it returns — which is why it is awaited rather than kicked off
+        // alongside the subscriptions.
+        await this.loadCircles().catch((e) => {
+          // A failure here is not "you have no circles", and must never be
+          // allowed to look like one: the guard inside `uploadBackup`
+          // refuses to park a blob until a load has succeeded, so a relay
+          // that is up enough to talk but not to serve the backup cannot
+          // get us to overwrite it with nothing.
+          console.warn(`loading circles: ${e.message}`);
+          this.toast(`your circles could not be loaded: ${e.message}`);
+          // Stop saying "loading" for something that has stopped loading.
+          // An empty rail is the wrong answer here, but a placeholder that
+          // never resolves is a worse one — the toast is what carries the
+          // reason, and a reconnect retries.
+          this.dispatch({ type: 'circlesLoading', loading: false });
+        });
         // Re-subscribe everything from where we left off, then top up
         // the KeyPackage store so others can add us while we're away.
-        // Restored records (from the encrypted backup) have no MLS state
-        // to decrypt with — they stay read-only until a re-add arrives.
+        // Restored records (no MLS state on this device) have nothing to
+        // decrypt with — they stay read-only until a re-add arrives.
         for (const record of this.servers.values()) {
           if (record.restored) {
             this.refreshRoles(record.id);
@@ -421,14 +527,6 @@ export class Controller {
           // key, and it is what log-entry signatures are checked against.
           this.refreshKeyDirectory(record).catch((e) =>
             console.warn(`key directory ${record.id}: ${e.message}`)
-          );
-        }
-        // A fresh sign-in has an identity but no circles: pull the
-        // encrypted backup (if one was parked) and restore what this
-        // account knew — names, channels, and channel history keys.
-        if (this.servers.size === 0) {
-          await this.restoreFromBackup().catch((e) =>
-            console.warn(`backup restore: ${e.message}`)
           );
         }
         const payloads = [];
@@ -476,7 +574,6 @@ export class Controller {
             );
           }
         }
-        this.scheduleBackup();
         this.checkVault();
         // Refresh the push subscription silently if permission was already
         // granted (endpoints rotate; VAPID keys may too).
@@ -579,7 +676,7 @@ export class Controller {
       pendingMetaSync: true,
     };
     this.servers.set(group, record);
-    await this.db.serverPut(record);
+    await this.persistCircle(record);
     await this.addSystemMessage(
       group,
       prior?.restored
@@ -590,7 +687,6 @@ export class Controller {
     await this.relay.request({ t: 'subscribe', group, after: msg.after });
     this.refreshRoles(group);
     this.catchUpLogs(record).catch((e) => console.warn(`log catch-up: ${e.message}`));
-    this.scheduleBackup();
   }
 
   async onGroupMessage(msg) {
@@ -705,7 +801,7 @@ export class Controller {
       this.toast(`a message could not be saved: ${e.message}`);
     }
     // Cursor first, ratchet second — see the note above.
-    await this.db.serverPut(record);
+    await this.persistDevice(record);
     await this.persistState(ratchet);
     this.dispatch({ type: 'servers', servers: this.snapshotServers() });
   }
@@ -862,9 +958,8 @@ export class Controller {
     // other place its messages could live.
     this.ensureChannelKeys(record, 'general');
     this.servers.set(id, record);
-    await this.db.serverPut(record);
+    await this.persistCircle(record);
     this.dispatch({ type: 'servers', servers: this.snapshotServers() });
-    this.scheduleBackup();
     return id;
   }
 
@@ -944,9 +1039,8 @@ export class Controller {
     // member). Follow it with a meta snapshot so the ungated union repairs
     // them — otherwise the room shows for us and never for them.
     await this.sendContent(serverId, this.metaContent(record));
-    await this.db.serverPut(record);
+    await this.persistCircle(record);
     this.dispatch({ type: 'servers', servers: this.snapshotServers() });
-    this.scheduleBackup();
   }
 
   /** Change a channel's settings: topic and auto-delete (retention, in
@@ -998,10 +1092,9 @@ export class Controller {
         .catch((e) => console.warn(`history prune: ${e.message}`));
     }
     this.applyRetention(record, channel);
-    await this.db.serverPut(record);
+    await this.persistCircle(record);
     this.dispatch({ type: 'servers', servers: this.snapshotServers() });
     this.dispatch({ type: 'refreshMessages' });
-    this.scheduleBackup();
   }
 
   /** Replace the home base's admin-edited half (blurb, pinned links, next
@@ -1013,9 +1106,8 @@ export class Controller {
     record.overview = normalizeOverview(overview);
     await this.sendContent(serverId, { k: 'overview', ov: record.overview });
     await this.addSystemMessage(serverId, 'home base updated by you');
-    await this.db.serverPut(record);
+    await this.persistCircle(record);
     this.dispatch({ type: 'servers', servers: this.snapshotServers() });
-    this.scheduleBackup();
   }
 
   /** Pin a note to the noticeboard — open to every member, not just
@@ -1027,9 +1119,8 @@ export class Controller {
     if (!notice) return;
     record.notices = upsertNotice(record.notices, notice);
     await this.sendContent(serverId, { k: 'notice', op: 'add', n: { id, text: notice.text, ts: notice.ts } });
-    await this.db.serverPut(record);
+    await this.persistCircle(record);
     this.dispatch({ type: 'servers', servers: this.snapshotServers() });
-    this.scheduleBackup();
   }
 
   /** Unpin a note (the UI offers this to the author and to admins; the
@@ -1038,9 +1129,8 @@ export class Controller {
     const record = this.servers.get(serverId);
     record.notices = (record.notices ?? []).filter((n) => n.id !== id);
     await this.sendContent(serverId, { k: 'notice', op: 'del', id });
-    await this.db.serverPut(record);
+    await this.persistCircle(record);
     this.dispatch({ type: 'servers', servers: this.snapshotServers() });
-    this.scheduleBackup();
   }
 
   // === home-base catch-up (device-local, never synced) ====================
@@ -1062,7 +1152,7 @@ export class Controller {
       .reduce((max, m) => Math.max(max, Number(m.ts) || 0), 0);
     const anchor = newest || Date.now();
     record.seen = { ...(record.seen ?? {}), [channel]: Math.max(anchor, atLeastTs) };
-    await this.db.serverPut(record);
+    await this.persistDevice(record);
   }
 
   /**
@@ -1195,9 +1285,8 @@ export class Controller {
     // Same self-heal as createChannel: a meta snapshot after the gated
     // `vchan` so peers that dropped it still pick the voice room up.
     await this.sendContent(serverId, this.metaContent(record));
-    await this.db.serverPut(record);
+    await this.persistCircle(record);
     this.dispatch({ type: 'servers', servers: this.snapshotServers() });
-    this.scheduleBackup();
   }
 
   static slugChannel(name) {
@@ -1220,10 +1309,9 @@ export class Controller {
     this.renameChannelLog(serverId, from, ch);
     await this.sendContent(serverId, { k: 'chan-ren', ch: from, to: ch });
     await this.addSystemMessage(serverId, `#${from} renamed to #${ch}`, ch);
-    await this.db.serverPut(record);
+    await this.persistCircle(record);
     this.dispatch({ type: 'servers', servers: this.snapshotServers() });
     this.dispatch({ type: 'refreshMessages' });
-    this.scheduleBackup();
   }
 
   /** Delete a text channel and purge its local history. */
@@ -1239,9 +1327,8 @@ export class Controller {
     }
     this.forgetChannelLog(serverId, channel);
     await this.sendContent(serverId, { k: 'chan-del', ch: channel });
-    await this.db.serverPut(record);
+    await this.persistCircle(record);
     this.dispatch({ type: 'servers', servers: this.snapshotServers() });
-    this.scheduleBackup();
   }
 
   async renameVoiceChannel(serverId, from, to) {
@@ -1257,9 +1344,8 @@ export class Controller {
     }
     await this.sendContent(serverId, { k: 'vchan-ren', ch: from, to: ch });
     await this.addSystemMessage(serverId, `voice room "${from}" renamed to "${ch}"`);
-    await this.db.serverPut(record);
+    await this.persistCircle(record);
     this.dispatch({ type: 'servers', servers: this.snapshotServers() });
-    this.scheduleBackup();
   }
 
   async deleteVoiceChannel(serverId, channel) {
@@ -1273,9 +1359,8 @@ export class Controller {
     }
     await this.sendContent(serverId, { k: 'vchan-del', ch: channel });
     await this.addSystemMessage(serverId, `voice room "${channel}" deleted`);
-    await this.db.serverPut(record);
+    await this.persistCircle(record);
     this.dispatch({ type: 'servers', servers: this.snapshotServers() });
-    this.scheduleBackup();
   }
 
   async sendChat(serverId, channel, text, reply) {
@@ -1517,7 +1602,7 @@ export class Controller {
     if (going) rsvps[this.me] = { at, ts: Date.now() };
     else delete rsvps[this.me];
     record.rsvps = rsvps;
-    await this.db.serverPut(record);
+    await this.persistCircle(record);
     this.dispatch({ type: 'servers', servers: this.snapshotServers() });
     await this.sendContent(serverId, { k: 'rsvp', at, going: !!going });
   }
@@ -1597,8 +1682,7 @@ export class Controller {
       await this.sendContent(serverId, { k: 'chanset', ch: channel, meta }).catch((e) =>
         console.warn(`announce room key #${channel}: ${e.message}`)
       );
-      await this.db.serverPut(record);
-      this.scheduleBackup();
+      await this.persistCircle(record);
     }
     const full = { sender: this.me, ...entry };
     addLocalEntry(this.channelLog(serverId, channel), full, { server: serverId, channel });
@@ -1771,8 +1855,16 @@ export class Controller {
     this.logs.set(logKey(serverId, to), log);
   }
 
-  /** Rebuild this circle's key directory from the MLS roster — the only
-      source for it that does not require trusting the relay. */
+  /** Rebuild this circle's key directory — and its member list — from the
+      MLS roster, the only source for either that does not require trusting
+      the relay.
+
+      The member list is derived here rather than stored because the ratchet
+      tree already answers it, and a stored copy could only be staler. That
+      was true before too, but the local record was carrying one, so a
+      circle survived a reload with whatever roster it last wrote down. With
+      the record loaded from the relay there is no such copy — which is
+      correct, and makes this the one place the roster is re-earned. */
   async refreshKeyDirectory(record) {
     if (record.restored) return; // no MLS state to ask
     try {
@@ -1781,9 +1873,13 @@ export class Controller {
       for (const handle of conflicts) {
         console.warn(`${handle} presents a different identity key than we had recorded`);
       }
+      const members = Object.keys(roster ?? {});
+      if (members.length) {
+        record.members = members;
+        this.dispatch({ type: 'servers', servers: this.snapshotServers() });
+      }
       if (changed) {
-        await this.db.serverPut(record);
-        this.scheduleBackup();
+        await this.persistCircle(record);
       }
     } catch (e) {
       console.warn(`key directory ${record.id}: ${e.message}`);
@@ -1831,7 +1927,7 @@ export class Controller {
     // Joiners have no scrollback: rebroadcast name + channels (and channel
     // settings, incl. history keys) so their placeholder record fills in.
     await this.sendContent(serverId, this.metaContent(record));
-    await this.db.serverPut(record);
+    await this.persistDevice(record);
     this.dispatch({ type: 'servers', servers: this.snapshotServers() });
     this.refreshRoles(serverId);
   }
@@ -1847,9 +1943,8 @@ export class Controller {
     record.name = next;
     await this.sendContent(serverId, this.metaContent(record));
     await this.addSystemMessage(serverId, `circle renamed to "${next}" by you`);
-    await this.db.serverPut(record);
+    await this.persistCircle(record);
     this.dispatch({ type: 'servers', servers: this.snapshotServers() });
-    this.scheduleBackup();
   }
 
   /** Publish a staged commit and let the relay's ordered log decide whether
@@ -2006,9 +2101,8 @@ export class Controller {
         `${revoked} invite link${revoked === 1 ? '' : 's'} revoked, in case ${user} still held one — share a new link to invite anyone else`
       );
     }
-    await this.db.serverPut(record);
+    await this.persistCircle(record);
     this.dispatch({ type: 'servers', servers: this.snapshotServers() });
-    this.scheduleBackup();
   }
 
   /** Leave a circle: forget it on this device and drop ourselves from the
@@ -2109,7 +2203,9 @@ export class Controller {
       // A restored (read-only) stub has no MLS group to forget — fine.
       console.warn(`forget group ${serverId}: ${e.message}`);
     }
-    await this.db.serverDelete(serverId);
+    await this.forgetDeviceState(serverId);
+    // Drop the name too, or a push for a circle you just left still names it.
+    await this.persistCircleNames();
     this.forgetCircleLogs(serverId);
     if (wasActiveCall) await this.voice.leave().catch(() => {});
     this.dispatch({ type: 'servers', servers: this.snapshotServers() });
@@ -2165,7 +2261,8 @@ export class Controller {
       // A restored record has no MLS view of the roster; the relay's ACL
       // is the best available approximation until a re-add arrives.
       if (record.restored) record.members = reply.members.map((m) => m.user);
-      await this.db.serverPut(record);
+      // Nothing to persist: both of these are re-read on every connect, and
+      // a stored copy could only ever be a staler answer than the ACL's.
       this.dispatch({ type: 'servers', servers: this.snapshotServers() });
     } catch (e) {
       console.warn(`roles for ${serverId}: ${e.message}`);
@@ -2190,15 +2287,21 @@ export class Controller {
     return this.relay.request({ t: 'admin_list' });
   }
 
-  // === circles backup =====================================================
+  // === circles on the relay ===============================================
   //
-  // What survives a device change is what the vault carries: the identity.
-  // MLS ratchets deliberately don't. This backup parks the *shape* of your
-  // circles (names, channels, settings) plus each channel's history key —
-  // encrypted under a key derived from the identity bytes, so any device
-  // that can sign in can open it and the relay never can. Combined with
-  // the history logs, signing in on a new device brings your messages
-  // back without touching forward secrecy of no-history channels.
+  // This blob is the circles. Not a backup of them — the only copy. It
+  // carries each circle's shape (name, rooms, settings, home base, pinned
+  // notes), the room keys that open their logs, and the key directory that
+  // says who wrote what, sealed under a key derived from the identity
+  // bytes. Any device that can sign in can open it; the relay never can.
+  //
+  // What is deliberately NOT in it is the MLS ratchet, which is why a
+  // device that loads these circles can read them and not yet send: keys
+  // to the conversation are account data, the ratchet is not.
+  //
+  // Writes compare-and-swap on a version the relay keeps beside the blob.
+  // A whole-blob overwrite from a second signed-in device is how a circle
+  // silently disappears, and that is the one failure this must not have.
 
   /** Debounced: many mutations arrive in bursts (joins, meta floods). */
   scheduleBackup() {
@@ -2208,79 +2311,122 @@ export class Controller {
     }, 3000);
   }
 
+  /**
+   * Park the current circles.
+   *
+   * Refuses to write until a load has succeeded. Without that guard a
+   * relay that answers the handshake but fails `backup_get` would leave
+   * this device holding zero circles and perfectly willing to say so
+   * authoritatively — one debounce later, the account's circles are gone.
+   * A device that has never successfully read cannot write.
+   */
   async uploadBackup() {
-    if (!this.relay?.ready) return;
-    const identity = this.identityBytes();
-    // Restored stubs are included: their shape (and channel history keys)
-    // came from the previous backup, and omitting them here would overwrite
-    // that backup with one that has forgotten those circles entirely.
-    const servers = [...this.servers.values()]
-      .map((r) => ({
-        id: r.id,
-        name: r.name,
-        channels: r.channels,
-        voiceChannels: r.voiceChannels ?? ['lounge'],
-        chanMeta: r.chanMeta ?? {},
-        // The key directory rides the backup too. Without it a restored
-        // device could read every message (it has the room keys) but could
-        // not say who wrote any of them — and asking the relay to name the
-        // keys would make the relay the authority on authorship, which is
-        // the one thing this design will not do. See keys.js.
-        keys: r.keys ?? {},
-        overview: r.overview ?? null,
-        notices: r.notices ?? [],
-      }));
-    // An empty list must only overwrite a parked backup once this device has
-    // actually held circles — so leaving/deleting your last one clears the
-    // ghost — never during boot before circles have loaded (which would wipe
-    // a good backup) or for an account that simply has none yet.
-    if (!servers.length && !this.everHadCircles) return;
-    if (servers.length) this.everHadCircles = true;
-    const payload = await sealBackup(identity, { v: 1, servers });
-    await this.relay.request({ t: 'backup_set', payload });
+    if (!this.relay?.ready || !this.circlesLoaded) return;
+    let servers = [...this.servers.values()].map(sharedHalf);
+    let payload = await sealBackup(this.identityBytes(), { v: BACKUP_VERSION, servers });
+    try {
+      const ok = await this.relay.request({
+        t: 'backup_set',
+        payload,
+        version: this.backupVersion ?? 0,
+      });
+      this.backupVersion = ok.version ?? this.backupVersion;
+      return;
+    } catch (e) {
+      if (!/backup conflict/i.test(e.message ?? '')) throw e;
+    }
+    // Another device wrote between our read and our write. Re-read, fold
+    // our circles over theirs (see `mergeBackups` for which side wins
+    // what), and try once more. One retry: if we lose the swap twice, two
+    // devices are writing in a tight loop and a third attempt would not
+    // settle it either — the next mutation reschedules anyway.
+    const parked = await this.fetchBackup();
+    this.backupVersion = parked.version;
+    servers = mergeBackups(servers, parked.servers);
+    payload = await sealBackup(this.identityBytes(), { v: BACKUP_VERSION, servers });
+    const ok = await this.relay.request({
+      t: 'backup_set',
+      payload,
+      version: this.backupVersion ?? 0,
+    });
+    this.backupVersion = ok.version ?? this.backupVersion;
+    // Adopt anything the merge brought in, so this device shows the circle
+    // it just declined to delete rather than waiting for the next boot.
+    this.adoptCircles(servers);
   }
 
-  /** Fresh sign-in path: no local circles, but maybe a parked backup.
-      Restored circles are readable (saved history decrypts with the
-      backed-up channel keys) but read-only until someone re-adds this
-      device — the MLS ratchets are gone by design. */
-  async restoreFromBackup() {
+  /** Read and open the parked blob. Returns the circles and the version
+      they are at; an account with nothing parked reads as an empty list at
+      version 0, which is what a first write must swap against. */
+  async fetchBackup() {
     const reply = await this.relay.request({ t: 'backup_get' });
-    if (!reply.payload) return;
+    const version = reply.version ?? 0;
+    if (!reply.payload) return { servers: [], version };
     const backup = await openBackup(this.identityBytes(), reply.payload);
-    if (backup.v !== 1) throw new Error('unsupported backup version');
-    for (const s of backup.servers ?? []) {
-      if (this.servers.has(s.id)) continue;
-      const record = {
-        id: s.id,
-        name: s.name,
-        channels: s.channels?.length ? s.channels : ['general'],
-        voiceChannels: s.voiceChannels ?? ['lounge'],
-        chanMeta: s.chanMeta ?? {},
-        keys: s.keys ?? {},
-        overview: normalizeOverview(s.overview),
-        notices: (Array.isArray(s.notices) ? s.notices : [])
-          .map((n) => normalizeNotice(n, n?.author))
-          .filter(Boolean),
-        members: [],
-        epoch: 0,
-        lastSeq: 0,
-        joinedAt: Date.now(),
-        restored: true,
-      };
-      this.servers.set(s.id, record);
-      await this.db.serverPut(record);
-      this.addSystemMessage(
-        s.id,
-        `restored from your encrypted backup — the circle's messages are readable, but ask to be re-added before you can send`
+    // v1 predates room keys being the only copy of a conversation; it is a
+    // strict subset of v2, so it opens as-is and is rewritten in v2 shape
+    // by the first change. Anything newer was written by a client this one
+    // does not understand — refusing is the only safe answer, since
+    // writing over it would destroy whatever it knows that this does not.
+    if (backup.v > BACKUP_VERSION) {
+      throw new Error(
+        `these circles were parked by a newer version of the app — reload before changing anything`
       );
-      this.refreshRoles(s.id);
-      await this.catchUpLogs(record).catch((e) => console.warn(`log catch-up: ${e.message}`));
     }
-    if (backup.servers?.length) {
+    return { servers: backup.servers ?? [], version };
+  }
+
+  /**
+   * Load this account's circles from the relay.
+   *
+   * Runs on every connect, not just a fresh sign-in. The blob is where
+   * circles live, so this is not a recovery path — it is how the app gets
+   * its own state, and a device that skipped it would be running on
+   * whatever it happened to remember.
+   */
+  async loadCircles() {
+    const { servers, version } = await this.fetchBackup();
+    this.backupVersion = version;
+    // Set before adopting: a circle arriving here can trigger a write (a
+    // freshly minted room key, a meta heal), and that write must be
+    // allowed to proceed rather than being caught by the no-load guard.
+    this.circlesLoaded = true;
+    const fresh = this.adoptCircles(servers);
+    await this.persistCircleNames();
+    this.dispatch({ type: 'circlesLoading', loading: false });
+    if (fresh.length) {
+      for (const record of fresh) {
+        if (record.restored) {
+          this.addSystemMessage(
+            record.id,
+            `loaded from your circles on the relay — the messages are readable, but ask to be re-added before you can send`
+          );
+        }
+      }
       this.dispatch({ type: 'servers', servers: this.snapshotServers() });
-      this.toast('circles restored from your encrypted backup');
     }
+    return fresh;
+  }
+
+  /** Fold a list of shared circle halves into the in-memory records,
+      pairing each with this device's own state for it. Returns the ones
+      this device did not already hold. */
+  adoptCircles(servers) {
+    const fresh = [];
+    for (const s of servers ?? []) {
+      if (!s?.id || this.servers.has(s.id)) continue;
+      const record = hydrate(s, this.deviceState?.[s.id]);
+      // Normalizing on the way in rather than trusting the blob: it is our
+      // own ciphertext, but it was written by a build that may have had a
+      // different idea of what a valid overview or notice looks like.
+      record.overview = normalizeOverview(s.overview);
+      record.notices = (Array.isArray(s.notices) ? s.notices : [])
+        .map((n) => normalizeNotice(n, n?.author))
+        .filter(Boolean);
+      this.servers.set(s.id, record);
+      fresh.push(record);
+    }
+    return fresh;
   }
 
   // === account vaults =====================================================
@@ -2440,7 +2586,7 @@ export class Controller {
     const record = this.servers.get(serverId);
     const sn = await this.safetyNumber(serverId, peer);
     applyVerified(record, peer, sn);
-    await this.db.serverPut(record);
+    await this.persistDevice(record);
     this.dispatch({ type: 'servers', servers: this.snapshotServers() });
   }
 
@@ -2460,7 +2606,7 @@ export class Controller {
     const record = this.servers.get(serverId);
     const sn = await this.safetyNumber(serverId, peer);
     applyMismatch(record, peer, sn);
-    await this.db.serverPut(record);
+    await this.persistDevice(record);
     this.dispatch({ type: 'servers', servers: this.snapshotServers() });
   }
 
@@ -2625,7 +2771,7 @@ export class Controller {
     // Keep the fragment key so we can re-encrypt fresh GroupInfo after
     // every epoch change (a parked blob dies with its epoch).
     record.invites = [...(record.invites ?? []), { id: inviteId, key: b64.enc(fragmentKey) }];
-    await this.db.serverPut(record);
+    await this.persistCircle(record);
     return buildInviteUrl(location, inviteId, fragmentKey);
   }
 
@@ -2697,7 +2843,7 @@ export class Controller {
       pendingMetaSync: true,
     };
     this.servers.set(group, record);
-    await this.db.serverPut(record);
+    await this.persistCircle(record);
     await this.addSystemMessage(
       group,
       `you joined via invite link — only channels that keep history have a past here`
@@ -2706,7 +2852,6 @@ export class Controller {
     await this.relay.request({ t: 'subscribe', group, after: sent.seq });
     this.refreshRoles(group);
     this.catchUpLogs(record).catch((e) => console.warn(`log catch-up: ${e.message}`));
-    this.scheduleBackup();
   }
 
   // === helpers ============================================================
@@ -2725,7 +2870,7 @@ export class Controller {
       payload: b64.enc(blob),
     });
     record.lastSeq = Math.max(record.lastSeq, sent.seq);
-    await this.db.serverPut(record);
+    await this.persistDevice(record);
     return sent.seq;
   }
 

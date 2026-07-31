@@ -343,7 +343,7 @@ try {
   // metadata they inherit on joining, exactly as an added member's does.
   await charlie.waitForSelector('text=bob should read this back later', { timeout: 10000 });
 
-  console.log('11. IndexedDB wiped: identity survives via localStorage');
+  console.log('11. IndexedDB wiped: identity survives, and the circles come back');
   await bob.evaluate(() => {
     return new Promise((resolve) => {
       const req = indexedDB.deleteDatabase('e2ee-client');
@@ -351,10 +351,22 @@ try {
     });
   });
   await bob.reload();
-  // bob is still bob (no onboarding screen), but groups are gone.
-  await bob.waitForSelector('.empty-state', { timeout: 15000 });
-  const emptyText = await bob.textContent('.empty-state');
-  if (!emptyText.includes('bob')) throw new Error('identity lost after IndexedDB wipe');
+  // bob is still bob: the identity key mirror lives in localStorage, which
+  // the IndexedDB wipe did not touch.
+  await bob.waitForFunction(
+    () => document.querySelector('[data-testid=self-name]')?.textContent === 'bob',
+    { timeout: 15000 }
+  );
+  // And the circle comes back — not from this device, which has nothing left
+  // to give, but from the relay, where it is parked sealed under a key
+  // derived from that surviving identity. What did NOT come back is the MLS
+  // ratchet, which is why the room is readable and not yet sendable.
+  await bob.waitForFunction(
+    () => document.querySelector('[data-testid=server-name]')?.textContent === 'Race Team',
+    { timeout: 20000 }
+  );
+  await bob.click('[data-testid=channel-general]');
+  await bob.waitForSelector('text=bob should read this back later', { timeout: 15000 });
 
   console.log('12. identity key export/import: paste alice into a fresh profile');
   // The identity-key export now lives in the command palette (no self-card icon).

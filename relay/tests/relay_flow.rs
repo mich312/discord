@@ -950,14 +950,34 @@ async fn backup_blob_roundtrips_per_user() {
     assert_eq!(reply["t"], "backup");
     assert!(reply.get("payload").is_none() || reply["payload"].is_null());
 
+    assert_eq!(reply["version"], 0, "nothing parked reads as version 0");
+
     let reply = alice
         .request(json!({"t": "backup_set", "payload": B64.encode(b"alice-circles")}))
         .await;
-    assert_eq!(reply["t"], "ok");
+    assert_eq!(reply["t"], "backup_ok");
+    assert_eq!(reply["version"], 1);
     let reply = alice.request(json!({"t": "backup_get"})).await;
     assert_eq!(reply["payload"], B64.encode(b"alice-circles"));
+    assert_eq!(reply["version"], 1);
     let reply = bob.request(json!({"t": "backup_get"})).await;
     assert!(reply.get("payload").is_none() || reply["payload"].is_null(), "backups are per-user");
+
+    // A second device of alice's, still holding version 0, must not be able
+    // to overwrite what the first one parked.
+    let reply = alice
+        .request(json!({"t": "backup_set", "payload": B64.encode(b"clobber"), "version": 0}))
+        .await;
+    assert_eq!(reply["t"], "error", "a stale write is refused");
+    let reply = alice.request(json!({"t": "backup_get"})).await;
+    assert_eq!(reply["payload"], B64.encode(b"alice-circles"), "and changed nothing");
+
+    // Re-read, then write against what is actually there.
+    let reply = alice
+        .request(json!({"t": "backup_set", "payload": B64.encode(b"merged"), "version": 1}))
+        .await;
+    assert_eq!(reply["t"], "backup_ok");
+    assert_eq!(reply["version"], 2);
 }
 
 /// The metrics unit tests cover `render()` — that the formatter emits valid

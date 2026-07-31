@@ -16,7 +16,7 @@ function monogram(name) {
 // badge would blow out the tile anyway.
 const OVERFLOW = 99;
 
-export default function Rail({ servers, active, unreads, onSelect, onCreate }) {
+export default function Rail({ servers, loading, active, unreads, onSelect, onCreate }) {
   const [adding, setAdding] = useState(false);
   const [name, setName] = useState('');
 
@@ -59,6 +59,20 @@ export default function Rail({ servers, active, unreads, onSelect, onCreate }) {
             </li>
           );
         })}
+        {loading && servers.length === 0 && (
+          // Circles are fetched from the relay, so there is a moment where we
+          // genuinely do not know. A placeholder tile says "still asking";
+          // an empty rail would have said "you are in no circles", which is
+          // a different claim and usually the wrong one.
+          <li className="rail-slot">
+            <span
+              className="circle-tile loading"
+              data-testid="rail-loading"
+              role="status"
+              aria-label="loading your circles"
+            />
+          </li>
+        )}
         <li className="rail-add-slot">
           <button
             className="circle-tile add"

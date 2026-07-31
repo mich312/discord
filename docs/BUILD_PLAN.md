@@ -38,12 +38,29 @@ property with a separate price.
 The implementation drops it. Every channel has a **room key** that travels
 only inside the group's MLS messages; every message, edit, deletion and
 reaction is sealed under it and appended to a per-channel log on the relay.
-Devices keep keys, not messages.
+Devices keep keys, not messages — and, since the same argument applies one
+level up, not circles either. A circle's shape (name, rooms, their settings,
+the noticeboard) sits beside its room keys in a single blob on the relay,
+sealed client-side under a key derived from the identity bundle, and every
+device loads it on connect rather than keeping its own. The local store had
+been the authority on a circle while the blob was a fallback for a fresh
+sign-in, which meant two devices of one account could disagree about what a
+circle *was* and the last one to write the fallback decided what a third
+device saw. What is left on a device is what no other device is entitled to:
+the MLS ratchet, the subscription cursor, the read markers, and the safety
+numbers its user compared face to face. See `client/src/lib/circles.js` for
+the field-by-field split and the rule behind it.
+
+The write path compare-and-swaps on a version the relay keeps beside the
+blob. This is not incidental: a whole-blob overwrite is now how a circle
+disappears from an account, and the relay cannot merge two blobs it cannot
+read — so it refuses the stale write and the client re-reads, folds its own
+change over what it finds, and writes again.
 
 | Row | Status | What replaced it |
 |---|---|---|
 | No scrollback for joiners | **Gone.** Joining is how you get the room key, so a joiner reads the channel's past | The watermark now marks the start of the record, not the start of *your* record |
-| No cross-device sync | **Gone.** Any device that can sign in opens the backup, gets the room keys, and reads the same rooms | A new device still joins MLS afresh, which is a *sending* constraint, not a reading one |
+| No cross-device sync | **Gone.** Any device that can sign in opens the circles blob, gets the room keys, and reads the same rooms | A new device still joins MLS afresh, which is a *sending* constraint, not a reading one |
 | No server-side search | Still true | Client-side, over what has been read back this session — narrower than before, and labelled |
 | No content moderation | Still true | Unchanged |
 | Metadata is not hidden | Still true, and there is more of it | The relay holds the logs, so it also sees their size, timing, and who appended each entry |

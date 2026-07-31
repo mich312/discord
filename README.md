@@ -9,9 +9,12 @@ stores ciphertext it can never read.
 circle holds.** Each channel has a room key that travels only inside the
 group's MLS messages, so joining is how you get it — and reading a room
 means reading it back from the relay, not from whatever this device
-happened to be awake for. Devices hold keys; they do not hold messages.
-That makes a new phone, a fresh sign-in and a new member all see the same
-room, and it is what the rest of the design now follows from.
+happened to be awake for. Devices hold keys; they do not hold messages —
+nor, now, the circles those messages are in: a circle's name, rooms,
+settings and room keys are parked on the relay too, sealed under a key
+derived from the identity bundle, and loaded on connect. That makes a new
+phone, a fresh sign-in and a new member all see the same room, and it is
+what the rest of the design now follows from.
 
 The cost is stated rather than buried: **forward secrecy for message
 content is given up**. Anyone admitted to a circle can read what its room
@@ -86,12 +89,18 @@ only thing that makes the claim falsifiable.
   can do both at once), soft join/leave chimes, and the call's own
   conversation thread — regular MLS-sealed chat scoped to the room under
   a `voice:<room>` channel id, never a sidebar room.
-- **Persistence** — the device stores keys, not messages: MLS state
-  snapshots in IndexedDB survive reloads with live ratchets, and the
-  identity key is mirrored to localStorage and exportable (file,
-  paste-string, or passphrase-wrapped recovery file). Rooms are read back
-  from the relay a page at a time, so what a device shows is what the
-  circle has rather than what that device was present for.
+- **Persistence** — the device stores keys, and only keys. What survives a
+  reload locally is the MLS ratchet (IndexedDB), the identity key (mirrored
+  to localStorage, exportable as a file, a paste-string or a
+  passphrase-wrapped recovery file), and the handful of answers no other
+  device is entitled to: where this device's subscription got to, what it
+  has caught up on, and which safety numbers its user compared in person.
+  **The circles themselves live on the relay** — names, rooms, settings,
+  the noticeboard and the room keys that open the logs — sealed under a key
+  derived from the identity bundle and loaded on connect. Rooms are then
+  read back a page at a time. So what a device shows is what the circle
+  has, not what that device was present for, and every device of an account
+  reconstructs the same circles from the same bytes.
 - **Web Push** — members who didn't get a message live get an encrypted
   nudge (group id + kind only — content never exists server-side). The
   service worker enriches it with what the *device* already knows: the
@@ -147,14 +156,19 @@ only thing that makes the claim falsifiable.
   prune their local copies when they open the room. A shared setting
   honored by clients, not a cryptographic guarantee — and it usefully
   bounds what a kept-history room key can ever unlock.
-- **Circles backup / new-device restore** — the *keys* to your circles
-  (names, channels, settings, room keys, and the directory of which
-  identity key speaks for which member) are parked on the relay encrypted
-  under a key derived from your identity bundle — the same bytes the
-  account vault already round-trips, so any device that can sign in can
-  open it and the relay never can. Sign in somewhere new: your circles
-  reappear read-only with their conversations intact, and a re-add (or
-  invite link) makes them live again.
+- **Circles on the relay** — your circles (names, channels, settings, room
+  keys, invite keys, the noticeboard, and the directory of which identity
+  key speaks for which member) are parked on the relay encrypted under a
+  key derived from your identity bundle — the same bytes the account vault
+  already round-trips, so any device that can sign in can open it and the
+  relay never can. This is not a backup of a local copy; it is the copy.
+  Sign in somewhere new and your circles are simply there, read-only with
+  their conversations intact, until a re-add (or an invite link) hands that
+  device the MLS ratchets that let it send. Writes compare-and-swap on a
+  version the relay keeps beside the blob, so a second signed-in device
+  cannot silently overwrite a circle the first one just joined; a client
+  that loses the swap re-reads, folds its own change over what it finds,
+  and writes again.
 
 ## Architecture
 
@@ -169,7 +183,8 @@ The relay is a **delivery service and an archive it cannot read**: it
 authenticates connections (challenge-response against each user's pinned
 MLS identity key — no passwords), stores ciphertext keyed by
 `(group_id, epoch, seq)`, hosts pre-published KeyPackages, invite blobs,
-identity-encrypted circles backups, and the per-channel message logs
+the identity-encrypted circles blob each account loads on connect, and the
+per-channel message logs
 (opaque ids, AES-GCM ciphertext, paged on read), enforces per-group
 ordering and retention, and fans out. It cannot read messages,
 membership, channel names, invite blobs, log entries, backups, or call
@@ -301,6 +316,12 @@ joins, identity recovery, encrypted attachments, safety numbers, and
   downloading every channel.
 - **Metadata is visible to the relay** — who, when, how often, group
   sizes, call participation. E2EE hides content, not traffic shape.
+- **A relay that will not answer takes your circles with it** — they are
+  loaded from it, not kept on the device, so an outage is not just "no new
+  messages" but an empty rail. The client will not park a backup until it
+  has successfully read one, so a failed read can never be escalated into a
+  destroyed one; and the relay can withhold the blob but not read, alter or
+  invent it. Offline use is not a thing this design offers.
 - **Invite-link controls are weak** — expiry/max-uses are server-enforced;
   a malicious relay can bypass them. It still can't read the blob.
   Membership itself is cryptographically enforced and cannot be bypassed.

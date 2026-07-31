@@ -63,6 +63,11 @@ const initial = {
   voice: { active: null, connections: {}, presence: {} },
   vault: { kind: undefined, securedLocal: true }, // kind: undefined=unknown, null=none
   globalAdmin: false, // relay-side flag (RELAY_ADMINS)
+  // Circles live on the relay now, so there is a real window between "the
+  // app is up" and "we know which circles you are in". An empty rail during
+  // that window would read as an answer — that you are in none — so it says
+  // it is still asking instead.
+  circlesLoading: true,
   messagesRev: 0, // bumped when stored messages changed outside the live path (backfill, prune)
 };
 
@@ -76,6 +81,8 @@ function reducer(state, action) {
       return { ...state, phase: 'fatal', fatal: action.text };
     case 'storageAtRisk':
       return { ...state, storageAtRisk: true, storageEvicts: action.evicts };
+    case 'circlesLoading':
+      return { ...state, circlesLoading: action.loading };
     case 'booted': {
       // Land on the first circle's overview page (channel: null), not in a
       // room — the landing zone is the front door.
@@ -708,6 +715,7 @@ export default function App() {
         <nav className="sidebar" id="nav-drawer" aria-label="circles and rooms">
           <Rail
             servers={state.servers}
+            loading={state.circlesLoading}
             active={server}
             unreads={circleUnreads}
             onSelect={(id) =>
@@ -1008,11 +1016,23 @@ export default function App() {
               <div className="glyph-lg">
                 <QuorumGlyph size={44} />
               </div>
-              <h2>No circles yet</h2>
-              <p className="muted">
-                Start one from the sidebar, follow an invite link, or ask someone to add you —
-                they need your handle: <strong>{state.me}</strong>
-              </p>
+              {/* "No circles yet" is a claim, and while the circles are still
+                  being fetched from the relay it is one we cannot make. The
+                  handle stays on screen either way — it is what someone needs
+                  in order to add you, and it is also the proof that the
+                  identity survived whatever brought you here. */}
+              <h2>{state.circlesLoading ? 'Loading your circles…' : 'No circles yet'}</h2>
+              {state.circlesLoading ? (
+                <p className="muted">
+                  They live on the relay, encrypted — fetching them now. Signed in as{' '}
+                  <strong>{state.me}</strong>
+                </p>
+              ) : (
+                <p className="muted">
+                  Start one from the sidebar, follow an invite link, or ask someone to add you —
+                  they need your handle: <strong>{state.me}</strong>
+                </p>
+              )}
               <div className="row">
                 <button className="button" data-testid="identity-open-empty" onClick={openIdentity}>
                   <Key size={14} />

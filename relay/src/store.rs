@@ -23,6 +23,14 @@ pub enum StoreError {
     /// This credential id already belongs to another account.
     #[error("credential already enrolled by another account")]
     CredentialTaken,
+    /// A backup write carried a version the stored blob has already moved
+    /// past — another device of the same account wrote in between. The
+    /// sender must re-read, re-apply its change, and try again. Without
+    /// this the later write silently discards the earlier one, and since
+    /// the blob is now where a circle's shape and room keys live, that is
+    /// how a device loses a circle it just joined.
+    #[error("backup conflict: another device wrote a newer backup")]
+    BackupConflict,
     #[error("storage error: {0}")]
     Backend(String),
 }
@@ -273,8 +281,23 @@ pub trait Store: Send + Sync {
     async fn prune_history(&self, group: &str, hid: &str, before_ts: u64) -> Result<(), StoreError>;
 
     // --- encrypted circles backups ---
-    async fn set_backup(&self, user: &str, payload: Vec<u8>) -> Result<(), StoreError>;
-    async fn get_backup(&self, user: &str) -> Result<Option<Vec<u8>>, StoreError>;
+    /// Replace this user's backup blob, compare-and-swapping on its
+    /// version. `expected` is the version the writer last read; `None`
+    /// means "there should be no blob yet". Returns the new version.
+    ///
+    /// The blob is no longer a convenience copy — it is where a circle's
+    /// name, channels and room keys live, so a blind overwrite from a
+    /// second signed-in device destroys real state. The relay cannot merge
+    /// (it cannot read either side), but it can refuse the stale write and
+    /// make the client do it.
+    async fn set_backup(
+        &self,
+        user: &str,
+        payload: Vec<u8>,
+        expected: Option<i64>,
+    ) -> Result<i64, StoreError>;
+    /// The blob and the version it is at, or `None` if nothing is parked.
+    async fn get_backup(&self, user: &str) -> Result<Option<(Vec<u8>, i64)>, StoreError>;
 
     // --- account vaults ---
     async fn set_vault(&self, user: &str, vault: VaultRecord) -> Result<(), StoreError>;
@@ -359,7 +382,10 @@ struct MemoryInner {
     vaults: HashMap<String, VaultRecord>,
     /// cred_id (base64url) -> additional per-device passkey
     passkey_wraps: HashMap<String, PasskeyWrap>,
-    backups: HashMap<String, Vec<u8>>,
+    /// user -> (blob, version). The version is what `set_backup`
+    /// compare-and-swaps on, so two devices cannot silently overwrite
+    /// each other's circles.
+    backups: HashMap<String, (Vec<u8>, i64)>,
 }
 
 #[derive(Default)]
@@ -636,13 +662,23 @@ impl Store for MemoryStore {
         Ok(())
     }
 
-    async fn set_backup(&self, user: &str, payload: Vec<u8>) -> Result<(), StoreError> {
+    async fn set_backup(
+        &self,
+        user: &str,
+        payload: Vec<u8>,
+        expected: Option<i64>,
+    ) -> Result<i64, StoreError> {
         let mut inner = self.inner.lock().unwrap();
-        inner.backups.insert(user.to_string(), payload);
-        Ok(())
+        let current = inner.backups.get(user).map(|(_, v)| *v);
+        if current != expected {
+            return Err(StoreError::BackupConflict);
+        }
+        let next = current.unwrap_or(0) + 1;
+        inner.backups.insert(user.to_string(), (payload, next));
+        Ok(next)
     }
 
-    async fn get_backup(&self, user: &str) -> Result<Option<Vec<u8>>, StoreError> {
+    async fn get_backup(&self, user: &str) -> Result<Option<(Vec<u8>, i64)>, StoreError> {
         let inner = self.inner.lock().unwrap();
         Ok(inner.backups.get(user).cloned())
     }

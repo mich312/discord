@@ -1219,19 +1219,27 @@ async fn handle_request(
             }
         }
 
-        ClientMsg::BackupSet { rid, payload } => {
+        ClientMsg::BackupSet { rid, payload, version } => {
             let payload = match decode_b64(&payload) {
                 Ok(b) => b,
                 Err(e) => return err(rid, e),
             };
-            match app.store.set_backup(user, payload).await {
-                Ok(()) => Some(ServerMsg::Ok { rid, seq: None }),
+            // Version 0 and "absent" mean the same thing on the wire — no
+            // blob parked — so both map to `None`, and the store's insert
+            // branch is the one that has to fire.
+            let expected = version.filter(|v| *v > 0);
+            match app.store.set_backup(user, payload, expected).await {
+                Ok(version) => Some(ServerMsg::BackupOk { rid, version }),
                 Err(e) => err(rid, e),
             }
         }
 
         ClientMsg::BackupGet { rid } => match app.store.get_backup(user).await {
-            Ok(payload) => Some(ServerMsg::Backup { rid, payload: payload.map(|b| B64.encode(b)) }),
+            Ok(parked) => Some(ServerMsg::Backup {
+                rid,
+                payload: parked.as_ref().map(|(b, _)| B64.encode(b)),
+                version: parked.map(|(_, v)| v).unwrap_or(0),
+            }),
             Err(e) => err(rid, e),
         },
 
