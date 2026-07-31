@@ -255,7 +255,9 @@ export class Controller {
     if (storedIdentity) {
       await this.restoreIdentity(b64.dec(storedIdentity));
       await this.completeOnboarding();
-      this.toast('storage was cleared: your identity survived, but group keys did not — ask to be re-added');
+      this.toast(
+        'storage was cleared: your identity and your circles survived, but this device cannot send until someone re-adds you'
+      );
       return;
     }
     this.dispatch({ type: 'phase', phase: 'onboarding' });

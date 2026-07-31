@@ -700,7 +700,8 @@ export default function App() {
           <Key size={14} />
           <span>
             this browser may delete quorum's data after 7 days without use —{' '}
-            <strong>add it to your home screen</strong> to keep your account and messages
+            <strong>add it to your home screen</strong> so you don't have to sign in and be
+            re-added to every circle
           </span>
         </div>
       )}

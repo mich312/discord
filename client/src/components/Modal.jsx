@@ -567,15 +567,18 @@ export default function Modal({
 
             <div className="divider">leaving</div>
             <p className="fineprint muted">
-              Leaving removes this circle and its messages from this device. You&rsquo;ll
-              need a new invite to come back — the others keep the circle.
+              Leaving removes this circle from your account, not just from this device —
+              your other devices drop it when they next reconnect. You&rsquo;ll need a new
+              invite to come back; the others keep the circle.
             </p>
             <button
               className="button danger"
               data-testid="circle-leave"
               disabled={busy}
               onClick={() => {
-                const ok = window.confirm(`Leave "${modal.name}"? It will be removed from this device.`);
+                const ok = window.confirm(
+                  `Leave "${modal.name}"? It will be removed from your account, on this device and your others.`
+                );
                 if (!ok) return;
                 attempt(async () => {
                   await onLeaveServer(modal.server);
@@ -623,8 +626,8 @@ export default function Modal({
         {modal.type === 'logout' && (
           <>
             <p className="muted">
-              Logging out wipes this browser&rsquo;s copy of your identity and every
-              circle&rsquo;s keys, then returns to the sign-in screen.
+              Logging out wipes this browser&rsquo;s copy of your identity and its place in
+              each circle, then returns to the sign-in screen.
             </p>
             {unsecured ? (
               <p className="error" role="alert" data-testid="logout-unsecured-warning">
@@ -634,7 +637,8 @@ export default function Modal({
             ) : (
               <p className="fineprint muted">
                 You&rsquo;ll need your passkey, password, or recovery/identity key to sign
-                back in. Messages don&rsquo;t come back — their keys lived only on this device.
+                back in. Your circles and their messages do come back — they are kept on the
+                relay, sealed. Sending doesn&rsquo;t: ask to be re-added for that.
               </p>
             )}
             <div className="row">

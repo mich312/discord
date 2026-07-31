@@ -718,15 +718,11 @@ export default function Messages({
               <Lock size={18} />
             </span>
             <p className="ce-title">
-              {server.restored ? (
-                <>Nothing restored in <strong>#{channel}</strong> yet</>
-              ) : (
-                <>No messages in <strong>#{channel}</strong> yet</>
-              )}
+              <>No messages in <strong>#{channel}</strong> yet</>
             </p>
             <p className="ce-sub muted">
               {server.restored
-                ? 'Kept-history rooms fill in here once you re-join and catch up.'
+                ? 'This room is empty — you can read it, but sending needs a re-add.'
                 : 'Say something — it’s end-to-end encrypted before it leaves this device.'}
             </p>
           </div>
@@ -736,7 +732,7 @@ export default function Messages({
         {server.restored ? (
           <div className="composer-note restored-note" data-testid="restored-note">
             <Lock size={11} />
-            read-only: restored from your encrypted backup — ask a member to re-add{' '}
+            read-only: loaded from your circles on the relay — ask a member to re-add{' '}
             <strong>{me}</strong> (or use an invite link) to send again
           </div>
         ) : (
