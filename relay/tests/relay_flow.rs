@@ -403,6 +403,12 @@ async fn catch_up_replays_missed_messages_in_order() {
     let mut bob = TestClient::connect(addr, bob_mls, "bob").await.unwrap();
     let reply = bob.request(json!({"t": "subscribe", "group": "g1", "after": after})).await;
     assert_eq!(reply["t"], "ok");
+    // Where the backlog ends. The client needs this to tell replayed history
+    // — which cannot decrypt, because the group re-keyed past it — apart from
+    // live traffic that fails to decrypt, which is what a fork looks like.
+    // Without it, a device resuming from the start of the log convicts every
+    // member of forking.
+    let catch_up_to = reply["seq"].as_u64().expect("subscribe reports its backlog end");
 
     let mut seqs = Vec::new();
     for expected in ["one", "two", "three"] {
@@ -418,6 +424,11 @@ async fn catch_up_replays_missed_messages_in_order() {
         }
     }
     assert!(seqs.windows(2).all(|w| w[0] < w[1]), "seqs must ascend: {seqs:?}");
+    assert_eq!(
+        catch_up_to,
+        *seqs.last().unwrap(),
+        "the boundary is the last backlogged seq, so nothing live is mistaken for a replay"
+    );
 }
 
 #[tokio::test]

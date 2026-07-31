@@ -63,11 +63,6 @@ export const DEVICE_FIELDS = [
   'verifiedSn',
   'mismatched',
   'joinedAt',
-  // Whether this device holds MLS state for the circle. The inverse of
-  // `restored`, stored the positive way round so a circle that arrives
-  // from the backup with no device entry at all is read-only by default —
-  // which is the safe direction, and the true one.
-  'live',
 ];
 
 const pick = (source, fields) => {
@@ -99,7 +94,6 @@ export function deviceHalf(record) {
     ...pick(record, DEVICE_FIELDS),
     lastSeq: record.lastSeq ?? 0,
     epoch: record.epoch ?? 0,
-    live: !record.restored,
   };
 }
 
@@ -107,12 +101,21 @@ export function deviceHalf(record) {
  * Rebuild an in-memory record from the two halves.
  *
  * `device` is missing for a circle this device has never opened — a fresh
- * sign-in, or one joined on another device. That is exactly the read-only
- * case: no MLS state, no cursor, and `joinedAt` set to now so the unread
- * count starts from when this device learned about the circle rather than
- * counting the circle's whole past as missed.
+ * sign-in, or one joined on another device. Then there is no cursor, and
+ * `joinedAt` is set to now so the unread count starts from when this device
+ * learned about the circle rather than counting its whole past as missed.
+ *
+ * `live` — whether this device can *send* — is passed in rather than read
+ * from either half, because the only truthful answer is whether the MLS
+ * client holds a ratchet for the group, and neither half knows that. It was
+ * briefly stored as device state, which was wrong in the way that matters:
+ * a stored flag is absent for every install that predates it, so every
+ * existing device read as read-only the moment this store was introduced,
+ * with a perfectly good ratchet sitting in IndexedDB beside it. Derived
+ * from the ratchet, the question cannot be answered wrongly by a
+ * migration.
  */
-export function hydrate(shared, device, now = Date.now()) {
+export function hydrate(shared, device, { now = Date.now(), live = false } = {}) {
   return {
     ...sharedHalf(shared),
     id: shared.id,
@@ -127,7 +130,7 @@ export function hydrate(shared, device, now = Date.now()) {
     // Derived, never stored: re-read from the roster and the ACL on connect.
     members: [],
     roles: {},
-    ...(device?.live ? {} : { restored: true }),
+    ...(live ? {} : { restored: true }),
   };
 }
 

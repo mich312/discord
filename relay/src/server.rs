@@ -809,7 +809,13 @@ async fn handle_request(
             };
             hub.subscribers.entry(group.clone()).or_default().insert(user.to_string(), tx.clone());
             tracing::debug!(user = %user, %group, "subscribed");
-            let _ = tx.send(ServerMsg::Ok { rid, seq: None });
+            // The seq the backlog ends at. A subscriber replaying history it
+            // has already moved past cannot decrypt it — MLS deletes the
+            // secrets that opened it — and without knowing where the replay
+            // stops, a client cannot tell that expected failure apart from
+            // the one that means its group has forked. Read under the hub
+            // lock with the backlog itself, so it cannot race a live send.
+            let _ = tx.send(ServerMsg::Ok { rid, seq: backlog.last().map(|m| m.seq) });
             for m in backlog {
                 let _ = tx.send(ServerMsg::Msg {
                     group: m.group,

@@ -489,7 +489,9 @@ test('a circle this device holds MLS state for loads live, with its own cursor',
   // What the device kept: its place in the stream and what it had read.
   // Neither is in the blob, and neither should be — another device of the
   // same account is somewhere else entirely.
-  c.deviceState = { srv: { live: true, lastSeq: 42, seen: { general: 1234 } } };
+  c.deviceState = { srv: { lastSeq: 42, seen: { general: 1234 } } };
+  // And what makes it live is the ratchet, reported by `boot`.
+  c.mlsGroups = new Set(['srv']);
 
   await c.loadCircles();
 
@@ -497,6 +499,21 @@ test('a circle this device holds MLS state for loads live, with its own cursor',
   assert.ok(!r.restored, 'this device can send');
   assert.equal(r.lastSeq, 42, 'and resumes where it left off');
   assert.equal(r.seen.general, 1234, 'with its own read markers');
+});
+
+test('an upgraded device with ratchets but no device state is not marked read-only', () => {
+  // The shipped regression, at the level it actually bit: `deviceState` is a
+  // new store, so it is empty on every install that predates it. Reading
+  // liveness out of it marked every existing circle read-only — and a
+  // read-only record is skipped by the subscribe loop, so the circle also
+  // stopped receiving. Both symptoms, one wrong source of truth.
+  const { c } = makeController();
+  c.mlsGroups = new Set(['srv']);
+  c.deviceState = {};
+
+  const [r] = c.adoptCircles([{ id: 'srv', name: 'a circle', channels: ['general'] }]);
+
+  assert.ok(!r.restored, 'the ratchet says this device can send, so it can');
 });
 
 test('presence rides the ephemeral fan-out, not the group log', async () => {

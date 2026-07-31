@@ -200,6 +200,15 @@ export class Controller {
     // circle id -> this device's half of it (cursors, read markers,
     // verifications). Loaded from IndexedDB at boot; see circles.js.
     this.deviceState = {};
+    // Group ids this device holds MLS state for — the ratchet's own answer
+    // to what it can send in, taken from `boot` and kept in step as groups
+    // are joined and forgotten. Deliberately not persisted alongside the
+    // circles: it IS the persisted ratchet, asked rather than remembered.
+    this.mlsGroups = new Set();
+    // group id -> the seq the relay's catch-up backlog ended at. Blobs at or
+    // below it are history being replayed, which cannot decrypt once the
+    // group has re-keyed past them; see fork.js.
+    this.catchUpTo = new Map();
     this.me = null;
     // `${server}\u0000${channel}` -> channel log. In memory for the
     // session and never written to disk: the relay's log is the
@@ -233,6 +242,7 @@ export class Controller {
     if (session && state) {
       const result = await this.crypto('boot', { state });
       this.me = result.name;
+      this.mlsGroups = new Set(result.groups ?? []);
       await this.persistState(result.state);
       await this.loadDeviceState();
       // No circles yet: they live on the relay now, so they arrive with the
@@ -268,6 +278,7 @@ export class Controller {
   async createIdentity(name) {
     const result = await this.crypto('boot', { name });
     this.me = result.name;
+    this.mlsGroups = new Set(result.groups ?? []);
     await this.persistState(result.state);
     const identity = new Uint8Array(await this.crypto('exportIdentity'));
     localStorage.setItem(IDENTITY_LS_KEY, b64.enc(identity));
@@ -279,6 +290,10 @@ export class Controller {
   async restoreIdentity(identity) {
     const result = await this.crypto('boot', { identity });
     this.me = result.name;
+    // An identity-only restore carries no ratchets by design, so this is
+    // empty and every circle loads read-only until a re-add — which is the
+    // true answer here, unlike the stored flag it replaces.
+    this.mlsGroups = new Set(result.groups ?? []);
     await this.persistState(result.state);
     localStorage.setItem(IDENTITY_LS_KEY, b64.enc(identity));
   }
@@ -506,7 +521,7 @@ export class Controller {
             this.refreshRoles(record.id);
             continue;
           }
-          await this.relay
+          const sub = await this.relay
             .request({ t: 'subscribe', group: record.id, after: record.lastSeq })
             .catch((e) => {
               // The relay says we're not a member (removed while offline) or
@@ -518,7 +533,9 @@ export class Controller {
               } else {
                 this.toast(`subscribe ${record.id}: ${e.message}`);
               }
+              return null;
             });
+          if (sub) this.catchUpTo.set(record.id, sub.seq ?? 0);
           this.refreshRoles(record.id);
           // The roster is the only trustworthy source for who holds which
           // key, and it is what log-entry signatures are checked against.
@@ -672,6 +689,7 @@ export class Controller {
       // just unioning, so deletions actually land. See the `meta` handler.
       pendingMetaSync: true,
     };
+    this.mlsGroups.add(group);
     this.servers.set(group, record);
     await this.persistCircle(record);
     await this.addSystemMessage(
@@ -731,6 +749,7 @@ export class Controller {
         me: this.me,
         groupEpoch: record.epoch,
         restored: record.restored,
+        replay: msg.seq <= (this.catchUpTo.get(msg.group) ?? 0),
       });
       console.warn(`undecryptable blob seq ${msg.seq} in ${msg.group} (${why}): ${e.message}`);
       this.noteFork(record);
@@ -954,6 +973,7 @@ export class Controller {
     // Every channel has a room key from the moment it exists — there is no
     // other place its messages could live.
     this.ensureChannelKeys(record, 'general');
+    this.mlsGroups.add(id);
     this.servers.set(id, record);
     await this.persistCircle(record);
     this.dispatch({ type: 'servers', servers: this.snapshotServers() });
@@ -2187,6 +2207,7 @@ export class Controller {
   async forgetServerLocal(serverId) {
     const wasActiveCall = this.voice?.active?.server === serverId;
     this.servers.delete(serverId);
+    this.mlsGroups.delete(serverId);
     // A rejoin must start from a clean slate, or the old branch's evidence
     // would immediately re-condemn the new membership.
     this.forks.clear(serverId);
@@ -2422,7 +2443,9 @@ export class Controller {
     const fresh = [];
     for (const s of servers ?? []) {
       if (!s?.id || this.servers.has(s.id)) continue;
-      const record = hydrate(s, this.deviceState?.[s.id]);
+      const record = hydrate(s, this.deviceState?.[s.id], {
+        live: this.mlsGroups.has(s.id),
+      });
       // Normalizing on the way in rather than trusting the blob: it is our
       // own ciphertext, but it was written by a build that may have had a
       // different idea of what a valid overview or notice looks like.
@@ -2849,6 +2872,7 @@ export class Controller {
       // meta rebroadcast reconcile a possibly-stale shape rather than union.
       pendingMetaSync: true,
     };
+    this.mlsGroups.add(group);
     this.servers.set(group, record);
     await this.persistCircle(record);
     await this.addSystemMessage(

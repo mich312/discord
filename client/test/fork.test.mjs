@@ -152,3 +152,38 @@ test('a stranded member reads as their problem, singular or plural', () => {
 test('a healthy circle produces no message at all', () => {
   assert.equal(forkMessage({ stranded: [], outOfSync: false }, 'Book Club'), null);
 });
+
+
+/* ------------------------------------------------------------- replays -- */
+// A device whose local cursor is gone re-subscribes from the start of the log
+// and is sent the circle's entire past. None of it can decrypt — MLS deletes
+// the secrets that opened each epoch as the group re-keys — and counting that
+// as suspicion convicts every member of forking on the strength of forward
+// secrecy working. The relay says where the backlog ends; that, not the epoch
+// number, is what separates replayed history from traffic happening now.
+
+test('history replayed on subscribe is expected, whatever its epoch', () => {
+  assert.equal(
+    classifyFailure({ sender: 'bob', epoch: 2, me, groupEpoch: 9, replay: true }),
+    'replay'
+  );
+});
+
+test('replaying a whole log convicts nobody', () => {
+  const forks = new ForkWatch();
+  for (let seq = 0; seq < FORK_THRESHOLD * 3; seq++) {
+    forks.failed('srv', { sender: 'bob', epoch: seq, me, groupEpoch: 999, replay: true });
+  }
+  assert.equal(forks.verdict('srv').outOfSync, false);
+  assert.deepEqual(forks.verdict('srv').stranded, [], 'and strands nobody');
+});
+
+test('a slower forked branch is still caught, though its epoch trails ours', () => {
+  // The case the replay exemption must NOT swallow: live traffic from a
+  // branch that has committed fewer times than we have. Below our epoch,
+  // past the backlog, and exactly what a fork looks like.
+  assert.equal(
+    classifyFailure({ sender: 'bob', epoch: 5, me, groupEpoch: 6, replay: false }),
+    'suspect'
+  );
+});

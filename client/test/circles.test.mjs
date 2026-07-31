@@ -66,20 +66,16 @@ test('the device half keeps this device’s own answers and nothing else', () =>
   assert.deepEqual(d.seen, { general: 1234 });
   assert.deepEqual(d.verifiedSn, { bob: '1234' }, 'a comparison made on this device, in person');
   assert.deepEqual(d.mismatched, { carol: '9999' });
-  assert.equal(d.live, true);
   assert.equal(d.name, undefined, 'the circle itself is not duplicated here');
   assert.equal(d.chanMeta, undefined, 'and neither are the room keys');
+  assert.equal(d.live, undefined, 'whether we can send is asked of the ratchet, not stored');
 });
 
-test('a restored record is stored as not-live, so it comes back read-only', () => {
-  assert.equal(deviceHalf(full({ restored: true })).live, false);
-});
-
-test('a circle with no device state hydrates read-only, dated from now', () => {
-  const r = hydrate(sharedHalf(full()), undefined, 5000);
+test('a circle hydrates read-only when this device holds no ratchet for it', () => {
+  const r = hydrate(sharedHalf(full()), undefined, { now: 5000, live: false });
   assert.equal(r.name, 'sunday cyclists');
   assert.equal(r.chanMeta.general.hkey, 'k1', 'readable: the room key came from the blob');
-  assert.equal(r.restored, true, 'but not sendable: no MLS state here');
+  assert.equal(r.restored, true, 'but not sendable');
   assert.equal(r.lastSeq, 0);
   // Not 0: an unread count floored at the epoch would mark a circle's entire
   // past as missed the moment this device learned the circle exists.
@@ -88,7 +84,7 @@ test('a circle with no device state hydrates read-only, dated from now', () => {
 });
 
 test('a circle this device is live in hydrates with its own cursor and judgements', () => {
-  const r = hydrate(sharedHalf(full()), deviceHalf(full()));
+  const r = hydrate(sharedHalf(full()), deviceHalf(full()), { live: true });
   assert.ok(!r.restored);
   assert.equal(r.lastSeq, 42);
   assert.equal(r.epoch, 7);
@@ -97,11 +93,22 @@ test('a circle this device is live in hydrates with its own cursor and judgement
   assert.equal(r.joinedAt, 99);
 });
 
+test('a device with a ratchet but no stored device state is live, not read-only', () => {
+  // The regression. `live` was once device state, which meant it was absent
+  // for every install predating that store — so an upgrade marked circles
+  // read-only on devices whose ratchets were sitting right there, and a
+  // read-only record never even subscribes. Liveness comes from the ratchet
+  // precisely so no migration can answer it wrongly.
+  const r = hydrate(sharedHalf(full()), undefined, { live: true });
+  assert.ok(!r.restored, 'the ratchet is what decides, and it says we can send');
+  assert.equal(r.lastSeq, 0, 'the cursor is genuinely unknown, and re-earned by subscribing');
+});
+
 test('two devices of one account see different read markers over the same circle', () => {
   // The point of the split, stated as a test: one blob, two device halves.
   const shared = sharedHalf(full());
-  const phone = hydrate(shared, { live: true, lastSeq: 10, seen: { general: 100 } });
-  const laptop = hydrate(shared, { live: true, lastSeq: 90, seen: { general: 900 } });
+  const phone = hydrate(shared, { lastSeq: 10, seen: { general: 100 } }, { live: true });
+  const laptop = hydrate(shared, { lastSeq: 90, seen: { general: 900 } }, { live: true });
   assert.equal(phone.name, laptop.name, 'the circle is the same circle');
   assert.equal(phone.chanMeta.general.hkey, laptop.chanMeta.general.hkey);
   assert.notEqual(phone.seen.general, laptop.seen.general, 'what each has read is not');

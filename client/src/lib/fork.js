@@ -49,11 +49,31 @@ export const FORK_THRESHOLD = 5;
 /**
  * Why did this blob fail to open?
  *
- * @returns `'self'` | `'ahead'` | `'restored'` — expected, carries no signal.
+ * @returns `'self'` | `'ahead'` | `'replay'` | `'restored'` — expected,
+ *          carries no signal.
  *          `'suspect'` — the fork signature.
  */
-export function classifyFailure({ sender, epoch, me, groupEpoch, restored = false } = {}) {
+export function classifyFailure({
+  sender,
+  epoch,
+  me,
+  groupEpoch,
+  restored = false,
+  replay = false,
+} = {}) {
   if (restored) return 'restored';
+  // History being replayed to us on subscribe, not traffic happening now.
+  // MLS deletes the secrets that opened a past epoch, so these *cannot*
+  // decrypt — that is forward secrecy working, not a fork.
+  //
+  // Epoch ordering deliberately does NOT decide this: a forked branch that
+  // commits more slowly than ours also sends blobs stamped below our epoch,
+  // and exempting those by number would disarm the detector for exactly the
+  // case it exists for. What distinguishes a replay is its position in the
+  // log — at or before the point the relay told us its backlog ended — and
+  // the relay reports that under the same lock it reads the backlog with,
+  // so it cannot be raced by a live send.
+  if (replay) return 'replay';
   if (sender === me) return 'self';
   // `> groupEpoch` and not `>=`: a blob from an epoch we have not applied yet
   // is a message we are simply behind on. One stamped with the epoch we are
