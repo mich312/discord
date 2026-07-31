@@ -400,6 +400,79 @@ test('circles are loaded from the relay on connect, not from this device', async
   assert.equal(c.backupVersion, 2);
 });
 
+// --- the "we do not know yet" state -------------------------------------
+// Circles arrive over the network now, so there is a window where the app is
+// up and the answer is not in yet. An empty rail during that window is not a
+// blank screen, it is a *claim* — that you are in no circles — and it is
+// usually wrong. These pin the flag that lets the UI say "asking" instead.
+
+test('loading is announced as finished once the circles are in', async () => {
+  const identity = new Uint8Array(32).fill(3);
+  const payload = await sealBackup(identity, {
+    v: 2,
+    servers: [{ id: 'srv', name: 'a circle', channels: ['general'], chanMeta: {} }],
+  });
+  const { c, dispatched } = makeController({
+    relayHandler: (msg) =>
+      msg.t === 'backup_get'
+        ? Promise.resolve({ payload, version: 1 })
+        : Promise.resolve({ seq: 1, entries: [], complete: true }),
+  });
+  c.identityBytes = () => identity;
+
+  await c.loadCircles();
+
+  const flags = dispatched.filter((a) => a.type === 'circlesLoading');
+  assert.deepEqual(flags.at(-1), { type: 'circlesLoading', loading: false });
+});
+
+test('a relay that cannot serve the circles still ends the loading state', async () => {
+  // The failure this closes is a placeholder that spins forever. The toast
+  // carries the reason; the rail must go back to saying something finite,
+  // because "still loading" an hour later is a lie of its own.
+  const { c, dispatched } = makeController({
+    relayHandler: (msg) =>
+      msg.t === 'backup_get'
+        ? Promise.reject(new Error('offline'))
+        : Promise.resolve({ seq: 1 }),
+  });
+  c.identityBytes = () => new Uint8Array(32).fill(3);
+
+  await assert.rejects(() => c.loadCircles(), /offline/);
+
+  const flags = dispatched.filter((a) => a.type === 'circlesLoading');
+  assert.deepEqual(flags.at(-1), { type: 'circlesLoading', loading: false });
+  assert.equal(c.circlesLoaded, undefined, 'and the write guard stays shut');
+});
+
+// --- leaving is an account-level act, not a device-level one -------------
+// The confirm dialog says so, so it had better be true.
+
+test('leaving a circle drops it from the parked blob, not just from memory', async () => {
+  const identity = new Uint8Array(32).fill(5);
+  let parked = null;
+  const { c } = makeController({
+    relayHandler: (msg) => {
+      if (msg.t === 'backup_set') parked = msg.payload;
+      return Promise.resolve({ seq: 1, version: 2 });
+    },
+  });
+  c.identityBytes = () => identity;
+  c.circlesLoaded = true;
+  c.servers.set('stay', record({ id: 'stay', name: 'keeping this' }));
+  c.servers.set('go', record({ id: 'go', name: 'leaving this' }));
+  c.deviceState = { stay: { live: true }, go: { live: true } };
+
+  await c.leaveServer('go');
+  clearTimeout(c.backupTimer);
+  await c.uploadBackup();
+
+  const opened = await openBackup(identity, parked);
+  assert.deepEqual(opened.servers.map((s) => s.id), ['stay'], 'the circle left the account');
+  assert.ok(!c.deviceState.go, 'and this device kept no state for it');
+  assert.ok(c.deviceState.stay, 'while the one we stayed in is untouched');
+});
+
 test('a circle this device holds MLS state for loads live, with its own cursor', async () => {
   const identity = new Uint8Array(32).fill(3);
   const payload = await sealBackup(identity, {

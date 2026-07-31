@@ -496,11 +496,6 @@ export class Controller {
           // get us to overwrite it with nothing.
           console.warn(`loading circles: ${e.message}`);
           this.toast(`your circles could not be loaded: ${e.message}`);
-          // Stop saying "loading" for something that has stopped loading.
-          // An empty rail is the wrong answer here, but a placeholder that
-          // never resolves is a worse one — the toast is what carries the
-          // reason, and a reconnect retries.
-          this.dispatch({ type: 'circlesLoading', loading: false });
         });
         // Re-subscribe everything from where we left off, then top up
         // the KeyPackage store so others can add us while we're away.
@@ -2387,6 +2382,17 @@ export class Controller {
    * whatever it happened to remember.
    */
   async loadCircles() {
+    try {
+      return await this.readCircles();
+    } finally {
+      // Both outcomes, in one place. Whether the relay answered or not, this
+      // device has stopped *asking* — and a placeholder that never resolves
+      // is a worse answer than an empty rail.
+      this.dispatch({ type: 'circlesLoading', loading: false });
+    }
+  }
+
+  async readCircles() {
     const { servers, version } = await this.fetchBackup();
     this.backupVersion = version;
     // Set before adopting: a circle arriving here can trigger a write (a
@@ -2395,7 +2401,6 @@ export class Controller {
     this.circlesLoaded = true;
     const fresh = this.adoptCircles(servers);
     await this.persistCircleNames();
-    this.dispatch({ type: 'circlesLoading', loading: false });
     if (fresh.length) {
       for (const record of fresh) {
         if (record.restored) {
