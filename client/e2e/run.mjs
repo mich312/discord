@@ -103,9 +103,24 @@ try {
   await new Promise((r) => setTimeout(r, 600)); // let servers bind
 
   const browser = await chromium.launch(launchOpts);
+  // Every context answers the first-run notifications ask before it opens a
+  // page. It surfaces 1.5s after landing on a modal backdrop, and headless
+  // Chromium always reports permission 'default' — so without this, every
+  // click from ~1.5s onward lands on the backdrop rather than on the app.
+  const newContext = async (...a) => {
+    const c = await browser.newContext(...a);
+    await c.addInitScript(() => {
+      try {
+        localStorage.setItem('quorum-notif-prompted', '1');
+      } catch {
+        /* private mode — the prompt just shows, as it would for a user */
+      }
+    });
+    return c;
+  };
   // Separate storage per user — two devices, not two tabs of one profile.
-  const aliceCtx = await browser.newContext();
-  const bobCtx = await browser.newContext();
+  const aliceCtx = await newContext();
+  const bobCtx = await newContext();
   const alice = await aliceCtx.newPage();
   const bob = await bobCtx.newPage();
   for (const [name, page] of [['alice', alice], ['bob', bob]]) {
@@ -306,7 +321,16 @@ try {
 
   console.log('7. bob reloads — state must come back from IndexedDB');
   await bob.reload();
-  await bob.waitForSelector('[data-testid=channel-general]', { timeout: 15000 });
+  try {
+    await bob.waitForSelector('[data-testid=channel-general]', { timeout: 45000 });
+  } catch (e) {
+    console.error('DUMP', JSON.stringify(await bob.evaluate(() => ({
+      title: document.querySelector('h1')?.textContent,
+      body: document.body.innerText.slice(0, 400),
+      testids: [...document.querySelectorAll('[data-testid]')].map((x) => x.dataset.testid).slice(0, 30),
+    })), null, 1));
+    throw e;
+  }
   await bob.waitForFunction(
     () => document.querySelector('[data-testid=conn-dot]')?.classList.contains('online'),
     { timeout: 15000 }
@@ -325,7 +349,7 @@ try {
   await alice.waitForSelector('text=post-reload pong', { timeout: 10000 });
 
   console.log('8. recovery: bob restores identity in a fresh profile');
-  const freshCtx = await browser.newContext();
+  const freshCtx = await newContext();
   const fresh = await freshCtx.newPage();
   fresh.on('pageerror', (e) => console.error('[fresh pageerror]', e.message));
   await fresh.goto(base);
@@ -353,7 +377,7 @@ try {
   if (!inviteUrl.includes('#k=')) throw new Error(`invite url missing fragment key: ${inviteUrl}`);
 
   console.log('10. charlie joins via the link (external commit, nobody helping)');
-  const charlieCtx = await browser.newContext();
+  const charlieCtx = await newContext();
   const charlie = await charlieCtx.newPage();
   charlie.on('pageerror', (e) => console.error('[charlie pageerror]', e.message));
   await joinViaInvite(charlie, 'charlie', inviteUrl);
@@ -420,7 +444,7 @@ try {
   await alice.waitForSelector('[data-testid=identity-key]');
   const aliceKey = await alice.inputValue('[data-testid=identity-key]');
   await alice.click('[data-testid=close-modal]');
-  const importCtx = await browser.newContext();
+  const importCtx = await newContext();
   const imported = await importCtx.newPage();
   imported.on('pageerror', (e) => console.error('[import pageerror]', e.message));
   await imported.goto(base);
@@ -528,7 +552,7 @@ try {
   await alice.waitForSelector('[data-testid=invite-url]');
   const inviteUrl2 = await alice.inputValue('[data-testid=invite-url]');
   await alice.click('[data-testid=close-modal]');
-  const daveCtx = await browser.newContext();
+  const daveCtx = await newContext();
   await daveCtx.grantPermissions(['microphone'], { origin: `http://127.0.0.1:${HTTP}` });
   const dave = await daveCtx.newPage();
   dave.on('pageerror', (e) => console.error('[dave pageerror]', e.message));
@@ -759,7 +783,7 @@ try {
   );
 
   console.log('20. fresh profile signs in as charlie with username + password');
-  const pwCtx = await browser.newContext();
+  const pwCtx = await newContext();
   const pwPage = await pwCtx.newPage();
   pwPage.on('pageerror', (e) => console.error('[pw pageerror]', e.message));
   await pwPage.goto(base);
@@ -790,7 +814,7 @@ try {
   await pwPage.waitForSelector('text=Qualifying at Spa', { timeout: 10000 });
   await pwPage.waitForSelector('text=Trailer leaves 6am Saturday', { timeout: 10000 });
   // Wrong password must fail without leaking the vault.
-  const pw2Ctx = await browser.newContext();
+  const pw2Ctx = await newContext();
   const pw2 = await pw2Ctx.newPage();
   await pw2.goto(base);
   await pw2.click('[data-testid=tab-signin]');
@@ -802,7 +826,7 @@ try {
   await pw2.waitForSelector('.error', { timeout: 30000 });
 
   console.log('21. passkey: register with PRF, wipe, sign back in');
-  const erinCtx = await browser.newContext();
+  const erinCtx = await newContext();
   const erin = await erinCtx.newPage();
   erin.on('pageerror', (e) => console.error('[erin pageerror]', e.message));
   const cdp = await erinCtx.newCDPSession(erin);

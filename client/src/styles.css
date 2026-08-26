@@ -577,7 +577,7 @@ kbd {
   max-width: 1040px;
 }
 .circles-head-id { flex: 1; min-width: 220px; }
-.circles-head-id h2 { font-size: var(--text-xl); font-weight: 650; letter-spacing: -0.01em; }
+.circles-head-id h1 { font-size: var(--text-xl); font-weight: 650; letter-spacing: -0.01em; }
 .circles-head-id p { margin-top: 4px; font-size: var(--text-base); }
 .circles-head-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .circles-placeholder { color: var(--ink-mute); font-size: var(--text-base); }

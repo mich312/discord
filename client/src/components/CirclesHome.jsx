@@ -128,7 +128,10 @@ export default function CirclesHome({
       <header className="circles-head">
         <Seal name={me} size={44} title={me} />
         <div className="circles-head-id">
-          <h2>Your circles</h2>
+          {/* §8.8 — the document has exactly one h1 at a time, and with no
+              circle open the marker that usually carries it is not on screen.
+              This page had no h1 at all. */}
+          <h1>Your circles</h1>
           {loading ? (
             // "You are in no circles" is a claim, and while they are still
             // being fetched it is one we cannot make.
