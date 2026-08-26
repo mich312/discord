@@ -9,7 +9,7 @@ import Onboarding from './components/Onboarding.jsx';
 import Masthead from './components/Masthead.jsx';
 import CommandPalette from './components/CommandPalette.jsx';
 import Rail from './components/Rail.jsx';
-import Channels from './components/Channels.jsx';
+import RoomStrip from './components/RoomStrip.jsx';
 import Messages from './components/Messages.jsx';
 import Overview from './components/Overview.jsx';
 import Members from './components/Members.jsx';
@@ -726,6 +726,56 @@ export default function App() {
           </span>
         </div>
       )}
+      {/* The strip sits at shell level, under the fascia and above whatever
+          the pane is showing — so it is on screen during the call stage and
+          the game stage too. That is the half of §7.1 the sidebar column
+          could never hold: it was a list of rooms, and a call is not a row
+          in a list of rooms. */}
+      {activeServer && (
+        <RoomStrip
+          server={activeServer}
+          activeChannel={channel}
+          onStage={stage && !!state.voice.active}
+          onGame={!!(liveGame && channel)}
+          unreads={unreads}
+          voice={state.voice}
+          canManage={canManage && !activeServer.restored}
+          onSelect={(ch) =>
+            withViewTransition(() => {
+              dispatch({ type: 'select', server, channel: ch });
+              setStage(false); // picking a room dismisses the stage…
+              setGame(null); // …and the game
+              setDrawer(null);
+            })
+          }
+          onSettings={(ch) =>
+            dispatch({
+              type: 'modal',
+              modal: {
+                type: 'channel',
+                server,
+                channel: ch,
+                meta: activeServer.chanMeta?.[ch] ?? {},
+              },
+            })
+          }
+          onCreate={(ch) => controllerRef.current.createChannel(server, ch)}
+          onVoiceCreate={(ch) => controllerRef.current.createVoiceChannel(server, ch)}
+          onVoiceSettings={(ch) =>
+            dispatch({
+              type: 'modal',
+              modal: { type: 'channel', voice: true, server, channel: ch, meta: {} },
+            })
+          }
+          onVoiceJoin={(ch) =>
+            controllerRef.current.voice
+              .join(server, ch)
+              .then(() => openStage())
+              .catch((e) => dispatch({ type: 'toast', text: `voice: ${e.message}` }))
+          }
+          onOpenStage={openStage}
+        />
+      )}
       <div className="app">
         {drawer && (
           <div
@@ -756,63 +806,6 @@ export default function App() {
             }}
           />
           <div className="nav-col">
-          {activeServer && (
-            <Channels
-              server={activeServer}
-              activeChannel={channel}
-              me={state.me}
-              unreads={unreads}
-              canManage={canManage && !activeServer.restored}
-              onSelect={(ch) =>
-                withViewTransition(() => {
-                  dispatch({ type: 'select', server, channel: ch });
-                  setStage(false); // picking a text room dismisses the stage
-                  setGame(null); // …and the game
-                  setDrawer(null);
-                })
-              }
-              onSettings={(ch) =>
-                dispatch({
-                  type: 'modal',
-                  modal: {
-                    type: 'channel',
-                    server,
-                    channel: ch,
-                    meta: activeServer.chanMeta?.[ch] ?? {},
-                  },
-                })
-              }
-              onCreate={(ch) => controllerRef.current.createChannel(server, ch)}
-              onVoiceCreate={(ch) => controllerRef.current.createVoiceChannel(server, ch)}
-              onVoiceSettings={(ch) =>
-                dispatch({
-                  type: 'modal',
-                  modal: { type: 'channel', voice: true, server, channel: ch, meta: {} },
-                })
-              }
-              voice={state.voice}
-              onVoiceJoin={(ch) =>
-                controllerRef.current.voice
-                  .join(server, ch)
-                  .then(() => openStage())
-                  .catch((e) => dispatch({ type: 'toast', text: `voice: ${e.message}` }))
-              }
-              onVoiceLeave={() => controllerRef.current.voice.leave()}
-              onOpenStage={openStage}
-              onManage={() =>
-                dispatch({
-                  type: 'modal',
-                  modal: {
-                    type: 'circle',
-                    server,
-                    name: activeServer.name,
-                    glyph: activeServer.overview?.glyph,
-                    canManage: canManage && !activeServer.restored,
-                  },
-                })
-              }
-            />
-          )}
           <div className="self-card">
             <div className="self-id">
               <Seal name={state.me} size={32} title={state.me} />

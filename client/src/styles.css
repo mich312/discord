@@ -37,6 +37,12 @@
   --r-sm: 6px;
   --r-pill: 999px;
 
+  /* Every horizontal edge in the main pane derives from this (§5.1): the
+     strip, the pane header, the scroll body and the composer. Four
+     components used to pick four values, so nothing in the column shared a
+     left edge and the step was visible with the naked eye. */
+  --pane-gutter: 18px;
+
   --ease: cubic-bezier(0.25, 0.6, 0.3, 1);
   --fast: 100ms;
   --slow: 180ms;
@@ -552,6 +558,106 @@ kbd {
 }
 .secure-banner svg { color: var(--accent-ink); flex-shrink: 0; }
 .secure-banner .button { padding: 3px 10px; }
+
+/* ----------------------------------------------------------- room strip -- */
+/* One row instead of a column. It sits directly under the fascia, above the
+   pane, so it is present on every in-circle screen — the call stage and the
+   game stage included, which is where the column it replaces used to stop
+   telling the truth. */
+.room-strip {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  flex: none;
+  padding: 0 var(--pane-gutter);
+  height: 46px;
+  background: var(--well);
+  border-bottom: 1px solid var(--hairline);
+}
+.room-chips {
+  list-style: none;
+  margin: 0;
+  padding: 0;
+  display: flex;
+  align-items: center;
+  gap: 4px;
+  min-width: 0;
+  flex: 1;
+  /* Deliberate, visible sideways scroll when a circle has more rooms than
+     fit — §9.3 bans horizontal scroll on the *page*, not inside a rail that
+     is obviously a rail. Snapping keeps a chip from stopping half off. */
+  overflow-x: auto;
+  scrollbar-width: none;
+  scroll-snap-type: x proximity;
+}
+.room-chips::-webkit-scrollbar { display: none; }
+.room-chips > li { flex: none; scroll-snap-align: start; }
+
+.room-chip {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 11px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  color: var(--ink-dim);
+  font: 600 var(--text-base) var(--sans);
+  white-space: nowrap;
+  cursor: pointer;
+  transition: background var(--fast) var(--ease), color var(--fast) var(--ease);
+}
+.room-chip svg { color: var(--ink-mute); flex: none; }
+.room-chip:hover { background: var(--hover); color: var(--ink); }
+/* Coral marks the selected thing (§1.1) — and a border, not a fill, so the
+   one filled primary action in view stays the one that matters. §1.6: the
+   chip is also the only one carrying aria-current, which is the second
+   channel a greyscale render needs. */
+.room-chip.active {
+  background: var(--accent-soft);
+  border-color: var(--accent);
+  color: var(--ink);
+}
+.room-chip.active svg { color: var(--accent-ink); }
+.room-chip-name { min-width: 0; }
+.room-chip-flag { display: grid; place-items: center; color: var(--ink-mute); }
+.room-chip-flag svg { color: var(--warn); }
+
+/* A room with someone in it. Green is "someone is here right now" (§1.2), and
+   the word beside it is what makes that survive greyscale. */
+.room-chip.live, .room-chip.joined { color: var(--ink); }
+.room-chip.live svg, .room-chip.joined svg { color: var(--ok); }
+.room-chip-state {
+  font-family: var(--mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0.1em;
+  text-transform: uppercase;
+  color: var(--ok);
+}
+.room-chip.joined { border-color: var(--ok-soft); background: var(--ok-soft); }
+
+.room-chip-input {
+  width: 148px;
+  padding: 6px 9px;
+  background: var(--raised);
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--r-sm);
+  color: var(--ink);
+  font: 500 var(--text-base) var(--sans);
+}
+.room-chip-add-go {
+  padding: 6px 9px;
+  margin-left: 4px;
+  background: transparent;
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-sm);
+  color: var(--ink-dim);
+  font: 500 var(--text-sm) var(--sans);
+  cursor: pointer;
+}
+.room-chip-add-go:hover { color: var(--ink); border-color: var(--hairline-strong); }
+.room-strip form { display: flex; align-items: center; }
+.room-strip-end { display: flex; align-items: center; gap: 2px; flex: none; }
 
 /* --------------------------------------------------------------- sidebar -- */
 .sidebar {
@@ -1234,7 +1340,7 @@ kbd {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 0 18px;
+  padding: 0 var(--pane-gutter);
   border-bottom: 1px solid var(--hairline);
 }
 .pane-head .room-name { display: flex; align-items: center; gap: 7px; font-weight: 600; font-size: var(--text-base); }
@@ -1395,7 +1501,7 @@ kbd {
 
 /* composer */
 .composer-dock {
-  padding: 0 18px calc(10px + env(safe-area-inset-bottom, 0px));
+  padding: 0 var(--pane-gutter) calc(10px + env(safe-area-inset-bottom, 0px));
   flex-shrink: 0;
 }
 .composer {
@@ -1578,7 +1684,7 @@ kbd {
    not a brochure, in the conversation slot. */
 .channel-list.overview-entry { padding: 12px 8px 0; flex-shrink: 0; overflow: visible; }
 
-.overview-scroll { padding: 0 24px 24px; }
+.overview-scroll { padding: 0 var(--pane-gutter) 24px; }
 
 .overview-hero {
   display: flex;

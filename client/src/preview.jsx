@@ -12,7 +12,7 @@ import './styles.css';
 import Masthead from './components/Masthead.jsx';
 import CommandPalette from './components/CommandPalette.jsx';
 import Rail from './components/Rail.jsx';
-import Channels from './components/Channels.jsx';
+import RoomStrip from './components/RoomStrip.jsx';
 import Messages from './components/Messages.jsx';
 import Overview from './components/Overview.jsx';
 import Members from './components/Members.jsx';
@@ -302,6 +302,29 @@ function PreviewShell({ empty = false, banner = false, modal = null, palette = f
           <button className="button">secure account</button>
         </div>
       )}
+      {activeServer && (
+        <RoomStrip
+          server={activeServer}
+          activeChannel={active.channel}
+          onStage={!!stage}
+          onGame={!!(liveGame && active.channel)}
+          unreads={Object.fromEntries(
+            (digestMock[activeServer.id] ?? []).map((d) => [d.channel, d.unread])
+          )}
+          voice={vc}
+          canManage
+          onSelect={(ch) => {
+            setActive({ ...active, channel: ch });
+            setDrawer(null);
+          }}
+          onSettings={noop}
+          onCreate={noop}
+          onVoiceCreate={noop}
+          onVoiceSettings={noop}
+          onVoiceJoin={noop}
+          onOpenStage={noop}
+        />
+      )}
       <div className="app">
         {drawer && <div className="drawer-backdrop" onClick={() => setDrawer(null)} />}
         <nav className="sidebar">
@@ -315,24 +338,6 @@ function PreviewShell({ empty = false, banner = false, modal = null, palette = f
             onCreate={noop}
           />
           <div className="nav-col">
-          {activeServer && (
-            <Channels
-              server={activeServer}
-              activeChannel={active.channel}
-              me={me}
-              unreads={Object.fromEntries(
-                (digestMock[activeServer.id] ?? []).map((d) => [d.channel, d.unread])
-              )}
-              onSelect={(ch) => {
-                setActive({ ...active, channel: ch });
-                setDrawer(null);
-              }}
-              onCreate={noop}
-              voice={vc}
-              onVoiceJoin={noop}
-              onVoiceLeave={noop}
-            />
-          )}
           <div className="self-card">
             <div className="self-id">
               <Seal name={me} size={32} />
