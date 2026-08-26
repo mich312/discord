@@ -394,9 +394,6 @@ kbd {
 }
 .app { flex: 1; min-height: 0; display: flex; }
 
-/* Drawer toggles live in the masthead but only exist on narrow screens. */
-.drawer-backdrop { display: none; }
-
 .centered {
   height: 100%;
   display: flex;
@@ -710,6 +707,65 @@ kbd {
   overflow: hidden;
   text-overflow: ellipsis;
 }
+
+/* ------------------------------------------------------------- call bar -- */
+/* The call you are still in, wherever you have walked to. It sits above the
+   rooms strip because it outranks navigation: this is the one piece of
+   chrome that exists to stop someone believing they hung up. */
+.call-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex: none;
+  flex-wrap: wrap;
+  row-gap: 8px;
+  padding: 8px var(--pane-gutter);
+  background: var(--ok-soft);
+  border-bottom: 1px solid var(--hairline);
+  color: var(--ink);
+  font-size: var(--text-base);
+}
+.call-bar-glyph { display: grid; place-items: center; color: var(--ok); flex: none; }
+.call-bar-where { min-width: 0; }
+.call-bar-where strong { font-weight: 650; }
+.call-bar-who { display: flex; align-items: center; gap: 9px; flex: none; }
+.call-bar-orbs { display: flex; }
+.call-bar-orbs > * { margin-right: -6px; border-radius: 50%; box-shadow: 0 0 0 2px var(--panel); }
+.call-bar-meta {
+  font-family: var(--mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
+  color: var(--ink-dim);
+}
+.call-bar-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; flex: none; }
+/* Both controls here are reversible, which is the only reason they may share
+   a row at all (§7.3). Leaving the call is not here — it is on the stage. */
+.call-bar-mic,
+.call-bar-back {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 7px 12px;
+  border-radius: var(--r-sm);
+  font: 600 var(--text-sm) var(--sans);
+  cursor: pointer;
+}
+.call-bar-mic {
+  background: transparent;
+  border: 1px solid var(--ok);
+  color: var(--ok);
+}
+.call-bar-mic:hover { background: var(--ok-soft); }
+/* Muted is a reduced guarantee about you, not a broken one: amber, not red,
+   and the word says which way it is set (§1.6). */
+.call-bar-mic.muted { border-color: var(--warn); color: var(--warn); }
+.call-bar-back {
+  background: var(--ok);
+  border: 1px solid var(--ok);
+  color: var(--on-accent);
+}
+.call-bar-back:hover { filter: brightness(1.08); }
 
 /* ----------------------------------------------------------- room strip -- */
 /* One row instead of a column. It sits directly under the fascia, above the
@@ -1490,19 +1546,37 @@ kbd {
 .device-row .ghost { min-height: 44px; min-width: 44px; padding: 0 10px; flex-shrink: 0; }
 
 /* ---------------------------------------------------------------- roster -- */
+/* The roster is a section of the board now, not a column beside the
+   conversation. It keeps every action it had — it is still the security
+   boundary — it just stops costing a fifth of the window on every screen. */
 .members {
-  width: 248px;
-  flex-shrink: 0;
   display: flex;
   flex-direction: column;
+  min-width: 0;
   background: var(--panel);
-  border-left: 1px solid var(--hairline);
-  padding-bottom: 12px;
-  min-height: 0;
+  border: 1px solid var(--hairline);
+  border-radius: var(--r-lg);
+  padding: 4px 0 12px;
 }
-.roster-sub { padding: 2px 14px 8px; font-size: var(--text-sm); color: var(--ink-mute); line-height: 1.45; }
+/* On the board it is one block among several, so it does not scroll inside
+   itself — the board scrolls — and it lays out as cards rather than as the
+   248px stack of rows it used to be. A roster row stretched to the width of
+   the window puts a member's name at one end and their badge at the other,
+   which is a worse answer than the column gave. */
+.members .member-list {
+  overflow: visible;
+  display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(232px, 1fr));
+  gap: 4px;
+}
+/* The group headings ("in lounge — 3") label the whole grid, not a cell. */
+.members .section-label { grid-column: 1 / -1; justify-content: flex-start; gap: 10px; }
+.members .section-label .member-unchecked { margin-left: auto; }
+.members > .section-label:first-child { padding-top: 12px; }
+.members .fineprint { grid-column: 1 / -1; }
+.members .member { border: 1px solid var(--hairline); background: var(--raised); }
 .member-count { font: 600 var(--text-xs) var(--mono); color: var(--ink-dim); }
-.member-list { list-style: none; padding: 0 8px; flex: 1; overflow-y: auto; }
+.member-list { list-style: none; padding: 0 8px; flex: 1; min-width: 0; }
 .member {
   display: flex;
   align-items: center;
@@ -1598,17 +1672,12 @@ kbd {
    not a brochure, in the conversation slot. */
 
 .overview-scroll { padding: 0 var(--pane-gutter) 24px; }
+/* One measure for every block on the board. Without it the roster grid and
+   the up-next hero run to the full width of a desktop window while the
+   catch-up rows stop at their own, and the board reads as four things that
+   were laid out separately — which, before this, they were. */
+.overview-scroll > * { max-width: 1080px; }
 
-.overview-hero {
-  display: flex;
-  align-items: flex-start;
-  gap: 16px;
-  padding: 24px 0 18px;
-  border-bottom: 1px solid var(--hairline);
-}
-.overview-hero .seal-avatar { flex-shrink: 0; }
-.overview-title { flex: 1; min-width: 0; }
-.overview-title h2 { font-size: var(--text-xl); font-weight: 650; letter-spacing: -0.015em; }
 .overview-stats {
   display: flex;
   flex-wrap: wrap;
@@ -1650,7 +1719,6 @@ kbd {
   color: var(--accent-ink);
   margin-bottom: 8px;
 }
-.upnext-body { display: flex; align-items: baseline; gap: 12px; flex-wrap: wrap; }
 .upnext-title { font-size: var(--text-lg); font-weight: 650; letter-spacing: -0.01em; }
 .upnext-when { font-size: var(--text-xs); color: var(--ink-mute); text-transform: uppercase; letter-spacing: 0.08em; }
 .upnext-note { margin-top: 6px; font-size: var(--text-sm); color: var(--ink-dim); line-height: 1.5; }
@@ -1685,6 +1753,12 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
 
 /* catch up: per-room unread + latest line */
 .overview-rooms { list-style: none; padding: 0; display: grid; gap: 4px; }
+/* §9.4 — a grid item is min-content wide by default, so without this the row
+   grows to fit the whole of the last message and the ellipsis on `.last`
+   never engages. It is why the board was 602px of content in a 354px pane at
+   phone width, with the catch-up rows running off the side of a scroller
+   that hides horizontal overflow rather than showing it. */
+.overview-rooms > li, .cal-list > li { min-width: 0; }
 .overview-room {
   display: flex;
   align-items: center;
@@ -2676,13 +2750,6 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
   50% { box-shadow: 0 0 0 2px var(--ok), 0 0 20px var(--ok-soft); }
 }
 
-/* mobile drawers already slide on transform + the shared ease; hint the
-   compositor so the slide stays smooth on low-end phones (820px is where
-   the sidebar/roster actually become fixed edge drawers) */
-@media (max-width: 820px) {
-  .sidebar, .members { will-change: transform; }
-}
-
 /* ------------------------------------------------ view transitions -- */
 /* Native cross-fade (channel switch, circle switch, text⇄call-stage swap)
    and FLIP position-morph (a roster member sliding between groups). Driven
@@ -2778,28 +2845,6 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
 
 /* Two faces of the hub. The segmented control sits by the title; the system
    still speaks in mono, so the labels do too. */
-.hub-tabs {
-  display: inline-flex;
-  gap: 2px;
-  padding: 2px;
-  background: var(--panel);
-  border: 1px solid var(--hairline);
-  border-radius: var(--r-pill);
-}
-.hub-tab {
-  font: 600 11px var(--mono);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
-  color: var(--ink-mute);
-  background: none;
-  border: none;
-  border-radius: var(--r-pill);
-  padding: 4px 13px;
-  cursor: pointer;
-  transition: color var(--fast) var(--ease), background var(--fast) var(--ease);
-}
-.hub-tab:hover { color: var(--ink-dim); }
-.hub-tab.on { color: var(--on-accent); background: var(--accent); }
 
 /* The Play view's top slot when the circle is in a game: who's in, and one
    green door to join them. */
@@ -2846,16 +2891,6 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
   font-size: var(--text-sm);
   color: var(--ink-dim);
 }
-.hub-jump { font-size: var(--text-sm); margin: 18px 0 2px; }
-.linklike {
-  background: none;
-  border: none;
-  padding: 0;
-  font: inherit;
-  color: var(--accent-ink);
-  cursor: pointer;
-}
-.linklike:hover { text-decoration: underline; }
 
 /* Shelf filter chips — mono, like every other label the system prints. */
 .shelf-filters { display: flex; flex-wrap: wrap; gap: 7px; margin: 4px 0 14px; }
@@ -3375,16 +3410,14 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
 }
 
 /* ----------------------------------------------------------------- mobile -- */
-/* One column: the conversation owns the screen. The roster is still an edge
-   drawer driven by [data-drawer] on the shell; the circles-and-rooms drawer
-   that used to sit opposite it is gone, because rooms are the strip under
-   the fascia at every width and circles are a screen. The register's grammar
-   (rules, mono labels, sharp geometry) is unchanged — only the floor plan
-   moves. */
+/* One column, and now it is the only column: the conversation owns the
+   screen at every width. Both edge drawers are gone — rooms are the strip
+   under the fascia, circles are a screen, and a circle's people are the
+   first block on its board. The register's grammar (rules, mono labels,
+   sharp geometry) is unchanged; only the floor plan moved. */
 @media (max-width: 820px) {
   /* masthead: glyph · marker ··· palette · theme · dot · you · roster */
   .masthead { gap: 10px; padding: 0 8px; }
-  .roster-btn { display: inline-flex; }
   .masthead-brand { width: auto; gap: 0; }
   .masthead-brand .wordmark { display: none; }
   .circle-marker { gap: 8px; }
@@ -3404,41 +3437,14 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
 
   .secure-banner { flex-wrap: wrap; gap: 8px; padding: 7px 12px; }
 
-  /* roster -> right drawer */
-  .members {
-    position: fixed;
-    top: 0;
-    bottom: 0;
-    height: 100%;
-    width: min(85vw, 320px);
-    z-index: 45;
-    transition: transform var(--slow) var(--ease), visibility var(--slow);
-    visibility: hidden;
-    padding-top: env(safe-area-inset-top, 0px);
-  }
-  @supports (height: 100dvh) {
-    .members { height: 100dvh; }
-  }
-  .members {
-    right: 0;
-    transform: translateX(100%);
-    border-left: 1px solid var(--hairline-strong);
-    padding-right: env(safe-area-inset-right, 0px);
-    padding-bottom: calc(12px + env(safe-area-inset-bottom, 0px));
-  }
-  [data-drawer='roster'] .members {
-    transform: none;
-    visibility: visible;
-    box-shadow: var(--overlay-shadow);
-  }
-  .drawer-backdrop {
-    display: block;
-    position: fixed;
-    inset: 0;
-    z-index: 44;
-    background: var(--backdrop);
-    animation: fade var(--fast) var(--ease);
-  }
+  /* Same shape as the game-night row below, and for the same reason: title,
+     date and RSVP do not fit on one 390px line, and the RSVP button — the
+     entire point of the row — is the part that ends up off the edge. */
+  .cal-row { flex-wrap: wrap; row-gap: 8px; }
+  .cal-row .room { flex-shrink: 1; min-width: 0; }
+  .cal-row .last { flex: 1 1 100%; }
+  .cal-rsvp { margin-left: auto; min-height: 44px; }
+
   /* A game night is title + who's going + RSVP. Side by side that needs more
      width than a phone has, and the RSVP button — the entire point of the row
      — was the part that ended up off-screen. Stack it: the body takes a full
@@ -3450,7 +3456,19 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
   .night-action { order: 3; margin-left: auto; min-height: 44px; }
 
   /* conversation takes the full width */
-  .pane-head { padding: 0 12px; }
+  /* The header carries more than it used to — the room, how many of the
+     circle are here, how many keys are unchecked, and the way into the call
+     — and at 390px that does not fit on one line. It wraps rather than
+     pushing the call button off the edge, which is §9.3: no view below
+     1080px scrolls sideways. */
+  .pane-head {
+    padding: 6px 12px;
+    height: auto;
+    min-height: 44px;
+    flex-wrap: wrap;
+    row-gap: 6px;
+  }
+  .room-here, .room-unchecked { min-height: 36px; }
   .sealed-note { display: none; }
   .scroll { padding: 4px 12px 12px; }
   .watermark { max-width: none; }
@@ -3613,3 +3631,43 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
    it still reads when the green does not. */
 .member.speaking .seal-avatar { box-shadow: 0 0 0 3px var(--ok), 0 0 10px var(--ok-soft); }
 .stage-bubble.speaking { border-width: 2px; }
+
+/* --------------------------------------------------- room head signals -- */
+/* What the roster column used to say from the side of the screen, said in
+   the room's own header. Both are buttons: they go to the board, which is
+   where the people themselves now are. */
+.room-here {
+  display: flex;
+  align-items: baseline;
+  gap: 5px;
+  flex: none;
+  padding: 4px 8px;
+  margin-left: -8px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  color: var(--ink-dim);
+  font: 500 var(--text-sm) var(--sans);
+  cursor: pointer;
+}
+.room-here:hover { background: var(--hover); color: var(--ink); }
+.room-here-n { font-family: var(--mono); font-weight: 600; color: var(--ink-dim); }
+/* §1.2 — green only once somebody actually is here. */
+.room-here-n.live { color: var(--ok); }
+/* §10.5 — the warning is the control that resolves it, so it is a real
+   target with a real label, not a coloured dot with a tooltip. §1.3: amber,
+   because an unchecked key is a reduced guarantee and not a broken one. */
+.room-unchecked {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  padding: 4px 9px;
+  background: transparent;
+  border: 1px solid var(--warn);
+  border-radius: var(--r-pill);
+  color: var(--warn);
+  font: 600 var(--text-sm) var(--sans);
+  cursor: pointer;
+}
+.room-unchecked:hover { background: var(--hover); }

@@ -19,6 +19,7 @@ import Members from './components/Members.jsx';
 import Modal from './components/Modal.jsx';
 import Onboarding from './components/Onboarding.jsx';
 import CallStage from './components/CallStage.jsx';
+import CallBar from './components/CallBar.jsx';
 import GameStage from './components/GameStage.jsx';
 import Seal from './components/Seal.jsx';
 import BootLoader from './components/BootLoader.jsx';
@@ -303,6 +304,9 @@ function PreviewShell({ empty = false, circles = false, banner = false, modal = 
           <button className="button">secure account</button>
         </div>
       )}
+      {vc.active && !stage && !(liveGame && active.channel) && (
+        <CallBar voice={vc} me={me} now={now} onOpen={noop} onToggleMute={noop} />
+      )}
       {activeServer && (
         <RoomStrip
           server={activeServer}
@@ -378,6 +382,7 @@ function PreviewShell({ empty = false, circles = false, banner = false, modal = 
                 voice={vc}
                 onVoiceJoin={noop}
                 onOpenStage={noop}
+              onOpenBoard={() => setActive({ ...active, channel: null })}
                 onLaunchGame={(g) => {
                   setActive({ ...active, channel: activeServer.channels[0] });
                   setLiveGame(g);
@@ -408,7 +413,16 @@ function PreviewShell({ empty = false, circles = false, banner = false, modal = 
                 onRally={noop}
                 onRsvp={noop}
                 onSave={(ov) => setOverviews((o) => ({ ...o, [activeServer.id]: ov }))}
-                onAddNotice={(text) =>
+                people={
+                <Members
+                  server={activeServer}
+                  me={me}
+                  voice={vc}
+                  onAdd={noop}
+                  onMember={() => setOpenModal(modals['modal-safety'])}
+                />
+              }
+              onAddNotice={(text) =>
                   setNoticesBy((by) => ({
                     ...by,
                     [activeServer.id]: [
@@ -427,7 +441,6 @@ function PreviewShell({ empty = false, circles = false, banner = false, modal = 
                 }
               />
             )}
-            <Members server={activeServer} me={me} voice={vc} onAdd={noop} onMember={() => setOpenModal(modals['modal-safety'])} />
           </>
         ) : (
           <CirclesHome

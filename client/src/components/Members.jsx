@@ -181,7 +181,15 @@ export default function Members({ server, me, canManage, voice, onAdd, onMember,
             <div className="section-label member-group live">
               <span className="overline">in {room} — {here.length}</span>
             </div>
-            <ul className="member-list in-call" data-testid="member-list-call">
+            {/* Who is in this room right now. The sidebar used to carry a
+                second copy of this as a join card; with the column gone the
+                roster is the one place that names them, so it keeps the
+                per-room hook the rest of the product looks for. */}
+            <ul
+              className="member-list in-call"
+              data-testid="member-list-call"
+              data-room={room}
+            >
               {here.map(row)}
             </ul>
           </React.Fragment>

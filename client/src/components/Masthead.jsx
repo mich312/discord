@@ -1,5 +1,5 @@
 import React from 'react';
-import { QuorumGlyph, LinkGlyph, CommandGlyph, Sun, Moon, Users } from './icons.jsx';
+import { QuorumGlyph, LinkGlyph, CommandGlyph, Sun, Moon } from './icons.jsx';
 import Seal from './Seal.jsx';
 import CircleMarker from './CircleMarker.jsx';
 
@@ -8,10 +8,10 @@ import CircleMarker from './CircleMarker.jsx';
 // state, who you are signed in as — at the right. Nothing here scrolls;
 // this is the fascia.
 //
-// There is no "circles & rooms" toggle any more. It opened a drawer holding
-// the rail and the channel column, and both are gone: rooms are the strip
-// under this bar at every width, and circles are a screen. The roster
-// toggle stays, and only renders (via CSS) at phone widths.
+// There are no drawer toggles here any more. One opened the rail and the
+// channel column; the other opened the roster. All three are gone as panels:
+// rooms are the strip under this bar at every width, circles are a screen,
+// and the circle's people are the first thing on its board.
 export default function Masthead({
   server,
   channel,
@@ -26,13 +26,8 @@ export default function Masthead({
   onInvite,
   onPalette,
   onTheme,
-  onRoster,
   me,
   onSettings,
-  // Which drawer is open, so the toggles can announce their own state.
-  // Without it a screen-reader user pressed "circles & rooms" and got no
-  // indication that anything had happened.
-  drawer = null,
 }) {
   return (
     <header className="masthead">
@@ -108,18 +103,7 @@ export default function Masthead({
             </span>
           </button>
         )}
-        {server && (
-          <button
-            className="icon-btn roster-btn"
-            title="roster"
-            data-testid="roster-toggle"
-            aria-expanded={drawer === 'roster'}
-            aria-controls="roster-drawer"
-            onClick={onRoster}
-          >
-            <Users />
-          </button>
-        )}
+
       </div>
     </header>
   );

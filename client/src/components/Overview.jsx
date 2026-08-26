@@ -42,24 +42,6 @@ function safeHref(url) {
   return /^https?:\/\//i.test(url) ? url : null;
 }
 
-// Which face of the hub you're on, remembered on this device — a view
-// preference, never shared, so it needs no protocol.
-const HUB_TAB_KEY = 'quorum-hub-tab';
-function readTab() {
-  try {
-    return localStorage.getItem(HUB_TAB_KEY) === 'home' ? 'home' : 'play';
-  } catch {
-    return 'play';
-  }
-}
-function writeTab(tab) {
-  try {
-    localStorage.setItem(HUB_TAB_KEY, tab);
-  } catch {
-    // private mode — the tab just resets to Play next time
-  }
-}
-
 // datetime-local <-> ms, in the device's own timezone.
 function toLocalInput(ms) {
   if (!ms) return '';
@@ -552,8 +534,10 @@ export default function Overview({
   onSave,
   onAddNotice,
   onRemoveNotice,
+  // The roster, rendered by the parent so the trust actions it carries
+  // (verify, add, remove, call) stay wired in one place.
+  people,
 }) {
-  const [tab, setTab] = useState(readTab);
   const [editing, setEditing] = useState(false);
   const [addingGame, setAddingGame] = useState(false);
   const [filter, setFilter] = useState('all');
@@ -568,11 +552,6 @@ export default function Overview({
     const t = setInterval(() => setNow(Date.now()), 30000);
     return () => clearInterval(t);
   }, []);
-
-  const goTab = (next) => {
-    setTab(next);
-    writeTab(next);
-  };
 
   // Re-pull the digest whenever anything landed for this circle
   // (digestKey folds in lastSeq + the local-store revision).
@@ -672,42 +651,17 @@ export default function Overview({
   return (
     <main className="messages-pane overview-pane" data-testid="overview-pane">
       <header className="pane-head">
-        <span className="room-name">
-          <span className="glyph">
-            <Gamepad size={14} />
-          </span>
-          game hub
-        </span>
-        {!editing && (
-          <span className="hub-tabs" role="tablist" aria-label="game hub view">
-            <button
-              className={tab === 'play' ? 'hub-tab on' : 'hub-tab'}
-              role="tab"
-              aria-selected={tab === 'play'}
-              data-testid="overview-tab-play"
-              onClick={() => goTab('play')}
-            >
-              play
-            </button>
-            <button
-              className={tab === 'home' ? 'hub-tab on' : 'hub-tab'}
-              role="tab"
-              aria-selected={tab === 'home'}
-              data-testid="overview-tab-home"
-              onClick={() => goTab('home')}
-            >
-              home
-            </button>
-          </span>
-        )}
+        {/* "board", not "game hub". Two of the three circles this product is
+            for have no games in them, and naming the landing page after the
+            one module some circles never populate is the intent drift the
+            floor plan is correcting. */}
+        <h2 className="room-name">{server.name}&rsquo;s board</h2>
         {canManage && !editing && (
           <span className="pane-actions">
-            {tab === 'home' && (
-              <button className="button" data-testid="overview-edit" onClick={() => setEditing(true)}>
-                customize
-              </button>
-            )}
-            {tab === 'play' && !addingGame && (
+            <button className="button" data-testid="overview-edit" onClick={() => setEditing(true)}>
+              customize
+            </button>
+            {!addingGame && (
               <button className="button" data-testid="game-add" onClick={() => setAddingGame(true)}>
                 <Plus size={13} />
                 register a game
@@ -735,217 +689,6 @@ export default function Overview({
               onCancel={() => setEditing(false)}
             />
           </section>
-        ) : tab === 'play' ? (
-          <>
-            {bandGame ? (
-              <LiveBand
-                game={bandGame}
-                players={playingBy[bandGame.id] ?? []}
-                me={me}
-                onJoin={() => launchFromShelf(bandGame)}
-              />
-            ) : games.length > 0 && rallies.length === 0 ? (
-              <p className="hub-nudge" data-testid="hub-quiet">
-                No one&rsquo;s playing right now — launch one below, or rally the circle to
-                gather a game.
-              </p>
-            ) : null}
-
-            {rallies.length > 0 && (
-              <section className="hub-rallies" data-testid="hub-rallies">
-                <span className="overline">rallying</span>
-                <ul className="rally-list">
-                  {rallies.map(({ game: g, who }) => (
-                    <li className="rally-row" key={g.id} data-testid={`rally-${g.id}`}>
-                      <span className="game-who-stack">
-                        {who.slice(0, 3).map((p) => (
-                          <Seal key={p} name={p} size={22} title={p} />
-                        ))}
-                      </span>
-                      <span className="rally-text">
-                        {ralliersLabel(who, me)} <strong>{g.name}</strong>
-                      </span>
-                      {g.kind === 'server' ? (
-                        <span className="rally-host mono">{gameHost(g)}</span>
-                      ) : (
-                        <button
-                          className="button live rally-join"
-                          data-testid={`rally-join-${g.id}`}
-                          onClick={() => launchFromShelf(g)}
-                        >
-                          <Gamepad size={13} />
-                          join in
-                        </button>
-                      )}
-                    </li>
-                  ))}
-                </ul>
-              </section>
-            )}
-
-            {gameNights.length > 0 && (
-              <section className="hub-nights" data-testid="hub-nights">
-                <span className="overline">game nights</span>
-                <ul className="nights-list">
-                  {gameNights.map((ev) => {
-                    const g = gamesById[ev.gameId];
-                    const going = goingFor(ev.at);
-                    const iAmIn = going.includes(me);
-                    const live = (playingBy[g.id]?.length ?? 0) > 0;
-                    return (
-                      <li className="night-row" key={ev.id} data-testid={`night-${ev.id}`}>
-                        <span className="night-mark" aria-hidden="true">
-                          <Clock size={14} />
-                        </span>
-                        <div className="night-body">
-                          <span className="night-title">
-                            {ev.title} <span className="night-game">· {g.name}</span>
-                          </span>
-                          <span className="night-when mono">
-                            {new Date(ev.at).toLocaleString([], {
-                              weekday: 'short',
-                              month: 'short',
-                              day: 'numeric',
-                              hour: '2-digit',
-                              minute: '2-digit',
-                            })}
-                            {' · '}
-                            {describeUntil(ev.at, now)}
-                            {ev.note ? ` — ${ev.note}` : ''}
-                          </span>
-                        </div>
-                        {going.length > 0 && (
-                          <span className="night-going" data-testid={`night-going-${ev.id}`}>
-                            <span className="game-who-stack">
-                              {going.slice(0, 3).map((p) => (
-                                <Seal key={p} name={p} size={20} title={p} />
-                              ))}
-                            </span>
-                            {going.length}
-                          </span>
-                        )}
-                        {live && g.kind !== 'server' ? (
-                          <button
-                            className="button live night-action"
-                            onClick={() => launchFromShelf(g)}
-                          >
-                            <Gamepad size={13} />
-                            join now
-                          </button>
-                        ) : (
-                          canSend && (
-                            <button
-                              className={iAmIn ? 'button live night-action' : 'button night-action'}
-                              data-testid={`night-rsvp-${ev.id}`}
-                              onClick={() => onRsvp(ev.at, !iAmIn)}
-                            >
-                              {iAmIn ? <Check size={13} /> : null}
-                              {iAmIn ? ' in' : 'I’m in'}
-                            </button>
-                          )
-                        )}
-                      </li>
-                    );
-                  })}
-                </ul>
-              </section>
-            )}
-
-            <section className="overview-section shelf-section">
-              <span className="overline shelf-overline">
-                <span>on the shelf</span>
-                {games.length > 0 && (
-                  <span className="shelf-meta">
-                    {games.length} game{games.length === 1 ? '' : 's'}
-                    {liveGames.length > 0 && <span className="shelf-live"> · {liveGames.length} live</span>}
-                  </span>
-                )}
-              </span>
-
-              {showFilters && (
-                <div className="shelf-filters" role="group" aria-label="filter the shelf">
-                  {filterChips.map((f) => (
-                    <button
-                      key={f}
-                      className={filter === f ? 'fchip on' : 'fchip'}
-                      data-testid={`game-filter-${f}`}
-                      aria-pressed={filter === f}
-                      onClick={() => setFilter(f)}
-                    >
-                      {f === 'live' && <span className="fchip-dot" aria-hidden="true" />}
-                      {f === 'favorites' && <span aria-hidden="true">★ </span>}
-                      {FILTER_LABEL[f]}
-                    </button>
-                  ))}
-                </div>
-              )}
-
-              {games.length > 0 || canManage ? (
-                <ul className="game-shelf" data-testid="game-shelf">
-                  {shownGames.map((g) => (
-                    <GameCard
-                      key={g.id}
-                      game={g}
-                      players={playingBy[g.id] ?? []}
-                      canManage={canManage}
-                      rallied={canSend && myWant?.id === g.id}
-                      onLaunch={() => launchFromShelf(g)}
-                      onRally={canSend ? onRally : undefined}
-                      onRemove={() => saveGames(games.filter((x) => x.id !== g.id))}
-                      onFavorite={() => setFavTick((n) => n + 1)}
-                    />
-                  ))}
-                  {games.length > 0 && shownGames.length === 0 && (
-                    <li className="shelf-empty-filter muted" data-testid="game-filter-empty">
-                      Nothing here under “{FILTER_LABEL[filter]}”.
-                    </li>
-                  )}
-                  {canManage && filter === 'all' && (
-                    <li className="game-card add-card">
-                      {addingGame ? (
-                        <AddGameForm
-                          onAdd={(game) => {
-                            setAddingGame(false);
-                            saveGames([...games, game]);
-                          }}
-                          onCancel={() => setAddingGame(false)}
-                        />
-                      ) : (
-                        <button
-                          className="add-card-btn"
-                          data-testid="game-add-tile"
-                          onClick={() => setAddingGame(true)}
-                        >
-                          <span className="add-card-plus">
-                            <Plus size={18} />
-                          </span>
-                          <span className="add-card-title">Register a game</span>
-                          <span className="add-card-sub">
-                            a URL is enough — it shows up here for the whole circle
-                          </span>
-                        </button>
-                      )}
-                    </li>
-                  )}
-                </ul>
-              ) : (
-                <p className="muted overview-empty-note" data-testid="game-shelf-empty">
-                  No games yet. Add one and it shows up here for the whole circle.
-                </p>
-              )}
-              <p className="shelf-honesty muted" data-testid="shelf-honesty">
-                Games live on their own servers — each card names where. That host sees your
-                connection, never your chat.
-              </p>
-            </section>
-
-            <p className="hub-jump muted">
-              Your circle&rsquo;s briefing — next event, room catch-up, noticeboard —{' '}
-              <button className="linklike" data-testid="hub-jump-home" onClick={() => goTab('home')}>
-                lives under Home →
-              </button>
-            </p>
-          </>
         ) : (
           <>
             <section className="hub-about">
@@ -962,6 +705,13 @@ export default function Overview({
                 </span>
               </div>
             </section>
+
+            {/* The circle opens on its people. This is the move the whole
+                floor plan is for: at six members the roster was the densest
+                thing on screen and it lived in a column beside the
+                conversation, which is where you look last. It is the first
+                thing on the board instead. */}
+            {people}
 
             {soonest &&
               (() => {
@@ -1193,6 +943,207 @@ export default function Overview({
                   Nothing pinned yet. Pin notes the whole circle should see.
                 </p>
               )}
+            </section>
+            {bandGame ? (
+              <LiveBand
+                game={bandGame}
+                players={playingBy[bandGame.id] ?? []}
+                me={me}
+                onJoin={() => launchFromShelf(bandGame)}
+              />
+            ) : games.length > 0 && rallies.length === 0 ? (
+              <p className="hub-nudge" data-testid="hub-quiet">
+                No one&rsquo;s playing right now — launch one below, or rally the circle to
+                gather a game.
+              </p>
+            ) : null}
+
+            {rallies.length > 0 && (
+              <section className="hub-rallies" data-testid="hub-rallies">
+                <span className="overline">rallying</span>
+                <ul className="rally-list">
+                  {rallies.map(({ game: g, who }) => (
+                    <li className="rally-row" key={g.id} data-testid={`rally-${g.id}`}>
+                      <span className="game-who-stack">
+                        {who.slice(0, 3).map((p) => (
+                          <Seal key={p} name={p} size={22} title={p} />
+                        ))}
+                      </span>
+                      <span className="rally-text">
+                        {ralliersLabel(who, me)} <strong>{g.name}</strong>
+                      </span>
+                      {g.kind === 'server' ? (
+                        <span className="rally-host mono">{gameHost(g)}</span>
+                      ) : (
+                        <button
+                          className="button live rally-join"
+                          data-testid={`rally-join-${g.id}`}
+                          onClick={() => launchFromShelf(g)}
+                        >
+                          <Gamepad size={13} />
+                          join in
+                        </button>
+                      )}
+                    </li>
+                  ))}
+                </ul>
+              </section>
+            )}
+
+            {gameNights.length > 0 && (
+              <section className="hub-nights" data-testid="hub-nights">
+                <span className="overline">game nights</span>
+                <ul className="nights-list">
+                  {gameNights.map((ev) => {
+                    const g = gamesById[ev.gameId];
+                    const going = goingFor(ev.at);
+                    const iAmIn = going.includes(me);
+                    const live = (playingBy[g.id]?.length ?? 0) > 0;
+                    return (
+                      <li className="night-row" key={ev.id} data-testid={`night-${ev.id}`}>
+                        <span className="night-mark" aria-hidden="true">
+                          <Clock size={14} />
+                        </span>
+                        <div className="night-body">
+                          <span className="night-title">
+                            {ev.title} <span className="night-game">· {g.name}</span>
+                          </span>
+                          <span className="night-when mono">
+                            {new Date(ev.at).toLocaleString([], {
+                              weekday: 'short',
+                              month: 'short',
+                              day: 'numeric',
+                              hour: '2-digit',
+                              minute: '2-digit',
+                            })}
+                            {' · '}
+                            {describeUntil(ev.at, now)}
+                            {ev.note ? ` — ${ev.note}` : ''}
+                          </span>
+                        </div>
+                        {going.length > 0 && (
+                          <span className="night-going" data-testid={`night-going-${ev.id}`}>
+                            <span className="game-who-stack">
+                              {going.slice(0, 3).map((p) => (
+                                <Seal key={p} name={p} size={20} title={p} />
+                              ))}
+                            </span>
+                            {going.length}
+                          </span>
+                        )}
+                        {live && g.kind !== 'server' ? (
+                          <button
+                            className="button live night-action"
+                            onClick={() => launchFromShelf(g)}
+                          >
+                            <Gamepad size={13} />
+                            join now
+                          </button>
+                        ) : (
+                          canSend && (
+                            <button
+                              className={iAmIn ? 'button live night-action' : 'button night-action'}
+                              data-testid={`night-rsvp-${ev.id}`}
+                              onClick={() => onRsvp(ev.at, !iAmIn)}
+                            >
+                              {iAmIn ? <Check size={13} /> : null}
+                              {iAmIn ? ' in' : 'I’m in'}
+                            </button>
+                          )
+                        )}
+                      </li>
+                    );
+                  })}
+                </ul>
+              </section>
+            )}
+
+            <section className="overview-section shelf-section">
+              <span className="overline shelf-overline">
+                <span>on the shelf</span>
+                {games.length > 0 && (
+                  <span className="shelf-meta">
+                    {games.length} game{games.length === 1 ? '' : 's'}
+                    {liveGames.length > 0 && <span className="shelf-live"> · {liveGames.length} live</span>}
+                  </span>
+                )}
+              </span>
+
+              {showFilters && (
+                <div className="shelf-filters" role="group" aria-label="filter the shelf">
+                  {filterChips.map((f) => (
+                    <button
+                      key={f}
+                      className={filter === f ? 'fchip on' : 'fchip'}
+                      data-testid={`game-filter-${f}`}
+                      aria-pressed={filter === f}
+                      onClick={() => setFilter(f)}
+                    >
+                      {f === 'live' && <span className="fchip-dot" aria-hidden="true" />}
+                      {f === 'favorites' && <span aria-hidden="true">★ </span>}
+                      {FILTER_LABEL[f]}
+                    </button>
+                  ))}
+                </div>
+              )}
+
+              {games.length > 0 || canManage ? (
+                <ul className="game-shelf" data-testid="game-shelf">
+                  {shownGames.map((g) => (
+                    <GameCard
+                      key={g.id}
+                      game={g}
+                      players={playingBy[g.id] ?? []}
+                      canManage={canManage}
+                      rallied={canSend && myWant?.id === g.id}
+                      onLaunch={() => launchFromShelf(g)}
+                      onRally={canSend ? onRally : undefined}
+                      onRemove={() => saveGames(games.filter((x) => x.id !== g.id))}
+                      onFavorite={() => setFavTick((n) => n + 1)}
+                    />
+                  ))}
+                  {games.length > 0 && shownGames.length === 0 && (
+                    <li className="shelf-empty-filter muted" data-testid="game-filter-empty">
+                      Nothing here under “{FILTER_LABEL[filter]}”.
+                    </li>
+                  )}
+                  {canManage && filter === 'all' && (
+                    <li className="game-card add-card">
+                      {addingGame ? (
+                        <AddGameForm
+                          onAdd={(game) => {
+                            setAddingGame(false);
+                            saveGames([...games, game]);
+                          }}
+                          onCancel={() => setAddingGame(false)}
+                        />
+                      ) : (
+                        <button
+                          className="add-card-btn"
+                          data-testid="game-add-tile"
+                          onClick={() => setAddingGame(true)}
+                        >
+                          <span className="add-card-plus">
+                            <Plus size={18} />
+                          </span>
+                          <span className="add-card-title">Register a game</span>
+                          <span className="add-card-sub">
+                            a URL is enough — it shows up here for the whole circle
+                          </span>
+                        </button>
+                      )}
+                    </li>
+                  )}
+                </ul>
+              ) : (
+                <p className="muted overview-empty-note" data-testid="game-shelf-empty">
+                  No games yet. Add one and it shows up here for the whole circle.
+                </p>
+              )}
+              <p className="shelf-honesty muted" data-testid="shelf-honesty">
+                Games live on their own servers — each card names where. That host sees your
+                connection, never your chat.
+              </p>
             </section>
 
             {(overview?.links?.length ?? 0) > 0 && (

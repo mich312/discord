@@ -1,6 +1,7 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import Seal from './Seal.jsx';
 import { describeRetention, freshTyping } from '../lib/controller.js';
+import { circlePresence } from '../lib/presence.js';
 import { meshFull, meshFullMessage } from '../lib/voice.js';
 import { nameHue } from '../lib/avatar.js';
 import { fold, dayLabel } from '../lib/fold.js';
@@ -361,6 +362,8 @@ export default function Messages({
   voice,
   onVoiceJoin,
   onOpenStage,
+  // Where the roster lives now that it is not a column beside this one.
+  onOpenBoard,
   onLaunchGame,
   onReact,
   onRetry,
@@ -440,6 +443,14 @@ export default function Messages({
       .map((r) => ({ r, n: voice?.presence?.[`${server.id}/${r}`]?.length ?? 0 }))
       .sort((a, b) => b.n - a.n)[0] ?? null;
 
+  // Who is here, and whose key nobody has checked — the two facts the roster
+  // column carried that a room genuinely needs on screen. Same definitions as
+  // the roster itself, so the header and the board cannot disagree.
+  const liveHere = circlePresence(server, voice).live;
+  const unchecked = server.members.filter(
+    (m) => m !== me && !(server.verified ?? []).includes(m) && !server.mismatched?.[m]
+  ).length;
+
   // Switching room or circle resets the watermark, so the backlog that
   // renders next is not "new" and must not be read out.
   useEffect(() => {
@@ -497,6 +508,32 @@ export default function Messages({
           <span className="room-topic" data-testid="channel-topic-display" title={meta.topic}>
             {meta.topic}
           </span>
+        )}
+        {/* What the roster column used to say from here, said in a line. The
+            column was the densest thing on the screen and it sat beside the
+            conversation, so it cost a fifth of the width to answer a question
+            that fits in five words. The people themselves are on the board,
+            which is where this goes. */}
+        <button className="room-here" data-testid="room-here" onClick={onOpenBoard}>
+          <span className={liveHere.length ? 'room-here-n live' : 'room-here-n'}>
+            {liveHere.length} of {server.members.length}
+          </span>{' '}
+          here
+        </button>
+        {unchecked > 0 && (
+          // §10.5 — a warning is the control that resolves it. It is not a
+          // tooltip and not a colour: it says the number, and tapping it goes
+          // to the people whose keys nobody has compared. §9.5 is why it did
+          // not simply leave with the column it used to live in.
+          <button
+            className="room-unchecked"
+            data-testid="room-unchecked"
+            title="nobody on this device has compared these keys yet"
+            onClick={onOpenBoard}
+          >
+            <AlertTriangle size={13} />
+            {unchecked} unchecked
+          </button>
         )}
         {/* The forward-secrecy trade, stated wherever it applies rather than
             once in a system chip that scrolls out of view. Every room keeps

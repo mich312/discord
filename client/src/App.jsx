@@ -14,6 +14,7 @@ import Messages from './components/Messages.jsx';
 import Overview from './components/Overview.jsx';
 import Members from './components/Members.jsx';
 import CallPanel from './components/CallPanel.jsx';
+import CallBar from './components/CallBar.jsx';
 import CallStage from './components/CallStage.jsx';
 import GameStage from './components/GameStage.jsx';
 import { callChatChannel } from './lib/controller.js';
@@ -216,10 +217,6 @@ export default function App() {
     [themePref, systemLight],
   );
   const [paletteOpen, setPaletteOpen] = useState(false);
-  // Narrow-screen drawers: the sidebar and roster slide over the messages
-  // pane instead of flanking it. null | 'roster'; CSS ignores this
-  // entirely on wide screens, where both panels are static.
-  const [drawer, setDrawer] = useState(null);
   // The call stage takes over the main pane while set: bubbles for everyone
   // in the call, the shared screen, and the call's own chat thread (the
   // active channel becomes `voice:<room>` so the message machinery follows).
@@ -337,15 +334,13 @@ export default function App() {
     setNotifPrompt(false);
   };
 
-  // ⌘K / Ctrl+K opens the palette anywhere inside the app; Escape closes
-  // an open drawer.
+  // ⌘K / Ctrl+K opens the palette anywhere inside the app.
   useEffect(() => {
     function onKey(e) {
       if ((e.metaKey || e.ctrlKey) && e.key.toLowerCase() === 'k') {
         e.preventDefault();
         setPaletteOpen((v) => !v);
       }
-      if (e.key === 'Escape') setDrawer(null);
     }
     window.addEventListener('keydown', onKey);
     return () => window.removeEventListener('keydown', onKey);
@@ -371,14 +366,8 @@ export default function App() {
     return () => window.removeEventListener('keydown', onKey);
   }, [state.voice.active, state.voice.muted]);
 
-  // Anything that opens above the workspace (modal, palette) takes over
-  // from a drawer — never stack the two.
-  useEffect(() => {
-    if (state.modal || paletteOpen) setDrawer(null);
-  }, [state.modal, paletteOpen]);
-
-  // Device-local unread counts for the sidebar pills — same digest the
-  // hub uses, keyed on everything that can move it.
+  // Device-local unread counts for the room chips — same digest the
+  // board uses, keyed on everything that can move it.
   const [unreads, setUnreads] = useState({});
   // Read the room whenever the active channel changes — or when its working
   // copy moved underneath us (a page arrived, a mutation landed, retention
@@ -507,7 +496,6 @@ export default function App() {
     withViewTransition(() => {
       dispatch({ type: 'select', server: v.server, channel: callChatChannel(v.channel) });
       setStage(true);
-      setDrawer(null);
     });
   };
 
@@ -521,7 +509,6 @@ export default function App() {
     dispatch({ type: 'select', server, channel: ch });
     setStage(false);
     setGame(g);
-    setDrawer(null);
     markPlayed(g.id);
     bumpPlayCount(g.id);
     if (announce && !activeServer?.restored) {
@@ -618,6 +605,59 @@ export default function App() {
   const canManage =
     state.globalAdmin || (activeServer && activeServer.roles?.[state.me] === 'admin');
 
+  // The roster, built once. It is the security boundary — it is exactly who
+  // can read this circle — so it has one definition and one set of actions,
+  // whether it is being read on the board or pulled open beside a room.
+  const roster = activeServer ? (
+    <Members
+      server={activeServer}
+      me={state.me}
+      canManage={canManage}
+      voice={state.voice}
+      onCall={(peer) => {
+        controllerRef.current.voice
+          .callUser(server, peer)
+          .then(() => openStage())
+          .catch((e) => dispatch({ type: 'toast', text: `call: ${e.message}` }));
+      }}
+      onAdd={(user) =>
+        controllerRef.current
+          .addMember(server, user)
+          .catch((e) => dispatch({ type: 'toast', text: e.message }))
+      }
+      onSetRole={(user, role) =>
+        controllerRef.current
+          .setRole(server, user, role)
+          .catch((e) => dispatch({ type: 'toast', text: e.message }))
+      }
+      onRemoveMember={(user) =>
+        controllerRef.current
+          .removeMember(server, user)
+          .catch((e) => dispatch({ type: 'toast', text: `remove: ${e.message}` }))
+      }
+      onMember={async (peer) => {
+        try {
+          const number = await controllerRef.current.safetyNumber(server, peer);
+          dispatch({
+            type: 'modal',
+            modal: {
+              type: 'safety',
+              server,
+              peer,
+              number,
+              verified: (activeServer.verified ?? []).includes(peer),
+              mismatched: !!activeServer.mismatched?.[peer],
+            },
+          });
+        } catch (e) {
+          dispatch({ type: 'toast', text: e.message });
+        }
+      }}
+    />
+
+  ) : null;
+
+
   const openIdentity = () =>
     dispatch({
       type: 'modal',
@@ -666,7 +706,7 @@ export default function App() {
   ];
 
   return (
-    <div className="app-shell" data-drawer={drawer ?? undefined}>
+    <div className="app-shell">
       {/* Reaching the conversation meant tabbing the rail, the whole channel
           sidebar and the voice list, on every load. Hidden until focused. */}
       <a className="skip-link" href="#messages-pane">
@@ -687,7 +727,6 @@ export default function App() {
             dispatch({ type: 'select', server, channel: null });
             setStage(false);
             setGame(null);
-            setDrawer(null);
           })
         }
         connection={state.connection}
@@ -696,10 +735,8 @@ export default function App() {
         onInvite={openInvite}
         onPalette={() => setPaletteOpen(true)}
         onTheme={toggleTheme}
-        drawer={drawer}
         me={state.me}
         onSettings={openSettings}
-        onRoster={() => setDrawer((d) => (d === 'roster' ? null : 'roster'))}
       />
       {unsecured && (
         <div className="secure-banner" data-testid="secure-banner">
@@ -727,6 +764,23 @@ export default function App() {
           </span>
         </div>
       )}
+      {/* A call is running and the screen is not it. §7.4 — the mic stays
+          live when you walk away from the call stage, so it says so here,
+          everywhere you go, until you come back or hang up. The game stage
+          is excluded because the call rides in its own dock there; two
+          places saying "you are in a call" is how the sidebar taught people
+          to stop reading either. */}
+      {state.voice.active && !stage && !(liveGame && channel) && (
+        <CallBar
+          voice={state.voice}
+          me={state.me}
+          now={now}
+          onOpen={openStage}
+          onToggleMute={() =>
+            controllerRef.current?.voice?.setMuted(!state.voice.muted)
+          }
+        />
+      )}
       {/* The strip sits at shell level, under the fascia and above whatever
           the pane is showing — so it is on screen during the call stage and
           the game stage too. That is the half of §7.1 the sidebar column
@@ -746,7 +800,6 @@ export default function App() {
               dispatch({ type: 'select', server, channel: ch });
               setStage(false); // picking a room dismisses the stage…
               setGame(null); // …and the game
-              setDrawer(null);
             })
           }
           onSettings={(ch) =>
@@ -778,13 +831,6 @@ export default function App() {
         />
       )}
       <div className="app">
-        {drawer === 'roster' && (
-          <div
-            className="drawer-backdrop"
-            data-testid="drawer-backdrop"
-            onClick={() => setDrawer(null)}
-          />
-        )}
         {activeServer && liveGame && channel ? (
           <GameStage
             game={liveGame}
@@ -871,6 +917,13 @@ export default function App() {
                     .catch((e) => dispatch({ type: 'toast', text: `voice: ${e.message}` }))
                 }
                 onOpenStage={openStage}
+                onOpenBoard={() =>
+                  withViewTransition(() => {
+                    dispatch({ type: 'select', server, channel: null });
+                    setStage(false);
+                    setGame(null);
+                  })
+                }
                 onLaunchGame={(g) => launchGame(g, { announce: false })}
                 onReact={(target, emo) =>
                   controllerRef.current
@@ -937,54 +990,9 @@ export default function App() {
                     .removeNotice(server, id)
                     .catch((e) => dispatch({ type: 'toast', text: e.message }))
                 }
+                people={roster}
               />
             )}
-            <Members
-              server={activeServer}
-              me={state.me}
-              canManage={canManage}
-              voice={state.voice}
-              onCall={(peer) => {
-                setDrawer(null);
-                controllerRef.current.voice
-                  .callUser(server, peer)
-                  .then(() => openStage())
-                  .catch((e) => dispatch({ type: 'toast', text: `call: ${e.message}` }));
-              }}
-              onAdd={(user) =>
-                controllerRef.current
-                  .addMember(server, user)
-                  .catch((e) => dispatch({ type: 'toast', text: e.message }))
-              }
-              onSetRole={(user, role) =>
-                controllerRef.current
-                  .setRole(server, user, role)
-                  .catch((e) => dispatch({ type: 'toast', text: e.message }))
-              }
-              onRemoveMember={(user) =>
-                controllerRef.current
-                  .removeMember(server, user)
-                  .catch((e) => dispatch({ type: 'toast', text: `remove: ${e.message}` }))
-              }
-              onMember={async (peer) => {
-                try {
-                  const number = await controllerRef.current.safetyNumber(server, peer);
-                  dispatch({
-                    type: 'modal',
-                    modal: {
-                      type: 'safety',
-                      server,
-                      peer,
-                      number,
-                      verified: (activeServer.verified ?? []).includes(peer),
-                      mismatched: !!activeServer.mismatched?.[peer],
-                    },
-                  });
-                } catch (e) {
-                  dispatch({ type: 'toast', text: e.message });
-                }
-              }}
-            />
           </>
         ) : (
           // No circle open — the screen that replaced the rail. Same surface
@@ -1002,13 +1010,11 @@ export default function App() {
                 dispatch({ type: 'select', server: id, channel: null });
                 setStage(false);
                 setGame(null);
-                setDrawer(null);
               })
             }
             onCreate={async (name) => {
               const id = await controllerRef.current.createServer(name);
               dispatch({ type: 'select', server: id, channel: null });
-              setDrawer(null);
             }}
             onIdentity={openIdentity}
             onSecure={openSecure}

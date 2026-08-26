@@ -63,15 +63,39 @@ async function onboard(page, handle, url = base) {
   const file = await download.path();
   await page.check('[data-testid=confirm-saved]');
   await page.click('[data-testid=enter-app]');
-  await page.waitForSelector(`[data-testid=self-name], .empty-state`);
+  await page.waitForSelector('[data-testid=self-name], [data-testid=circles-home]');
+  // The first-run notifications ask surfaces 1.5s after landing and sits on a
+  // modal backdrop, so every click after that point lands on the backdrop
+  // instead of the app. Headless Chromium reports Notification.permission
+  // 'default', so it always appears here. Answer it once, up front — the same
+  // thing a real user does before they get anywhere.
+  await page
+    .waitForSelector('[data-testid=notif-prompt-dismiss]', { timeout: 4000 })
+    .then(() => page.click('[data-testid=notif-prompt-dismiss]'))
+    .catch(() => {
+      /* a browser without the Notification API never asks */
+    });
   return { code, file };
+}
+
+/** Leave the call you are in. It is on the call stage, not on the bar that
+    follows you around: §7.3 keeps an irreversible control off any row whose
+    other control is reversible, and the bar's other control is "back to the
+    call". So: open the stage, leave from there. */
+async function leaveCall(page) {
+  if (await page.locator('[data-testid=call-bar-open]').count()) {
+    await page.click('[data-testid=call-bar-open]');
+  }
+  await page.waitForSelector('[data-testid=stage-leave]', { timeout: 10000 });
+  await page.click('[data-testid=stage-leave]');
+  await page.waitForFunction(() => !window.__voice?.active, { timeout: 10000 });
 }
 
 async function joinViaInvite(page, handle, url) {
   await page.goto(url);
   await page.fill('[data-testid=handle-input]', handle);
   await page.click('[data-testid=join-fast]');
-  await page.waitForSelector('[data-testid=self-name], .empty-state', { timeout: 20000 });
+  await page.waitForSelector('[data-testid=self-name], [data-testid=circles-home]', { timeout: 20000 });
 }
 
 let failed = false;
@@ -102,9 +126,7 @@ try {
   await alice.waitForSelector('[data-testid=overview-pane]');
 
   console.log('2b. alice sets up the home base (event + blurb + link + notice)');
-  // The hub leads with the Play (games) face; the briefing lives under Home.
-  // Switching sticks per-device, so this one click holds for later visits too.
-  await alice.click('[data-testid=overview-tab-home]');
+  // One board, no faces to switch between: the shelf is a block on it now.
   await alice.click('[data-testid=overview-edit]');
   const eventAt = new Date(Date.now() + 52 * 3600 * 1000);
   const pad2 = (n) => String(n).padStart(2, '0');
@@ -151,6 +173,10 @@ try {
   await new Promise((r) => setTimeout(r, 800));
 
   console.log('4. alice adds bob by handle');
+  // The roster is the board's first block now, not a column beside every
+  // room — adding someone is a cryptographic act, and it happens where the
+  // circle's people are.
+  await alice.click('[data-testid=channel-overview]');
   await alice.fill('[data-testid=add-member-input]', 'bob');
   await alice.press('[data-testid=add-member-input]', 'Enter');
   await bob.waitForSelector('[data-testid=channel-general]', { timeout: 15000 });
@@ -166,8 +192,6 @@ try {
   // bob landed on the home base; alice's setup reached him via the
   // encrypted meta rebroadcast that follows every add.
   await bob.waitForSelector('[data-testid=overview-pane]');
-  // bob lands on the Play face too; the briefing he's checking is under Home.
-  await bob.click('[data-testid=overview-tab-home]');
   await bob.waitForSelector('text=Pit crew HQ', { timeout: 10000 });
   await bob.waitForSelector('text=Qualifying at Spa', { timeout: 10000 });
   await bob.waitForSelector('text=Trailer leaves 6am Saturday', { timeout: 10000 });
@@ -255,7 +279,11 @@ try {
   await bob.waitForSelector('[data-testid=channel-archive]', { timeout: 10000 });
   await bob.click('[data-testid=channel-archive]');
   await bob.waitForSelector('text=note before rename', { timeout: 10000 }); // history migrated
-  // alice deletes it via the settings modal — confirm auto-accepted.
+  // alice deletes it via the settings modal — confirm auto-accepted. The gear
+  // is on the room you are in rather than on every chip, and renaming the
+  // room you are standing in drops you back to the first one, so step into
+  // the renamed room first.
+  await alice.click('[data-testid=channel-archive]');
   await alice.click('[data-testid=channel-settings-archive]');
   alice.once('dialog', (d) => d.accept());
   await alice.click('[data-testid=channel-delete]');
@@ -300,7 +328,7 @@ try {
     { timeout: 15000 }
   );
   // …but groups are intentionally gone (their keys died with the "device").
-  await fresh.waitForSelector('.empty-state', { timeout: 5000 });
+  await fresh.waitForSelector('[data-testid=circles-home]', { timeout: 5000 });
 
   console.log('9. alice creates an invite link');
   await alice.click('[data-testid=create-invite]');
@@ -385,8 +413,8 @@ try {
   await imported.click('summary');
   await imported.fill('[data-testid=paste-key]', aliceKey);
   await imported.click('[data-testid=restore-submit]');
-  await imported.waitForSelector('.empty-state', { timeout: 15000 });
-  const importedText = await imported.textContent('.empty-state');
+  await imported.waitForSelector('[data-testid=circles-home]', { timeout: 15000 });
+  const importedText = await imported.textContent('[data-testid=circles-home]');
   if (!importedText.includes('alice')) throw new Error('pasted identity key did not restore alice');
 
   console.log('13. encrypted attachment: image round-trips and renders');
@@ -460,8 +488,13 @@ try {
   await charlieCtx.grantPermissions(['microphone'], { origin: `http://127.0.0.1:${HTTP}` });
   await alice.click('[data-testid=voice-join-lounge]');
   // Presence reaches non-participants passively (MLS-encrypted ephemeral).
+  // The sidebar's join card is gone with the column; the roster is where a
+  // non-participant sees who is in a room.
   await charlie.waitForFunction(
-    () => document.querySelector('[data-testid=voice-participants-lounge]')?.textContent.includes('alice'),
+    () =>
+      document
+        .querySelector('[data-testid=member-list-call][data-room=lounge]')
+        ?.textContent.includes('alice'),
     { timeout: 15000 }
   );
   await charlie.click('[data-testid=voice-join-lounge]');
@@ -527,16 +560,21 @@ try {
     .catch(() => {
       throw new Error('per-participant meters (window.__voiceLevels) were never created');
     });
-  const meterCount = await alice.$$eval(
-    '[data-testid=voice-participants-lounge] .voice-meter',
-    (els) => els.length
-  );
+  // Meters live on the call stage now, which is the surface that draws one
+  // per participant. Open it to count them.
+  await alice.click('[data-testid=call-bar-open]');
+  await alice.waitForSelector('[data-testid=stage-leave]', { timeout: 10000 });
+  const meterCount = await alice.$$eval('.voice-meter', (els) => els.length);
+  await alice.click('[data-testid=stage-close]');
   if (meterCount < 3) throw new Error(`expected a waveform per participant, saw ${meterCount}`);
 
   console.log('18. leaving updates everyone');
-  await charlie.click('[data-testid=voice-leave-lounge]');
+  await leaveCall(charlie);
   await alice.waitForFunction(
-    () => !document.querySelector('[data-testid=voice-participants-lounge]')?.textContent.includes('charlie'),
+    () =>
+      !document
+        .querySelector('[data-testid=member-list-call][data-room=lounge]')
+        ?.textContent.includes('charlie'),
     { timeout: 15000 }
   );
   await alice.waitForFunction(
@@ -546,8 +584,8 @@ try {
 
   console.log('18b. direct 1:1 call: alice rings charlie from the roster, charlie accepts');
   // Free both parties from the mesh so they can place / take a direct call.
-  await alice.click('[data-testid=voice-leave-lounge]');
-  await dave.click('[data-testid=voice-leave-lounge]');
+  await leaveCall(alice);
+  await leaveCall(dave);
   await alice.waitForFunction(() => !window.__voice?.active, { timeout: 10000 });
   await alice.click('[data-testid=call-charlie]');
   await alice.waitForSelector('[data-testid=call-dialing]', { timeout: 10000 });
@@ -558,7 +596,7 @@ try {
   // peers yet, so a naive "no peers left -> hang up" drops the call here.
   await dave.click('[data-testid=voice-join-lounge]');
   await dave.waitForFunction(() => window.__voice?.active?.channel === 'lounge', { timeout: 8000 });
-  await dave.click('[data-testid=voice-leave-lounge]');
+  await leaveCall(dave);
   await new Promise((r) => setTimeout(r, 1200));
   const stillDialing = await alice.evaluate(() => !!window.__voice?.dial);
   if (!stillDialing) {
@@ -792,8 +830,8 @@ try {
     await erin.click('[data-testid=signin-continue]');
     await erin.waitForSelector('[data-testid=signin-passkey]', { timeout: 10000 });
     await erin.click('[data-testid=signin-passkey]');
-    await erin.waitForSelector('.empty-state', { timeout: 30000 });
-    if (!(await erin.textContent('.empty-state')).includes('erin')) {
+    await erin.waitForSelector('[data-testid=circles-home]', { timeout: 30000 });
+    if (!(await erin.textContent('[data-testid=circles-home]')).includes('erin')) {
       throw new Error('passkey sign-in did not restore erin');
     }
 
@@ -809,36 +847,25 @@ try {
     await erin.goto(localhostBase);
     await erin.click('[data-testid=tab-signin]');
     await erin.click('[data-testid=signin-passkey-discoverable]');
-    await erin.waitForSelector('.empty-state', { timeout: 30000 });
-    if (!(await erin.textContent('.empty-state')).includes('erin')) {
+    await erin.waitForSelector('[data-testid=circles-home]', { timeout: 30000 });
+    if (!(await erin.textContent('[data-testid=circles-home]')).includes('erin')) {
       throw new Error('usernameless passkey sign-in did not restore erin');
     }
   }
 
-  console.log('22. mobile layout: drawers navigate, roster opens, messages flow');
-  // Same page, phone-sized viewport — the sidebar and roster become drawers.
+  console.log('22. phone layout: the strip navigates, the board holds the people');
+  // Same page, phone-sized viewport. There are no drawers any more: the rooms
+  // strip is the navigation at every width, and the roster is a block on the
+  // board rather than a panel that slides in over the conversation.
   await alice.setViewportSize({ width: 390, height: 844 });
-  await alice.waitForSelector('[data-testid=menu-toggle]', { state: 'visible' });
-  // The static panels are off-canvas until summoned. The sidebar hides via a
-  // visibility transition (~180ms), so wait for it to settle rather than
-  // reading the instant after the viewport change.
-  await alice
-    .waitForSelector('[data-testid=channel-general]', { state: 'hidden', timeout: 5000 })
-    .catch(() => {
-      throw new Error('mobile: sidebar should be hidden until the menu opens it');
-    });
-  await alice.click('[data-testid=menu-toggle]');
+  await alice.waitForSelector('[data-testid=channel-logistics]', { state: 'visible' });
   await alice.click('[data-testid=channel-logistics]');
-  // Navigation closes the drawer and lands in the room (alice pre-dates the
-  // room, so its history is on her device).
-  await alice.waitForSelector('[data-testid=drawer-backdrop]', { state: 'detached' });
   await alice.waitForSelector('text=trailer leaves at 6am', { timeout: 10000 });
-  // The roster drawer opens from the masthead; the backdrop dismisses it.
-  await alice.click('[data-testid=roster-toggle]');
+  // The room says how many of the circle are here and how many keys are
+  // unchecked, and both go to the people on the board.
+  await alice.click('[data-testid=room-here]');
   await alice.waitForSelector('[data-testid=member-list]', { state: 'visible' });
-  // Tap the exposed strip left of the drawer (its center sits under it).
-  await alice.click('[data-testid=drawer-backdrop]', { position: { x: 20, y: 200 } });
-  await alice.waitForSelector('[data-testid=drawer-backdrop]', { state: 'detached' });
+  await alice.click('[data-testid=channel-logistics]');
   // Chat still round-trips at phone size.
   await alice.fill('[data-testid=composer]', 'checking in from the phone');
   await alice.press('[data-testid=composer]', 'Enter');
