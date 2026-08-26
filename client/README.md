@@ -76,18 +76,28 @@ being here right now; **amber** for a guarantee that is reduced or unchecked;
 labels, timestamps, counts, epochs, statuses, security lines — but never a
 person's name, body copy, or a button label. Member avatars are **mesh orbs**
 (`src/lib/avatar.js`): hashed hue blobs blurred into one wash, derived from
-the handle and never uploaded, because identity here is a key. Chrome layout:
-a full-width
-masthead (brand · circle + epoch · invite · ⌘K palette · theme · relay
-state), a single sidebar (circles → rooms → voice → self card), the
-conversation (grouped messages, day dividers, hover timestamps), and the
-roster. `Ctrl/⌘-K` opens a command palette (rooms, circles, actions).
-All icons are inline SVG (`src/components/icons.jsx`) — no fonts, no CDN.
+the handle and never uploaded, because identity here is a key. A **circle**
+gets a different shape on purpose (`src/components/CircleMark.jsx`): a flat
+tile in its own colour carrying one glyph, keyed to the circle id so a rename
+never changes its face. Round is a person, tile is a place.
 
-**Mobile** (≤820px): the same components, a different floor plan — the
-conversation owns the screen and the sidebar/roster become edge drawers
-(menu and roster toggles appear in the masthead; the invite action moves
-into the palette). Touch devices get bigger targets, surfaced
+Chrome layout, top to bottom: a full-width masthead (brand · the marker
+saying which circle and which room · invite · ⌘K palette · theme · relay
+state · who you are signed in as), the call bar when a call is running
+somewhere you are not looking, the rooms strip, and the conversation
+(grouped messages, day dividers, hover timestamps). There is no circle rail
+and no channel column: crossing between circles is a screen
+(`CirclesHome.jsx`), crossing between rooms is the strip
+(`RoomStrip.jsx`), and a circle's people are the first block on its board
+rather than a column beside every room. `Ctrl/⌘-K` opens a command palette
+(rooms, circles, actions). All icons are inline SVG
+(`src/components/icons.jsx`) — no fonts, no CDN.
+
+**Mobile** (≤820px): the same components and, now, largely the same floor
+plan — one column at every width, so there are no edge drawers to summon.
+The marker drops the circle name down to its tile, the pane header wraps,
+and the invite action moves into the palette. Touch devices get bigger
+targets, surfaced
 hover-affordances, 16px inputs (so iOS doesn't zoom the page on focus),
 `dvh` heights and safe-area insets for notches and home bars. The client
 ships a web manifest plus generated icons (`scripts/gen-icons.mjs`,
@@ -96,7 +106,7 @@ screen as a PWA; the service worker for push already registers at boot.
 
 **UI gallery**: `npm run preview:ui` serves `/preview.html`, which renders
 the real components against mock state (no relay, no WASM) — views:
-`?view=app|onboarding|invited|empty|banner|palette|modal-*`, plus
+`?view=app|overview|circles|onboarding|invited|empty|banner|palette|modal-*`, plus
 `&theme=paper`. Useful for design review and screenshots when the crypto
 core isn't built.
 

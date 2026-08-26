@@ -233,6 +233,7 @@ try {
   await bob.click('[data-testid=channel-logistics]');
   await bob.waitForSelector('text=trailer leaves at 6am', { timeout: 10000 });
 
+  globalThis.__pages = [['alice', alice], ['bob', bob]];
   console.log('6a. home base catch-up: unread badge counts what landed while away');
   await alice.click('[data-testid=channel-overview]');
   await bob.fill('[data-testid=composer]', 'one more pallet to load');
@@ -890,6 +891,19 @@ try {
 } catch (e) {
   failed = true;
   console.error('\nFAIL:', e.message);
+  if (process.env.E2E_DUMP) {
+    for (const [name, page] of globalThis.__pages ?? []) {
+      try {
+        console.error(`--- ${name} ---`);
+        console.error(await page.evaluate(() => ({
+          board: !!document.querySelector('[data-testid=overview-pane]'),
+          rooms: [...document.querySelectorAll('[data-testid^=overview-room-]')].map((e) => e.textContent.slice(0, 60)),
+          badges: [...document.querySelectorAll('[data-testid^=overview-unread-]')].map((e) => e.dataset.testid + '=' + e.textContent),
+          chips: [...document.querySelectorAll('.room-chip')].map((e) => e.textContent),
+        })));
+      } catch {}
+    }
+  }
 } finally {
   cleanup();
 }

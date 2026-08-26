@@ -51,11 +51,16 @@ only thing that makes the claim falsifiable.
 
 - **Text channels** inside E2EE servers — channel structure and server
   names travel *inside* the encryption; the relay never learns them.
-- **Game hub** — picking a circle lands on its hub: the next event with a
-  live countdown, per-room unread counts with the latest line
+- **The board** — picking a circle lands on its board, and the board opens
+  on the circle's people: everyone, with what this device actually knows
+  about them (in a call, in a game, key checked or not). Below that, blocks
+  that render only when the circle has something in them — the next event
+  with a live countdown, per-room unread counts with the latest line
   (device-local catch-up), a noticeboard any member can pin to (entries
   are authored by the MLS sender; author or admin unpins) — and **the
-  shelf**: the games this circle plays, living on their own servers. Web
+  shelf**: the games this circle plays, living on their own servers. A race
+  team and a photo club then read as different products from one page,
+  and a circle with no games simply never draws that block. Web
   games launch embedded in a sandboxed iframe with the room's chat docked
   beside them and the call riding along; native game servers (Minecraft,
   Factorio…) get address cards. The registry travels inside the
@@ -289,7 +294,7 @@ joins, identity recovery, encrypted attachments, safety numbers, and
 |---|---|---|
 | 1 | Rust core + OpenMLS → WASM, two tabs exchanging MLS messages | done |
 | 2 | Relay: auth, KeyPackage store, ordered delivery, epoch handling | done |
-| 3 | Web client: rail, channels, messages, IndexedDB, recovery keys | done |
+| 3 | Web client: circles, rooms, messages, IndexedDB, recovery keys | done |
 | 4 | Invite links: encrypted GroupInfo, external commits, unverified UI | done |
 | 5 | Attachments + safety numbers | done |
 | 6 | Web Push + service worker | done |
@@ -318,7 +323,7 @@ joins, identity recovery, encrypted attachments, safety numbers, and
   sizes, call participation. E2EE hides content, not traffic shape.
 - **A relay that will not answer takes your circles with it** — they are
   loaded from it, not kept on the device, so an outage is not just "no new
-  messages" but an empty rail. The client will not park a backup until it
+  messages" but an empty circles list. The client will not park a backup until it
   has successfully read one, so a failed read can never be escalated into a
   destroyed one; and the relay can withhold the blob but not read, alter or
   invent it. Offline use is not a thing this design offers.
