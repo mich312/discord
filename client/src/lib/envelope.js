@@ -35,6 +35,14 @@ import {
   upsertNotice,
 } from './overview.js';
 import { normalizeGameRef, normalizePresence, normalizeWant } from './games.js';
+import {
+  applyTake,
+  canRemoveOffer,
+  mergeOffers,
+  normalizeOffer,
+  normalizeOffers,
+  upsertOffer,
+} from './offers.js';
 
 /* ------------------------------------------------------------ helpers -- */
 
@@ -171,6 +179,10 @@ export function adminRequirement(content) {
     // Unpinning drops content, so an unresolvable role fails closed like the
     // other destructive kinds rather than being waved through.
     case 'notice':
+      return content.op === 'del' ? { destructive: true, authorMayPass: true } : null;
+    // Same shape as a notice: anyone may post one or take a seat in one,
+    // and taking a line down drops content, so it fails closed.
+    case 'offer':
       return content.op === 'del' ? { destructive: true, authorMayPass: true } : null;
     default:
       return null;
@@ -491,6 +503,33 @@ export function applyEnvelope(record, sender, content, ctx = {}) {
       break;
     }
 
+    case 'offer': {
+      // The board belongs to the whole roster, like the noticeboard: any
+      // member may post a lift or take a seat in one. The author is the
+      // MLS-authenticated sender, never the payload.
+      if (content.op === 'add') {
+        const offer = normalizeOffer(content.o, sender);
+        if (offer) {
+          record.offers = upsertOffer(record.offers, offer);
+          emit({ t: 'backup' });
+        }
+      } else if (content.op === 'take') {
+        // `sender`, not a name in the payload: you may only take a seat as
+        // yourself. applyTake refuses to overfill, so the last seat going to
+        // two people at once resolves the same way on every device — log
+        // order decides and the loser sees a full car.
+        record.offers = applyTake(record.offers, content.id, sender, content.taking !== false);
+        emit({ t: 'backup' });
+      } else if (content.op === 'del') {
+        const target = (record.offers ?? []).find((o) => o.id === content.id);
+        if (target && canRemoveOffer(target, sender, isAdmin === true)) {
+          record.offers = record.offers.filter((o) => o.id !== content.id);
+          emit({ t: 'backup' });
+        }
+      }
+      break;
+    }
+
     case 'chan': {
       clearChannelDeleted(record, content.ch);
       if (!record.channels.includes(content.ch)) {
@@ -677,6 +716,17 @@ function applyMeta(record, content, emit) {
     const merged = mergeNotices(record.notices, incoming);
     if (merged.length !== (record.notices ?? []).length) {
       record.notices = merged;
+      emit({ t: 'backup' });
+    }
+  }
+
+  // Lifts and kit, union the same way, ids this device already has winning —
+  // so a claim it has already seen is not undone by a rebroadcast that
+  // predates it.
+  if (Array.isArray(content.offers) && content.offers.length) {
+    const merged = mergeOffers(record.offers, normalizeOffers(content.offers));
+    if (merged.length !== (record.offers ?? []).length) {
+      record.offers = merged;
       emit({ t: 'backup' });
     }
   }

@@ -101,6 +101,7 @@ import {
 } from './log.js';
 import { keyDirectory, mergeKeyDirectory } from './keys.js';
 import { deviceHalf, hydrate, mergeBackups, sharedHalf } from './circles.js';
+import { applyTake, normalizeOffer, upsertOffer } from './offers.js';
 import { VoiceManager } from './voice.js';
 import {
   b64url,
@@ -1045,6 +1046,7 @@ export class Controller {
       chanMeta: record.chanMeta ?? {},
       overview: record.overview ?? null,
       notices: record.notices ?? [],
+      offers: record.offers ?? [],
       rsvps: record.rsvps ?? {},
     };
   }
@@ -1156,6 +1158,48 @@ export class Controller {
     const record = this.servers.get(serverId);
     record.notices = (record.notices ?? []).filter((n) => n.id !== id);
     await this.sendContent(serverId, { k: 'notice', op: 'del', id });
+    await this.persistCircle(record);
+    this.dispatch({ type: 'servers', servers: this.snapshotServers() });
+  }
+
+  /** Post a lift, a spare, a where-to-meet. Any member may; the author is
+      the sender, and `seats` of 0 means it is a fact rather than a thing to
+      claim. */
+  async addOffer(serverId, text, seats = 0, note = '') {
+    const record = this.servers.get(serverId);
+    if (!record) return;
+    const id = b64url.enc(crypto.getRandomValues(new Uint8Array(9)));
+    const offer = normalizeOffer({ id, text, seats, note, ts: Date.now() }, this.me);
+    if (!offer) return;
+    record.offers = upsertOffer(record.offers, offer);
+    await this.sendContent(serverId, {
+      k: 'offer',
+      op: 'add',
+      o: { id, text: offer.text, note: offer.note ?? '', seats: offer.seats, ts: offer.ts },
+    });
+    await this.persistCircle(record);
+    this.dispatch({ type: 'servers', servers: this.snapshotServers() });
+  }
+
+  /** Take a seat, or give it back. Optimistic locally and re-resolved on
+      receive: `applyTake` refuses to overfill, so if the last seat went to
+      somebody else first the log says so and this device agrees. */
+  async takeOffer(serverId, id, taking = true) {
+    const record = this.servers.get(serverId);
+    if (!record) return;
+    record.offers = applyTake(record.offers, id, this.me, taking);
+    await this.sendContent(serverId, { k: 'offer', op: 'take', id, taking: !!taking });
+    await this.persistCircle(record);
+    this.dispatch({ type: 'servers', servers: this.snapshotServers() });
+  }
+
+  /** Take a line down (the UI offers this to its author and to admins; the
+      receive side re-checks the same rule). */
+  async removeOffer(serverId, id) {
+    const record = this.servers.get(serverId);
+    if (!record) return;
+    record.offers = (record.offers ?? []).filter((o) => o.id !== id);
+    await this.sendContent(serverId, { k: 'offer', op: 'del', id });
     await this.persistCircle(record);
     this.dispatch({ type: 'servers', servers: this.snapshotServers() });
   }

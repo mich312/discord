@@ -20,6 +20,7 @@ import Modal from './components/Modal.jsx';
 import Onboarding from './components/Onboarding.jsx';
 import CallStage from './components/CallStage.jsx';
 import CallBar from './components/CallBar.jsx';
+import PhoneTabs from './components/PhoneTabs.jsx';
 import GameStage from './components/GameStage.jsx';
 import BootLoader from './components/BootLoader.jsx';
 import { Key } from './components/icons.jsx';
@@ -43,6 +44,25 @@ const servers = [
     verified: ['bob'],
     linkJoined: ['charlie'],
     chanMeta: { 'pit-wall': { topic: 'live timing chatter during sessions' } },
+    offers: [
+      {
+        id: 'lift1',
+        text: 'Leeds → Otley, 07:00',
+        note: 'boot space for two bikes',
+        seats: 3,
+        ts: now - 3 * H,
+        author: 'bob',
+        takers: ['dana', 'charlie'],
+      },
+      {
+        id: 'kit1',
+        text: 'Spare wheels in dana’s car — 11 speed only',
+        seats: 0,
+        ts: now - 26 * H,
+        author: 'dana',
+        takers: [],
+      },
+    ],
     roles: { alice: 'admin' },
     presence: {
       bob: { playing: { id: 'g1', name: 'Hex Gambit', kind: 'activity' }, ts: now - 41 * 60e3 },
@@ -412,7 +432,10 @@ function PreviewShell({ empty = false, circles = false, banner = false, modal = 
                 onRally={noop}
                 onRsvp={noop}
                 onSave={(ov) => setOverviews((o) => ({ ...o, [activeServer.id]: ov }))}
-                people={
+                onAddOffer={noop}
+              onTakeOffer={noop}
+              onRemoveOffer={noop}
+              people={
                 <Members
                   server={activeServer}
                   me={me}
@@ -480,6 +503,15 @@ function PreviewShell({ empty = false, circles = false, banner = false, modal = 
           />
         )}
       </div>
+      <PhoneTabs
+        server={activeServer}
+        channel={active.channel}
+        onStage={!!stage}
+        onGame={!!(liveGame && active.channel)}
+        onCircles={() => setActive({ server: null, channel: null })}
+        onBoard={() => setActive({ ...active, channel: null })}
+        onRooms={() => setActive({ ...active, channel: activeServer?.channels?.[0] ?? null })}
+      />
     </div>
   );
 }

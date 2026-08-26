@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import Seal from './Seal.jsx';
+import { canRemoveOffer, seatsLeft } from '../lib/offers.js';
 import {
   describeAgo,
   describeUntil,
@@ -534,6 +535,9 @@ export default function Overview({
   onSave,
   onAddNotice,
   onRemoveNotice,
+  onAddOffer,
+  onTakeOffer,
+  onRemoveOffer,
   // The roster, rendered by the parent so the trust actions it carries
   // (verify, add, remove, call) stay wired in one place.
   people,
@@ -545,6 +549,8 @@ export default function Overview({
   // starred / recent without the parent tracking each card's state.
   const [favTick, setFavTick] = useState(0);
   const [draft, setDraft] = useState('');
+  const [offerDraft, setOfferDraft] = useState('');
+  const [offerSeats, setOfferSeats] = useState('');
   const [digest, setDigest] = useState([]);
   // Countdown and "x min ago" labels drift; tick them along while open.
   const [now, setNow] = useState(() => Date.now());
@@ -632,6 +638,7 @@ export default function Overview({
 
   const saveGames = (next) => onSave({ ...(overview ?? {}), games: next });
   const notices = server.notices ?? [];
+  const offers = server.offers ?? [];
   const voiceRooms = server.voiceChannels ?? ['lounge'];
   const byChannel = Object.fromEntries(digest.map((d) => [d.channel, d]));
   const unreadTotal = digest.reduce((n, d) => n + d.unread, 0);
@@ -944,6 +951,98 @@ export default function Overview({
                 </p>
               )}
             </section>
+            {/* Lifts and kit — the block that makes a race team's board look
+                like a race team's, and a photo club's like a print swap.
+                Same shape either way: a line somebody posted, sometimes with
+                a limited number of takers. It draws only when the circle has
+                put something in it, which is what "composed per circle"
+                means in practice — nobody picks a circle type. */}
+            {(offers.length > 0 || canSend) && (
+              <section className="overview-section" data-testid="overview-offers">
+                <span className="overline">lifts &amp; kit</span>
+                {canSend && (
+                  <form
+                    className="notice-composer offer-composer"
+                    onSubmit={(e) => {
+                      e.preventDefault();
+                      const text = offerDraft.trim();
+                      if (!text) return;
+                      setOfferDraft('');
+                      setOfferSeats('');
+                      onAddOffer(text, Number(offerSeats) || 0);
+                    }}
+                  >
+                    <input
+                      value={offerDraft}
+                      onChange={(e) => setOfferDraft(e.target.value)}
+                      placeholder="a lift, a spare, where to meet…"
+                      data-testid="overview-offer-input"
+                    />
+                    {/* §8.7 — a real label, not a placeholder doing its job. */}
+                    <label className="offer-seats">
+                      <span className="sr-only">seats, if this is a lift</span>
+                      <input
+                        type="number"
+                        min="0"
+                        max="32"
+                        value={offerSeats}
+                        onChange={(e) => setOfferSeats(e.target.value)}
+                        placeholder="seats"
+                        data-testid="overview-offer-seats"
+                      />
+                    </label>
+                    <button className="button" type="submit" data-testid="overview-offer-post">
+                      post
+                    </button>
+                  </form>
+                )}
+                {offers.length > 0 && (
+                  <ul className="overview-offers">
+                    {offers.map((o) => {
+                      const left = seatsLeft(o);
+                      const mine = (o.takers ?? []).includes(me);
+                      return (
+                        <li className="offer" key={o.id} data-testid={`overview-offer-${o.id}`}>
+                          <Seal name={o.author} size={22} title={o.author} />
+                          <div className="offer-body">
+                            <span className="offer-text">{o.text}</span>
+                            <span className="offer-head mono">
+                              {o.author}
+                              {o.note ? ` · ${o.note}` : ''}
+                              {left !== null &&
+                                ` · ${o.seats - left} of ${o.seats} ${o.seats === 1 ? 'seat' : 'seats'}`}
+                            </span>
+                          </div>
+                          {left !== null && canSend && (
+                            /* §1.6 — "full" is a word, not a greyed-out
+                               button and nothing else. §5.3 — one filled
+                               button per row, and taking the seat is it. */
+                            <button
+                              className={mine ? 'button live offer-take' : 'button primary offer-take'}
+                              disabled={!mine && left === 0}
+                              data-testid={`overview-offer-take-${o.id}`}
+                              onClick={() => onTakeOffer(o.id, !mine)}
+                            >
+                              {mine ? 'you\u2019re in' : left === 0 ? 'full' : 'take it'}
+                            </button>
+                          )}
+                          {canSend && canRemoveOffer(o, me, server.roles?.[me] === 'admin') && (
+                            <button
+                              className="ghost notice-remove"
+                              title="take this down"
+                              data-testid={`overview-offer-remove-${o.id}`}
+                              onClick={() => onRemoveOffer(o.id)}
+                            >
+                              <X size={12} />
+                            </button>
+                          )}
+                        </li>
+                      );
+                    })}
+                  </ul>
+                )}
+              </section>
+            )}
             {bandGame ? (
               <LiveBand
                 game={bandGame}

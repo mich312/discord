@@ -708,6 +708,37 @@ kbd {
   text-overflow: ellipsis;
 }
 
+/* ---------------------------------------------------------- lifts & kit -- */
+/* The noticeboard's shape with a count on it. Same row grammar (§5.2), so
+   the two blocks stack without looking like two products. */
+.overview-offers { list-style: none; margin: 10px 0 0; padding: 0; display: grid; gap: 6px; }
+.offer {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  padding: 12px 14px;
+  background: var(--panel);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r);
+}
+.offer-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
+.offer-text { font-size: var(--text-base); color: var(--ink); overflow-wrap: anywhere; }
+.offer-head {
+  font-size: var(--text-xs);
+  letter-spacing: 0.06em;
+  text-transform: uppercase;
+  color: var(--ink-mute);
+}
+.offer-take { flex: none; }
+.offer-seats input { width: 76px; }
+.offer-composer { flex-wrap: wrap; }
+
+/* ----------------------------------------------------------- phone tabs -- */
+/* Hidden by default: this is the phone's answer to a strip that lives at the
+   top of the screen, and on a desktop the strip is fine where it is. */
+.phone-tabs { display: none; }
+
 /* ------------------------------------------------------------- call bar -- */
 /* The call you are still in, wherever you have walked to. It sits above the
    rooms strip because it outranks navigation: this is the one piece of
@@ -3476,6 +3507,40 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
   .composer-dock { padding-left: 10px; padding-right: 10px; }
   .composer-note { align-items: flex-start; }
   .composer-note svg { margin-top: 2px; }
+
+  /* The three crossings, within reach of a thumb. */
+  .phone-tabs {
+    display: block;
+    flex: none;
+    background: var(--well);
+    border-top: 1px solid var(--hairline);
+    /* §9.7 — this touches the bottom edge, so it owes the home indicator its
+       inset rather than sitting under it. */
+    padding-bottom: env(safe-area-inset-bottom, 0px);
+  }
+  .phone-tabs ul { list-style: none; margin: 0; padding: 0; display: flex; }
+  .phone-tabs > ul > li { flex: 1; min-width: 0; }
+  .phone-tab {
+    width: 100%;
+    /* §8.5 — 44px is the floor on touch, and this is the most-tapped row in
+       the product. */
+    min-height: 52px;
+    display: flex;
+    flex-direction: column;
+    align-items: center;
+    justify-content: center;
+    gap: 3px;
+    padding: 6px 4px;
+    background: transparent;
+    border: none;
+    color: var(--ink-mute);
+    font: 600 var(--text-sm) var(--sans);
+    cursor: pointer;
+  }
+  .phone-tab:disabled { opacity: 0.4; cursor: default; }
+  /* Coral marks the selected thing (§1.1). The word is always there, so the
+     colour is the second channel rather than the only one (§1.6). */
+  .phone-tab.on { color: var(--accent-ink); }
 
   /* Touch targets. Everything interactive clears 44px, which is the iOS
      minimum and above Android's 48dp only where the control is genuinely

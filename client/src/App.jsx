@@ -15,6 +15,7 @@ import Overview from './components/Overview.jsx';
 import Members from './components/Members.jsx';
 import CallPanel from './components/CallPanel.jsx';
 import CallBar from './components/CallBar.jsx';
+import PhoneTabs from './components/PhoneTabs.jsx';
 import CallStage from './components/CallStage.jsx';
 import GameStage from './components/GameStage.jsx';
 import { callChatChannel } from './lib/controller.js';
@@ -216,6 +217,9 @@ export default function App() {
     [themePref, systemLight],
   );
   const [paletteOpen, setPaletteOpen] = useState(false);
+  // The room the phone's "rooms" tab goes back to. Not a stored preference
+  // (§7.5): it is where you were, and it resets with the circle.
+  const lastRoom = useRef(null);
   // The call stage takes over the main pane while set: bubbles for everyone
   // in the call, the shared screen, and the call's own chat thread (the
   // active channel becomes `voice:<room>` so the message machinery follows).
@@ -376,6 +380,7 @@ export default function App() {
   const [loadingOlder, setLoadingOlder] = useState(false);
   useEffect(() => {
     if (!server || !channel) return;
+    lastRoom.current = channel;
     let alive = true;
     controllerRef.current
       .loadMessages(server, channel)
@@ -459,6 +464,11 @@ export default function App() {
   // One clock for every surface that shows how long a call has run, so two
   // of them can never disagree about the same call.
   const now = useMinuteClock(!!state.voice.active);
+
+  // A different circle's rooms are not this one's.
+  useEffect(() => {
+    lastRoom.current = null;
+  }, [server]);
 
   const activeServer = useMemo(
     () => state.servers.find((s) => s.id === server) ?? null,
@@ -994,6 +1004,21 @@ export default function App() {
                     .removeNotice(server, id)
                     .catch((e) => dispatch({ type: 'toast', text: e.message }))
                 }
+                onAddOffer={(text, seats) =>
+                  controllerRef.current
+                    .addOffer(server, text, seats)
+                    .catch((e) => dispatch({ type: 'toast', text: e.message }))
+                }
+                onTakeOffer={(id, taking) =>
+                  controllerRef.current
+                    .takeOffer(server, id, taking)
+                    .catch((e) => dispatch({ type: 'toast', text: e.message }))
+                }
+                onRemoveOffer={(id) =>
+                  controllerRef.current
+                    .removeOffer(server, id)
+                    .catch((e) => dispatch({ type: 'toast', text: e.message }))
+                }
                 people={roster}
               />
             )}
@@ -1181,6 +1206,37 @@ export default function App() {
           />
         )}
       </div>
+      {/* Below 821px only (CSS decides): the strip is at the top of the
+          screen and a phone is held at the bottom. */}
+      <PhoneTabs
+        server={activeServer}
+        channel={channel}
+        onStage={stage && !!state.voice.active}
+        onGame={!!(liveGame && channel)}
+        onCircles={() =>
+          withViewTransition(() => {
+            dispatch({ type: 'select', server: null, channel: null });
+            setStage(false);
+            setGame(null);
+          })
+        }
+        onBoard={() =>
+          withViewTransition(() => {
+            dispatch({ type: 'select', server, channel: null });
+            setStage(false);
+            setGame(null);
+          })
+        }
+        onRooms={() =>
+          withViewTransition(() => {
+            const ch = lastRoom.current ?? activeServer?.channels?.[0];
+            if (!ch) return;
+            dispatch({ type: 'select', server, channel: ch });
+            setStage(false);
+            setGame(null);
+          })
+        }
+      />
     </div>
   );
 }

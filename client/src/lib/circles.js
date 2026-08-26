@@ -41,6 +41,7 @@ export const SHARED_FIELDS = [
   'keys',
   'overview',
   'notices',
+  'offers',
   'rsvps',
   // Invite fragment keys. They have to travel with the circle now: the
   // parked GroupInfo blob goes stale every epoch and the creator's client

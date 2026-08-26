@@ -7,6 +7,7 @@
 
 import { normalizeGames } from './games.js';
 import { normalizeGlyph, DEFAULT_GLYPH } from './crest.js';
+import { normalizeOffers } from './offers.js';
 
 export const BLURB_MAX = 4000;
 export const LINKS_MAX = 12;
@@ -169,6 +170,9 @@ export function reconcileMeta(content) {
   }
   if (content.chanMeta && typeof content.chanMeta === 'object') {
     out.chanMeta = { ...content.chanMeta };
+  }
+  if (Array.isArray(content.offers)) {
+    out.offers = normalizeOffers(content.offers);
   }
   if (Array.isArray(content.notices)) {
     out.notices = content.notices
