@@ -171,6 +171,13 @@ const KP_TOPUP = 2; // fresh KeyPackages published per connect
     deleted room comes back without them), and RSVPs. v1 opens unchanged —
     it is a subset — and is rewritten as v2 by the first change. */
 const BACKUP_VERSION = 2;
+
+/** How long a burst of mutations is allowed to coalesce before the circles
+    are re-parked, and the longest the blob may go unwritten while changes
+    keep arriving. The ceiling is the load-bearing one: without it a busy
+    circle resets the debounce forever and never parks. */
+const BACKUP_DEBOUNCE = 3000;
+const BACKUP_MAX_WAIT = 8000;
 const INVITE_TTL_SECONDS = 7 * 24 * 3600;
 // Typing signals: readers treat one as stale ~6s after it was sent, and a
 // composing client re-sends every ~3s while the draft grows, so the "is
@@ -205,6 +212,17 @@ export class Controller {
     // are joined and forgotten. Deliberately not persisted alongside the
     // circles: it IS the persisted ratchet, asked rather than remembered.
     this.mlsGroups = new Set();
+    // Whether this device has ever successfully written the circles blob.
+    // Until it has, a mutation parks immediately rather than debouncing:
+    // there is nothing to coalesce with and everything to lose.
+    // The circle shape last written to the relay. Anything else in memory
+    // means the blob is stale about what a circle *is*, which is the one
+    // kind of staleness worth an immediate write.
+    this.parkedShape = null;
+    this.backupPendingSince = null;
+    this.backupDirty = false;
+    this.backupInFlight = false;
+    this.backupRetry = false;
     // group id -> the seq the relay's catch-up backlog ended at. Blobs at or
     // below it are history being replayed, which cannot decrypt once the
     // group has re-keyed past them; see fork.js.
@@ -227,7 +245,10 @@ export class Controller {
     this.accounts = new AccountService({
       request: (msg) => this.relay.request(msg),
       crypto,
-      db,
+      // Read through this controller rather than captured: IndexedDB is not
+      // open yet at construction, and `db` is assigned onto the controller
+      // once it is.
+      db: () => this.db,
       dispatch,
       httpBase: () => this.httpBase(),
       identityBytes: () => this.identityBytes(),
@@ -436,18 +457,7 @@ export class Controller {
       onState: (state) => this.dispatch({ type: 'voice', state }),
       onNotify: (text) => this.dispatch({ type: 'toast', text }),
       onAnnounce: (text) => this.dispatch({ type: 'announce', text }),
-      // First joiner in an empty room = a call started; say so in the
-      // room's first text channel so it reads like the event it is.
-      onCallStarted: (server, channel, name) => {
-        const record = this.servers.get(server);
-        if (!record) return;
-        const who = name === this.me ? 'you' : name;
-        this.addSystemMessage(
-          server,
-          `${who} started a call in ${channel}`,
-          record.channels[0] ?? 'general'
-        ).catch(() => {});
-      },
+      onCallStarted: (server, channel, name) => this.announceCallStarted(server, channel, name),
     });
     this.relay = new Relay({
       url: this.relayUrl,
@@ -2321,12 +2331,97 @@ export class Controller {
   // A whole-blob overwrite from a second signed-in device is how a circle
   // silently disappears, and that is the one failure this must not have.
 
-  /** Debounced: many mutations arrive in bursts (joins, meta floods). */
+  /**
+   * What a circle *is*, as against what has been said in it.
+   *
+   * Which circles you are in, what they are called and what rooms they have
+   * — the part of the blob that, if it is stale, leaves you looking at a
+   * circle named after its own id with a room missing.
+   */
+  circleShape() {
+    return JSON.stringify(
+      [...this.servers.values()].map((r) => [
+        r.id,
+        r.name,
+        r.channels ?? [],
+        r.voiceChannels ?? [],
+      ]),
+    );
+  }
+
+  /**
+   * Park the circles: at once when the shape changed, debounced otherwise.
+   *
+   * This was a plain 3s debounce, and it had two holes that between them
+   * lost circles outright.
+   *
+   * The first: every mutation cleared the timer and started a fresh 3s, so a
+   * circle with something happening in it more often than every 3 seconds
+   * never parked at all. Reload during that stretch and you came back to no
+   * circles, because the only copy had never been written.
+   *
+   * The second is the one a ceiling alone does not fix. You are added to a
+   * circle; the welcome carries no name, so the record starts out called
+   * after its own group id, and the name and rooms arrive moments later on
+   * the meta rebroadcast. Every timer that would have parked *that* was
+   * still pending when the page reloaded — a reload cancels timers, and no
+   * delay short enough to lose that race is long enough to be worth having.
+   *
+   * So the wait is decided by what changed rather than by the clock. A
+   * change to the shape — a circle joined or left, renamed, a room added or
+   * deleted — parks immediately: those are rare, and each one is the whole
+   * difference between a legible circle and a broken one. Everything else —
+   * notices, home-base edits, the meta floods that follow a join — is
+   * chatter about a shape that already holds, and debounces, with a ceiling
+   * so a busy circle still parks rather than resetting the timer forever.
+   *
+   * One upload at a time, in all cases. Without that, "immediately" lets
+   * several structural changes each start their own upload; they race on the
+   * version the relay keeps beside the blob and all but one lose the swap.
+   */
   scheduleBackup() {
+    this.backupDirty = true;
+    // An upload is running; its completion re-schedules for whatever landed
+    // while it was in the air.
+    if (this.backupInFlight) return;
+    this.backupPendingSince ??= Date.now();
+    // A retry waits even when the shape changed — otherwise a relay that is
+    // refusing writes turns "immediately" into a spin.
+    const structural = this.circleShape() !== this.parkedShape;
+    const wait =
+      structural && !this.backupRetry
+        ? 0
+        : Math.max(
+            0,
+            Math.min(BACKUP_DEBOUNCE, this.backupPendingSince + BACKUP_MAX_WAIT - Date.now()),
+          );
     clearTimeout(this.backupTimer);
-    this.backupTimer = setTimeout(() => {
-      this.uploadBackup().catch((e) => console.warn(`backup upload: ${e.message}`));
-    }, 3000);
+    this.backupTimer = setTimeout(() => this.flushBackup(), wait);
+  }
+
+  /** Run one upload, then start the next if anything changed meanwhile. */
+  async flushBackup() {
+    this.backupTimer = null;
+    this.backupPendingSince = null;
+    this.backupDirty = false;
+    this.backupInFlight = true;
+    // Snapshot before the await: what this upload is about to seal.
+    const shape = this.circleShape();
+    try {
+      // `false` means it declined to write (no relay, or no load has
+      // succeeded yet) rather than failed — still dirty, but nothing to
+      // retry against until something changes.
+      if ((await this.uploadBackup()) === false) this.backupDirty = true;
+      else this.parkedShape = shape;
+      this.backupRetry = false;
+    } catch (e) {
+      console.warn(`backup upload: ${e.message}`);
+      this.backupDirty = true;
+      this.backupRetry = true;
+    } finally {
+      this.backupInFlight = false;
+      if (this.backupDirty) this.scheduleBackup();
+    }
   }
 
   /**
@@ -2339,7 +2434,7 @@ export class Controller {
    * A device that has never successfully read cannot write.
    */
   async uploadBackup() {
-    if (!this.relay?.ready || !this.circlesLoaded) return;
+    if (!this.relay?.ready || !this.circlesLoaded) return false;
     let servers = [...this.servers.values()].map(sharedHalf);
     let payload = await sealBackup(this.identityBytes(), { v: BACKUP_VERSION, servers });
     try {
@@ -2349,7 +2444,7 @@ export class Controller {
         version: this.backupVersion ?? 0,
       });
       this.backupVersion = ok.version ?? this.backupVersion;
-      return;
+        return true;
     } catch (e) {
       if (!/backup conflict/i.test(e.message ?? '')) throw e;
     }
@@ -2371,6 +2466,7 @@ export class Controller {
     // Adopt anything the merge brought in, so this device shows the circle
     // it just declined to delete rather than waiting for the next boot.
     this.adoptCircles(servers);
+    return true;
   }
 
   /** Read and open the parked blob. Returns the circles and the version
@@ -2908,6 +3004,30 @@ export class Controller {
   /** A device-local notice in a room's stream. Session-lived: it is derived
       from something this device watched happen, and writing it to the log
       would give every member their own copy of the same line. */
+  /**
+   * First joiner into an empty room = a call started; say so in the room's
+   * first text channel so it reads like the event it is.
+   *
+   * A method rather than a closure in the VoiceManager options because it
+   * runs inside `track()`, inside `join()`, and anything that throws here
+   * takes the call down with it. That is not hypothetical: `addSystemMessage`
+   * is synchronous and returns nothing, and this used to end in
+   * `.catch(() => {})` — which threw a TypeError rather than swallowing one.
+   * The first person into a voice room got a toast and no call, and every
+   * call in the product starts with somebody being first. Out here it is
+   * reachable from a test.
+   */
+  announceCallStarted(server, channel, name) {
+    const record = this.servers.get(server);
+    if (!record) return;
+    const who = name === this.me ? 'you' : name;
+    this.addSystemMessage(
+      server,
+      `${who} started a call in ${channel}`,
+      record.channels[0] ?? 'general',
+    );
+  }
+
   addSystemMessage(serverId, text, channel = 'general') {
     const message = {
       server: serverId,

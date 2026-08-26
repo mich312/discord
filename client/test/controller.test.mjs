@@ -1481,3 +1481,138 @@ test('leaving a circle clears its fork evidence so a rejoin starts clean', async
   assert.equal(c.forkWarned.size, 0, 'and it may warn again if it recurs');
   clearTimeout(c.backupTimer);
 });
+
+/* ---------------------------------------------------- when to park it -- */
+// The blob is the only copy of the circles, so *when* it is written is not a
+// tuning question. These cover the two holes a plain 3s debounce had, both of
+// which ended with a device reloading into an empty circles home.
+
+/** The delay on the pending park. Node clamps setTimeout(fn, 0) to 1ms, so
+    "no wait" is <= 1 rather than 0. */
+function parkWait(c) {
+  return c.backupTimer?._idleTimeout ?? Infinity;
+}
+
+/** Park scheduling without waiting on real time: run the pending timer now. */
+function runPendingBackup(c) {
+  const t = c.backupTimer;
+  if (!t) return null;
+  clearTimeout(t);
+  c.backupTimer = null;
+  return c.flushBackup();
+}
+
+test('a change to what a circle IS parks at once, not after a debounce', async () => {
+  // You are added to a circle. The welcome carries no name, so the record
+  // starts out called after its own group id, and the name and rooms arrive
+  // moments later on the meta rebroadcast. Under a pure debounce every timer
+  // that would have parked *that* was still pending when the page reloaded —
+  // and a reload cancels timers.
+  const writes = [];
+  const { c } = makeController({
+    relayHandler: (msg) => {
+      if (msg.t === 'backup_set') writes.push(msg.payload);
+      return Promise.resolve({ seq: 1, version: writes.length });
+    },
+  });
+  c.identityBytes = () => new Uint8Array(32).fill(7);
+  c.circlesLoaded = true;
+
+  c.servers.set('srv', record({ id: 'srv', name: 'srv-2mlp' }));
+  c.scheduleBackup();
+  assert.ok(parkWait(c) <= 1, 'a new circle waits for nothing');
+  await runPendingBackup(c);
+  assert.equal(writes.length, 1);
+
+  // The name lands. Still structural: park it now.
+  c.servers.get('srv').name = 'Race Team';
+  c.scheduleBackup();
+  assert.ok(parkWait(c) <= 1, 'a rename waits for nothing');
+  await runPendingBackup(c);
+  assert.equal(writes.length, 2);
+
+  // A room appears. Also structural.
+  c.servers.get('srv').channels = ['general', 'logistics'];
+  c.scheduleBackup();
+  assert.ok(parkWait(c) <= 1, 'a new room waits for nothing');
+  await runPendingBackup(c);
+
+  const opened = await openBackup(c.identityBytes(), writes.at(-1));
+  assert.equal(opened.servers[0].name, 'Race Team');
+  assert.deepEqual(opened.servers[0].channels, ['general', 'logistics']);
+  clearTimeout(c.backupTimer);
+});
+
+test('chatter about a settled shape debounces, but never past the ceiling', async () => {
+  const { c } = makeController({
+    relayHandler: () => Promise.resolve({ seq: 1, version: 1 }),
+  });
+  c.identityBytes = () => new Uint8Array(32).fill(7);
+  c.circlesLoaded = true;
+  c.servers.set('srv', record({ id: 'srv', name: 'Race Team' }));
+  c.scheduleBackup();
+  await runPendingBackup(c);
+
+  // Same shape, new content: this is what debouncing is for.
+  c.servers.get('srv').notices = [{ id: 'n1', text: 'hi', ts: 1, author: 'bob' }];
+  c.scheduleBackup();
+  const first = parkWait(c);
+  assert.ok(first > 0, 'a notice does not need its own upload');
+
+  // A circle that is busy for longer than the debounce used to reset the
+  // timer forever and never park at all. The wait is measured from the first
+  // pending change, so it only ever shrinks.
+  c.backupPendingSince = Date.now() - 7000;
+  c.servers.get('srv').notices.push({ id: 'n2', text: 'again', ts: 2, author: 'bob' });
+  c.scheduleBackup();
+  assert.ok(
+    parkWait(c) < first,
+    'the ceiling is measured from the first pending change, not the last',
+  );
+  clearTimeout(c.backupTimer);
+});
+
+test('two structural changes in a row do not race on the version', async () => {
+  // "Park at once" would otherwise let each change start its own upload;
+  // they swap against the same version and all but one lose it.
+  let inFlight = 0;
+  let maxConcurrent = 0;
+  const { c } = makeController({
+    relayHandler: async (msg) => {
+      if (msg.t !== 'backup_set') return { seq: 1 };
+      inFlight += 1;
+      maxConcurrent = Math.max(maxConcurrent, inFlight);
+      await new Promise((r) => setTimeout(r, 5));
+      inFlight -= 1;
+      return { seq: 1, version: 1 };
+    },
+  });
+  c.identityBytes = () => new Uint8Array(32).fill(7);
+  c.circlesLoaded = true;
+
+  c.servers.set('a', record({ id: 'a', name: 'A' }));
+  const run = c.flushBackup();
+  c.servers.set('b', record({ id: 'b', name: 'B' }));
+  c.scheduleBackup();
+  assert.equal(c.backupTimer, null, 'the second change waits for the first upload to land');
+  await run;
+  await runPendingBackup(c);
+  assert.equal(maxConcurrent, 1, 'uploads are serialized');
+  clearTimeout(c.backupTimer);
+});
+
+test('being the first into a voice room starts a call rather than throwing', async () => {
+  // The line that announces a call is device-local and synchronous — it
+  // returns nothing. A `.catch(() => {})` on it threw a TypeError instead of
+  // swallowing one, from inside track(), from inside join(), so the first
+  // person into a room got a toast and no call. Every call starts with
+  // somebody being first, so this was every call.
+  const { c } = makeController();
+  c.servers.set('srv', record({ id: 'srv', name: 'Race Team', channels: ['general'] }));
+  assert.doesNotThrow(() => c.announceCallStarted('srv', 'lounge', 'alice'));
+  const said = renderLog(c.channelLog('srv', 'general')).filter((m) => m.system);
+  assert.ok(
+    said.some((m) => m.text === 'you started a call in lounge'),
+    'the room says who opened the call',
+  );
+});

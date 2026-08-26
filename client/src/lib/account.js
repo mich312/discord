@@ -135,7 +135,12 @@ export class AccountService {
   }) {
     this.request = request;
     this.crypto = crypto;
-    this.db = db;
+    // A thunk, for the same reason `request` is one: the controller is built
+    // before IndexedDB is open and assigns `db` onto itself afterwards.
+    // Captured by value this stayed null for the life of the process, so
+    // every `status()` threw on it — which is why the banner telling you your
+    // account exists only in this browser never appeared for anybody.
+    this.store = db;
     this.dispatch = dispatch;
     this.httpBase = httpBase;
     this.identityBytes = identityBytes;
@@ -167,7 +172,7 @@ export class AccountService {
   async status() {
     try {
       const reply = await this.request({ t: 'vault_status' });
-      const securedLocal = (await this.db.kvGet('securedLocal')) ?? true;
+      const securedLocal = (await this.store().kvGet('securedLocal')) ?? true;
       this.dispatch({ type: 'vault', kind: reply.kind ?? null, securedLocal });
     } catch (e) {
       console.warn(`vault status: ${e.message}`);
@@ -175,7 +180,7 @@ export class AccountService {
   }
 
   async markSecuredLocal() {
-    await this.db.kvPut('securedLocal', true);
+    await this.store().kvPut('securedLocal', true);
     await this.status();
   }
 

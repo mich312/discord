@@ -740,9 +740,14 @@ export default function App() {
       {unsecured && (
         <div className="secure-banner" data-testid="secure-banner">
           <Key size={14} />
+          {/* §11.6 bans "gone forever" by name, and cites this banner as the
+              reason the rule exists. It has never actually been on screen —
+              the vault status it keys off never reached the reducer — so this
+              is the first version of it anyone will read. §11.2: what is true,
+              what it means for you, what to do about it. */}
           <span>
-            this account exists only in this browser — lose it and <strong>{state.me}</strong> is
-            gone forever
+            <strong>{state.me}</strong> lives only in this browser. Park an encrypted copy on
+            the relay and you can sign in on another device.
           </span>
           <button className="button" data-testid="secure-now" onClick={openSecure}>
             secure account

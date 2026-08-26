@@ -32,10 +32,12 @@ function service({ routes = {}, relay = async () => ({}), kv = new Map(), derive
     },
     // 64 bytes: the first 32 are the auth half, the rest the wrap half.
     crypto: deriveKeys ?? (async () => new Uint8Array(64).fill(7)),
-    db: {
+    // A thunk, matching how the controller wires it: IndexedDB is not open
+    // when the service is built.
+    db: () => ({
       kvGet: async (k) => kv.get(k),
       kvPut: async (k, v) => void kv.set(k, v),
-    },
+    }),
     dispatch: (a) => dispatched.push(a),
     httpBase: () => 'https://relay.example',
     identityBytes: () => IDENTITY,
@@ -333,4 +335,33 @@ test('an unrecognized agent gets an honest placeholder, not a guess', () => {
   assert.equal(deviceLabel(''), 'this device');
   assert.equal(deviceLabel(undefined), 'this device');
   assert.equal(deviceLabel('curl/8.4.0'), 'this device');
+});
+
+test('the vault status reaches the UI, so the unsecured banner can appear', async () => {
+  // The regression this closes: the controller builds this service before
+  // IndexedDB is open and assigns `db` onto itself afterwards. Captured by
+  // value, the service's copy stayed null forever, every status() threw on
+  // it, and the dispatch below never happened — so `state.vault` sat at its
+  // "we don't know yet" default and the banner telling you your account
+  // exists only in this browser was never once shown to anybody.
+  const { svc, dispatched } = service({
+    relay: async (msg) => (msg.t === 'vault_status' ? { kind: null } : {}),
+  });
+  await svc.status();
+  const vault = dispatched.find((a) => a.type === 'vault');
+  assert.ok(vault, 'vault status must reach the reducer');
+  assert.equal(vault.kind, null, 'no vault parked');
+  assert.equal(vault.securedLocal, true, 'defaults to secured-locally until told otherwise');
+});
+
+test('a device that has secured locally says so', async () => {
+  const kv = new Map([['securedLocal', false]]);
+  const { svc, dispatched } = service({
+    kv,
+    relay: async (msg) => (msg.t === 'vault_status' ? { kind: 'password' } : {}),
+  });
+  await svc.status();
+  const vault = dispatched.find((a) => a.type === 'vault');
+  assert.equal(vault.kind, 'password');
+  assert.equal(vault.securedLocal, false);
 });
