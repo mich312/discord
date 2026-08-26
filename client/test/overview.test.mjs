@@ -9,6 +9,7 @@ import {
   EVENTS_MAX,
   canRemoveNotice,
   describeAgo,
+  describeCallLength,
   describeUntil,
   mergeNotices,
   normalizeEvents,
@@ -257,4 +258,18 @@ test('a face survives a meta rebroadcast', () => {
   // does not carry through is a field that disappears for any device that
   // rejoins — which is how the glyph would have quietly reset itself.
   assert.equal(reconcileMeta({ overview: { glyph: 'games' } }).overview.glyph, 'games');
+});
+
+test('a call length is a length, and it rounds down', () => {
+  // This number sits next to a live mic. Rounding to nearest would have a
+  // call you joined 40 seconds ago reporting "1 min" — a clock running ahead
+  // of the thing it measures.
+  assert.equal(describeCallLength(NOW - 40e3, NOW), 'just now');
+  assert.equal(describeCallLength(NOW - 119e3, NOW), '1 min');
+  assert.equal(describeCallLength(NOW - 24 * MIN, NOW), '24 min');
+  assert.equal(describeCallLength(NOW - 90 * MIN, NOW), '90 min');
+  assert.equal(describeCallLength(NOW - 3 * HOUR - 7 * MIN, NOW), '3 h 7 min');
+  // A device whose clock jumped backwards mid-call reads zero, not a
+  // negative call length.
+  assert.equal(describeCallLength(NOW + 5 * MIN, NOW), 'just now');
 });

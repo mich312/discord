@@ -209,6 +209,20 @@ export function describeUntil(at, now = Date.now()) {
 }
 
 /** Relative past label for previews and notices. */
+/** How long a call has been running, for the marker and the bar that follows
+    you out of the room. Same vocabulary as describeAgo (§11.3 — one concept,
+    one word), minus the "ago": this is a length, not a point.
+
+    Rounds down, not to nearest. A call you joined forty seconds ago saying
+    "1 min" is a clock that runs ahead of the thing it measures, and this
+    number sits next to a live mic. */
+export function describeCallLength(since, now = Date.now()) {
+  const d = Math.max(0, now - since);
+  if (d < MIN) return 'just now';
+  if (d < 2 * HOUR) return `${Math.floor(d / MIN)} min`;
+  return `${Math.floor(d / HOUR)} h ${Math.floor((d % HOUR) / MIN)} min`;
+}
+
 export function describeAgo(ts, now = Date.now()) {
   const d = Math.max(0, now - ts);
   if (d < MIN) return 'just now';

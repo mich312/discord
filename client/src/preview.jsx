@@ -155,7 +155,7 @@ const digestMock = {
 };
 
 const voice = {
-  active: { server: 'srv-race', channel: 'lounge' },
+  active: { server: 'srv-race', channel: 'lounge', since: now - 24 * 60e3 },
   listenOnly: false,
   connections: { bob: 'connected', dana: 'connecting…' },
   presence: { 'srv-race/lounge': ['alice', 'bob', 'dana'] },
@@ -276,6 +276,12 @@ function PreviewShell({ empty = false, banner = false, modal = null, palette = f
       </a>
       <Masthead
         server={activeServer}
+        channel={active.channel}
+        callChannel={stage ? vc.active?.channel ?? null : null}
+        game={liveGame && active.channel ? liveGame : null}
+        call={vc.active}
+        now={now}
+        onOpenCircle={() => setActive((a) => ({ ...a, channel: null }))}
         connection="online"
         theme={theme}
         onInvite={() => setOpenModal(modals['modal-invite'])}

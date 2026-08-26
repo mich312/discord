@@ -29,6 +29,7 @@ import BootLoader from './components/BootLoader.jsx';
 import { Key, ShieldCheck, LinkGlyph, Sun, QuorumGlyph, Gear, LogOut } from './components/icons.jsx';
 import { markPlayed, bumpPlayCount } from './lib/games.js';
 import { withViewTransition } from './lib/viewTransition.js';
+import { useMinuteClock } from './lib/clock.js';
 import { hasTurn, loadRelayOnly, saveRelayOnly } from './lib/voice.js';
 import { deviceLabel } from './lib/account.js';
 import {
@@ -467,6 +468,10 @@ export default function App() {
     return () => clearTimeout(t);
   }, [state.toast]);
 
+  // One clock for every surface that shows how long a call has run, so two
+  // of them can never disagree about the same call.
+  const now = useMinuteClock(!!state.voice.active);
+
   const activeServer = useMemo(
     () => state.servers.find((s) => s.id === server) ?? null,
     [state.servers, server]
@@ -669,6 +674,22 @@ export default function App() {
       </a>
       <Masthead
         server={activeServer}
+        channel={channel}
+        // What the pane is *showing*, which is not the same as what is
+        // running: a call keeps going when you walk back to a text room, and
+        // the marker must name the room in that case, not the call.
+        callChannel={stage && state.voice.active ? state.voice.active.channel : null}
+        game={liveGame && channel ? liveGame : null}
+        call={state.voice.active}
+        now={now}
+        onOpenCircle={() =>
+          withViewTransition(() => {
+            dispatch({ type: 'select', server, channel: null });
+            setStage(false);
+            setGame(null);
+            setDrawer(null);
+          })
+        }
         connection={state.connection}
         theme={theme}
         canInvite={canManage}

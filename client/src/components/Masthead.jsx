@@ -1,5 +1,6 @@
 import React from 'react';
 import { QuorumGlyph, LinkGlyph, CommandGlyph, Sun, Moon, Menu, Users } from './icons.jsx';
+import CircleMarker from './CircleMarker.jsx';
 
 // Full-width top bar: brand at the left edge, the current circle as a
 // title (not a sidebar header), and the session chrome (palette, theme,
@@ -8,6 +9,12 @@ import { QuorumGlyph, LinkGlyph, CommandGlyph, Sun, Moon, Menu, Users } from './
 // roster toggles below only render (via CSS) when that layout is active.
 export default function Masthead({
   server,
+  channel,
+  callChannel,
+  game,
+  call,
+  now,
+  onOpenCircle,
   connection,
   theme,
   canInvite,
@@ -33,16 +40,25 @@ export default function Masthead({
       >
         <Menu />
       </button>
-      <div className="masthead-brand">
+      {/* The brand mark never leaves the fascia (§9.5) — but inside a circle
+          the wordmark yields its width to the answer people actually need
+          from this bar, which is which circle and which room. */}
+      <div className={server ? 'masthead-brand compact' : 'masthead-brand'}>
         <span className="brand-glyph">
           <QuorumGlyph />
         </span>
         <span className="wordmark">quorum</span>
       </div>
       {server && (
-        <div className="masthead-context">
-          <h1 className="circle-title" data-testid="server-name">{server.name}</h1>
-        </div>
+        <CircleMarker
+          server={server}
+          channel={channel}
+          callChannel={callChannel}
+          game={game}
+          call={call}
+          now={now}
+          onOpenCircle={onOpenCircle}
+        />
       )}
       <div className="masthead-actions">
         {server && canInvite && (

@@ -261,7 +261,9 @@ export class VoiceManager {
   publish() {
     const activeKey = this.active ? this.key(this.active.server, this.active.channel) : null;
     const state = {
-      active: this.active ? { server: this.active.server, channel: this.active.channel } : null,
+      active: this.active
+        ? { server: this.active.server, channel: this.active.channel, since: this.active.since }
+        : null,
       listenOnly: this.active ? !!this.listenOnly : false,
       muted: this.active ? !!this.muted : false,
       // Who has a live screen share in my current room (me included), and
@@ -601,7 +603,10 @@ export class VoiceManager {
     // peer explicitly instead — see callUser).
     const startsCall =
       this.participants(server, channel).length === 0 && !this.directPeer(channel);
-    this.active = { server, channel, stream };
+    // `since` is when *this device* joined, not when the call started —
+    // the honest answer to "how long have I been in this", which is the
+    // question a bar that follows you into another room is answering.
+    this.active = { server, channel, stream, since: Date.now() };
     this.addMeter(this.me, stream); // show my own level even before anyone joins
     this.track(server, channel, this.me, true);
     await this.send(server, { k: 'voice', ch: channel, action: 'join' }, startsCall ? '*' : undefined);

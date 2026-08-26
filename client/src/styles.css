@@ -419,6 +419,10 @@ kbd {
   width: 228px;
   flex-shrink: 0;
 }
+/* Inside a circle the marker is the more useful thing to give the width to.
+   The glyph stays — the brand mark is never removed, only narrowed. */
+.masthead-brand.compact { width: auto; }
+.masthead-brand.compact .wordmark { display: none; }
 .brand-glyph { color: var(--accent-ink); display: grid; place-items: center; }
 .wordmark {
   font: 700 13px var(--mono);
@@ -426,19 +430,76 @@ kbd {
   text-transform: uppercase;
 }
 
-.masthead-context {
+/* The marker: which circle, which room, on every screen inside a circle.
+   This is what answers §7.1 now that there is no sidebar row to light up. */
+.circle-marker {
   display: flex;
   align-items: center;
-  gap: 14px;
+  gap: 10px;
   min-width: 0;
+  flex: 1;
 }
-.circle-title {
-  font-size: var(--text-md);
-  font-weight: 650;
+.marker-title {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-width: 0;
+  /* A heading by role, not by size (§8.8). The fascia is 44px tall; a
+     display-sized h1 would not fit and would not help. */
+  font-size: var(--text-base);
+  font-weight: 600;
   letter-spacing: -0.01em;
+}
+.marker-circle {
+  display: flex;
+  align-items: center;
+  gap: 9px;
+  min-width: 0;
+  padding: 4px 6px 4px 4px;
+  margin-left: -4px;
+  background: transparent;
+  border: 1px solid transparent;
+  border-radius: var(--r-sm);
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
+}
+.marker-circle:hover { background: var(--hover); }
+.marker-name {
   white-space: nowrap;
   overflow: hidden;
   text-overflow: ellipsis;
+}
+.marker-sep { color: var(--ink-mute); flex: none; }
+.marker-here {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  min-width: 0;
+  color: var(--ink);
+}
+.marker-here svg { color: var(--ink-mute); flex: none; }
+.marker-here-label {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.marker-call {
+  display: flex;
+  align-items: baseline;
+  gap: 7px;
+  flex: none;
+  color: var(--ok);
+}
+/* §1.6 — the green never carries this alone, and §4.3/§4.4: the words that
+   tell you your mic is live are a decision, so they are 12px sans, not 10px
+   uppercase mono. Only the duration beside them is machine data. */
+.marker-call-word { font-size: var(--text-sm); font-weight: 600; }
+.marker-call-len {
+  font-family: var(--mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0.12em;
+  text-transform: uppercase;
 }
 .masthead-actions {
   margin-left: auto;
@@ -3329,7 +3390,14 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
   .menu-btn, .roster-btn { display: inline-flex; }
   .masthead-brand { width: auto; gap: 0; }
   .masthead-brand .wordmark { display: none; }
-  .masthead-context { gap: 8px; flex: 1; min-width: 0; }
+  .circle-marker { gap: 8px; }
+  .marker-title { gap: 8px; }
+  /* Below 821px the fascia cannot hold circle *and* room and still leave a
+     tap target for either. The room is where you are; the circle is one tap
+     away through the marker, which stays. §11.12 — the circle name is not
+     silently clipped, it is deliberately dropped down to its tile. */
+  .marker-name { display: none; }
+  .marker-sep { display: none; }
   .masthead-actions { gap: 2px; }
   .masthead-actions .button { display: none; } /* invite lives in the palette */
   .palette-hint { border: none; padding: 4px 6px; }
