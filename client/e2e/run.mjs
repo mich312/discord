@@ -321,16 +321,15 @@ try {
 
   console.log('7. bob reloads — state must come back from IndexedDB');
   await bob.reload();
-  try {
-    await bob.waitForSelector('[data-testid=channel-general]', { timeout: 45000 });
-  } catch (e) {
-    console.error('DUMP', JSON.stringify(await bob.evaluate(() => ({
-      title: document.querySelector('h1')?.textContent,
-      body: document.body.innerText.slice(0, 400),
-      testids: [...document.querySelectorAll('[data-testid]')].map((x) => x.dataset.testid).slice(0, 30),
-    })), null, 1));
-    throw e;
-  }
+  // KNOWN FAILURE, and not this change's: bob's circles do not come back
+  // after a reload. Circles moved onto the relay (they are loaded from the
+  // encrypted backup, not kept on the device) and a device that has only
+  // ever been *added* to a circle appears never to park one, so a reload
+  // reads nothing and lands on an empty circles home. Reproduced on this
+  // commit and, identically, on the commit before this branch — the suite
+  // does not run in CI, so nothing had caught it. Everything from here down
+  // is unverified until it is fixed.
+  await bob.waitForSelector('[data-testid=channel-general]', { timeout: 15000 });
   await bob.waitForFunction(
     () => document.querySelector('[data-testid=conn-dot]')?.classList.contains('online'),
     { timeout: 15000 }
