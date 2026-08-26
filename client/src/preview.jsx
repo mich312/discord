@@ -3,7 +3,7 @@
 // if App's shell changes, keep this in step. Views:
 //   /preview.html?view=app            main surface, carbon
 //   /preview.html?view=app&theme=paper
-//   /preview.html?view=onboarding | invited | empty | banner | overview
+//   /preview.html?view=onboarding | invited | empty | circles | banner | overview
 //   /preview.html?view=modal-safety | modal-invite | modal-secure | modal-identity
 //   /preview.html?view=palette | call | call-share | game
 import React, { useState } from 'react';
@@ -11,7 +11,7 @@ import { createRoot } from 'react-dom/client';
 import './styles.css';
 import Masthead from './components/Masthead.jsx';
 import CommandPalette from './components/CommandPalette.jsx';
-import Rail from './components/Rail.jsx';
+import CirclesHome from './components/CirclesHome.jsx';
 import RoomStrip from './components/RoomStrip.jsx';
 import Messages from './components/Messages.jsx';
 import Overview from './components/Overview.jsx';
@@ -252,12 +252,12 @@ const modals = {
   },
 };
 
-function PreviewShell({ empty = false, banner = false, modal = null, palette = false, stage = null, landing = false, game = null, idle = false, emptyChat = false }) {
+function PreviewShell({ empty = false, circles = false, banner = false, modal = null, palette = false, stage = null, landing = false, game = null, idle = false, emptyChat = false }) {
   const vc = idle ? voiceIdle : voice;
   const me = 'alice';
   // channel: null means the circle's hub page, same as App.jsx.
   const [active, setActive] = useState({
-    server: empty ? null : 'srv-race',
+    server: empty || circles ? null : 'srv-race',
     channel: landing && !game ? null : 'general',
   });
   const [liveGame, setLiveGame] = useState(game);
@@ -282,6 +282,8 @@ function PreviewShell({ empty = false, banner = false, modal = null, palette = f
         call={vc.active}
         now={now}
         onOpenCircle={() => setActive((a) => ({ ...a, channel: null }))}
+        me={me}
+        onSettings={noop}
         connection="online"
         theme={theme}
         onInvite={() => setOpenModal(modals['modal-invite'])}
@@ -290,7 +292,6 @@ function PreviewShell({ empty = false, banner = false, modal = null, palette = f
           document.documentElement.dataset.theme =
             document.documentElement.dataset.theme === 'paper' ? 'carbon' : 'paper';
         }}
-        onMenu={() => setDrawer((d) => (d === 'nav' ? null : 'nav'))}
         onRoster={() => setDrawer((d) => (d === 'roster' ? null : 'roster'))}
       />
       {banner && (
@@ -327,32 +328,6 @@ function PreviewShell({ empty = false, banner = false, modal = null, palette = f
       )}
       <div className="app">
         {drawer && <div className="drawer-backdrop" onClick={() => setDrawer(null)} />}
-        <nav className="sidebar">
-          <Rail
-            servers={list}
-            active={active.server}
-            onSelect={(id) => {
-              setActive({ server: id, channel: null }); // land on the overview
-              setDrawer(null);
-            }}
-            onCreate={noop}
-          />
-          <div className="nav-col">
-          <div className="self-card">
-            <div className="self-id">
-              <Seal name={me} size={32} />
-              <span className="who">
-                <span className="handle">{me}</span>
-                <span className="status online">online</span>
-              </span>
-            </div>
-            <div className="self-actions">
-              <button className="icon-btn" title="settings"><Gear size={14} /></button>
-              <button className="icon-btn danger" title="log out"><LogOut size={14} /></button>
-            </div>
-          </div>
-          </div>
-        </nav>
         {activeServer && liveGame && active.channel ? (
           <GameStage
             game={liveGame}
@@ -455,20 +430,22 @@ function PreviewShell({ empty = false, banner = false, modal = null, palette = f
             <Members server={activeServer} me={me} voice={vc} onAdd={noop} onMember={() => setOpenModal(modals['modal-safety'])} />
           </>
         ) : (
-          <div className="empty-state">
-            <div>
-              <div className="glyph-lg"><QuorumGlyph size={44} /></div>
-              <h2>No circles yet</h2>
-              <p className="muted">
-                Start one from the sidebar, follow an invite link, or ask someone to add you —
-                they need your handle: <strong>{me}</strong>
-              </p>
-              <div className="row">
-                <button className="button"><Key size={14} /> identity key</button>
-                <button className="button"><ShieldCheck size={14} /> secure account</button>
-              </div>
-            </div>
-          </div>
+          <CirclesHome
+            servers={list}
+            me={me}
+            voice={vc}
+            unreads={Object.fromEntries(
+              servers.map((s) => [
+                s.id,
+                (digestMock[s.id] ?? []).reduce((n, d) => n + d.unread, 0),
+              ])
+            )}
+            now={now}
+            onOpen={(id) => setActive({ server: id, channel: null })}
+            onCreate={noop}
+            onIdentity={() => setOpenModal(modals['modal-identity'])}
+            onSecure={() => setOpenModal(modals['modal-secure'])}
+          />
         )}
         {openModal && (
           <Modal
@@ -499,6 +476,7 @@ function pick() {
   if (view === 'boot') return <BootLoader />;
   if (view === 'onboarding' || view === 'invited') return <Onboarding controller={mockController} />;
   if (view === 'empty') return <PreviewShell empty />;
+  if (view === 'circles') return <PreviewShell circles />;
   if (view === 'emptychat') return <PreviewShell emptyChat />;
   if (view === 'overview') return <PreviewShell landing />;
   if (view === 'overview-idle') return <PreviewShell landing idle />;

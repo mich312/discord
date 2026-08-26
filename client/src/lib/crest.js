@@ -24,8 +24,8 @@
 //   · geometry — a linear sweep at one of several angles, or a radial with
 //     an off-centre focal point
 //
-// Keyed to the circle *id*, never the name. Rail.jsx derives its hue from the
-// name today, so renaming a circle silently changes its face.
+// Keyed to the circle *id*, never the name. The rail this replaced derived
+// its hue from the name, so renaming a circle silently changed its face.
 
 function fnv1a(str) {
   let h = 0x811c9dc5;

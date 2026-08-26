@@ -1,7 +1,7 @@
 import { useDialog } from '../lib/useDialog.js';
 import React, { useEffect, useState } from 'react';
 import Seal from './Seal.jsx';
-import { X, Bell, Sun, Moon, Key, ShieldCheck, Wave, Check } from './icons.jsx';
+import { X, Bell, Sun, Moon, Key, ShieldCheck, Wave, Check, LogOut } from './icons.jsx';
 
 // User settings: profile, notifications, appearance, audio devices, and
 // account/identity actions — the scattered chrome (theme toggle, bell,
@@ -22,6 +22,7 @@ export default function Settings({
   turnAvailable = false,
   onRelayOnly,
   secured,
+  onLogout,
   onShowIdentity,
   onSecure,
   onClose,
@@ -355,6 +356,17 @@ export default function Settings({
             Your identity lives only on your devices. Export the key or add a passkey/password
             so you can sign in elsewhere — the relay can never recover it for you.
           </p>
+        </section>
+
+        {/* Signing out. Its own section, at the end, with nothing beside it:
+            §7.3 — reversible and irreversible actions never share a row, a
+            size or a weight. It used to sit 8px from the settings gear in
+            the sidebar, both icon-only, both 14px. */}
+        <section className="settings-section">
+          <h2 className="settings-label">this device</h2>
+          <button className="button danger" data-testid="logout" onClick={onLogout}>
+            <LogOut size={14} /> log out of this device
+          </button>
         </section>
       </div>
     </div>

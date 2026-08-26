@@ -8,7 +8,7 @@ import Modal from './components/Modal.jsx';
 import Onboarding from './components/Onboarding.jsx';
 import Masthead from './components/Masthead.jsx';
 import CommandPalette from './components/CommandPalette.jsx';
-import Rail from './components/Rail.jsx';
+import CirclesHome from './components/CirclesHome.jsx';
 import RoomStrip from './components/RoomStrip.jsx';
 import Messages from './components/Messages.jsx';
 import Overview from './components/Overview.jsx';
@@ -217,7 +217,7 @@ export default function App() {
   );
   const [paletteOpen, setPaletteOpen] = useState(false);
   // Narrow-screen drawers: the sidebar and roster slide over the messages
-  // pane instead of flanking it. null | 'nav' | 'roster'; CSS ignores this
+  // pane instead of flanking it. null | 'roster'; CSS ignores this
   // entirely on wide screens, where both panels are static.
   const [drawer, setDrawer] = useState(null);
   // The call stage takes over the main pane while set: bubbles for everyone
@@ -697,7 +697,8 @@ export default function App() {
         onPalette={() => setPaletteOpen(true)}
         onTheme={toggleTheme}
         drawer={drawer}
-        onMenu={() => setDrawer((d) => (d === 'nav' ? null : 'nav'))}
+        me={state.me}
+        onSettings={openSettings}
         onRoster={() => setDrawer((d) => (d === 'roster' ? null : 'roster'))}
       />
       {unsecured && (
@@ -777,54 +778,13 @@ export default function App() {
         />
       )}
       <div className="app">
-        {drawer && (
+        {drawer === 'roster' && (
           <div
             className="drawer-backdrop"
             data-testid="drawer-backdrop"
             onClick={() => setDrawer(null)}
           />
         )}
-        <nav className="sidebar" id="nav-drawer" aria-label="circles and rooms">
-          <Rail
-            servers={state.servers}
-            loading={state.circlesLoading}
-            active={server}
-            unreads={circleUnreads}
-            onSelect={(id) =>
-              withViewTransition(() => {
-                // Picking a circle lands on its game hub, not a room.
-                dispatch({ type: 'select', server: id, channel: null });
-                setStage(false); // navigating away swaps the stage for the rooms
-                setGame(null);
-                setDrawer(null);
-              })
-            }
-            onCreate={async (name) => {
-              const id = await controllerRef.current.createServer(name);
-              dispatch({ type: 'select', server: id, channel: null });
-              setDrawer(null);
-            }}
-          />
-          <div className="nav-col">
-          <div className="self-card">
-            <div className="self-id">
-              <Seal name={state.me} size={32} title={state.me} />
-              <span className="who">
-                <span className="handle" data-testid="self-name">{state.me}</span>
-                <span className={`status ${state.connection}`}>{state.connection}</span>
-              </span>
-            </div>
-            <div className="self-actions">
-              <button className="icon-btn" title="settings" data-testid="open-settings" onClick={openSettings}>
-                <Gear size={14} />
-              </button>
-              <button className="icon-btn danger" title="log out" data-testid="logout" onClick={openLogout}>
-                <LogOut size={14} />
-              </button>
-            </div>
-          </div>
-          </div>
-        </nav>
         {activeServer && liveGame && channel ? (
           <GameStage
             game={liveGame}
@@ -1027,40 +987,32 @@ export default function App() {
             />
           </>
         ) : (
-          <div className="empty-state">
-            <div>
-              <div className="glyph-lg">
-                <QuorumGlyph size={44} />
-              </div>
-              {/* "No circles yet" is a claim, and while the circles are still
-                  being fetched from the relay it is one we cannot make. The
-                  handle stays on screen either way — it is what someone needs
-                  in order to add you, and it is also the proof that the
-                  identity survived whatever brought you here. */}
-              <h2>{state.circlesLoading ? 'Loading your circles…' : 'No circles yet'}</h2>
-              {state.circlesLoading ? (
-                <p className="muted">
-                  They live on the relay, encrypted — fetching them now. Signed in as{' '}
-                  <strong>{state.me}</strong>
-                </p>
-              ) : (
-                <p className="muted">
-                  Start one from the sidebar, follow an invite link, or ask someone to add you —
-                  they need your handle: <strong>{state.me}</strong>
-                </p>
-              )}
-              <div className="row">
-                <button className="button" data-testid="identity-open-empty" onClick={openIdentity}>
-                  <Key size={14} />
-                  identity key
-                </button>
-                <button className="button" data-testid="secure-open-empty" onClick={openSecure}>
-                  <ShieldCheck size={14} />
-                  secure account
-                </button>
-              </div>
-            </div>
-          </div>
+          // No circle open — the screen that replaced the rail. Same surface
+          // whether you are in none or in six; "no circles yet" is a state of
+          // this page, not a different page.
+          <CirclesHome
+            servers={state.servers}
+            loading={state.circlesLoading}
+            me={state.me}
+            voice={state.voice}
+            unreads={circleUnreads}
+            now={now}
+            onOpen={(id) =>
+              withViewTransition(() => {
+                dispatch({ type: 'select', server: id, channel: null });
+                setStage(false);
+                setGame(null);
+                setDrawer(null);
+              })
+            }
+            onCreate={async (name) => {
+              const id = await controllerRef.current.createServer(name);
+              dispatch({ type: 'select', server: id, channel: null });
+              setDrawer(null);
+            }}
+            onIdentity={openIdentity}
+            onSecure={openSecure}
+          />
         )}
         <CallPanel
           voice={state.voice}
@@ -1109,6 +1061,7 @@ export default function App() {
               if (controllerRef.current?.voice) controllerRef.current.voice.relayOnly = on;
             }}
             secured={!unsecured}
+            onLogout={openLogout}
             onShowIdentity={openIdentity}
             onSecure={openSecure}
             onClose={() => dispatch({ type: 'modal', modal: null })}

@@ -20,13 +20,13 @@ await mkdir(out, { recursive: true });
 // Every view preview.jsx knows how to render, minus `boot`, which is a
 // spinner and screenshots as noise.
 const VIEWS = [
-  'app', 'overview', 'overview-idle', 'emptychat', 'empty', 'banner',
+  'app', 'overview', 'overview-idle', 'emptychat', 'circles', 'empty', 'banner',
   'onboarding', 'invited', 'call', 'call-share', 'game', 'palette',
   'modal-safety', 'modal-invite', 'modal-secure', 'modal-identity',
 ];
 
 // On a phone the interesting question is the floor plan, not the modals.
-const MOBILE_VIEWS = ['app', 'overview', 'onboarding', 'call', 'emptychat'];
+const MOBILE_VIEWS = ['app', 'overview', 'circles', 'onboarding', 'call', 'emptychat'];
 
 // `touch` is load-bearing, not a detail: without it Playwright reports a
 // hover-capable device, `@media (hover: none)` never matches, and every

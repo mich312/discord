@@ -16,8 +16,8 @@ import { Hash, Wave, Plus, Gear, Clock } from './icons.jsx';
 // furthest down the page.
 
 /** The rooms strip, in the order it reads: board, then rooms, then a way to
-    add one. `null` is the board — the same convention App and Channels use
-    for "not in a room". */
+    add one. `null` is the board — the same convention App uses for "not in
+    a room". */
 export default function RoomStrip({
   server,
   activeChannel,

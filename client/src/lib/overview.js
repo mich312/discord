@@ -95,6 +95,28 @@ export function normalizeEvents(list) {
   return out.sort((a, b) => a.at - b.at);
 }
 
+/** The schedule as a reader should see it: the events array, or a lone
+    legacy event from an older client's payload, soonest first, with
+    just-passed events still counted as upcoming for the grace window.
+
+    Lives here rather than in the component that first needed it because
+    circles home asks the same question — and a card saying "Sunday 08:40"
+    while the board it opens says the event has passed is two components
+    holding two copies of one grace constant. */
+export function upcomingEvents(overview, now = Date.now()) {
+  const events = overview?.events?.length
+    ? overview.events
+    : overview?.event
+      ? [{ id: 'legacy', ...overview.event }]
+      : [];
+  return events.filter((e) => e.at >= now - EVENT_GRACE).sort((a, b) => a.at - b.at);
+}
+
+/** The next thing happening, or null. */
+export function soonestEvent(overview, now = Date.now()) {
+  return upcomingEvents(overview, now)[0] ?? null;
+}
+
 /** The single event an old client should see: the soonest still-upcoming
     one (with grace), else the most recent past one. Stripped to the legacy
     shape — title/at/note only. */

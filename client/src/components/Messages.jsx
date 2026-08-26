@@ -4,7 +4,7 @@ import { describeRetention, freshTyping } from '../lib/controller.js';
 import { meshFull, meshFullMessage } from '../lib/voice.js';
 import { nameHue } from '../lib/avatar.js';
 import { fold, dayLabel } from '../lib/fold.js';
-import { AlertTriangle, Lock, Paperclip, Clock, Archive, Wave, Gamepad, Check, Plus, Reply, Pencil, Trash, X } from './icons.jsx';
+import { AlertTriangle, Lock, Hash, Paperclip, Clock, Archive, Wave, Gamepad, Check, Plus, Reply, Pencil, Trash, X } from './icons.jsx';
 
 // The reaction palette: small on purpose. Reactions ride MLS like any
 // message and live on the folded message; each is its own log entry.
@@ -482,12 +482,17 @@ export default function Messages({
         {announce}
       </span>
       <header className="pane-head">
-        <span className="room-name">
+        {/* A hash, not a padlock. The padlock here was the third encryption
+            signal on one surface — the kept-history note is beside it and the
+            composer footer states the claim in words — and §10.11 asks for
+            one per surface. The glyph's job is "this is a text room", which
+            is what the marker and the strip use it for too. */}
+        <h2 className="room-name">
           <span className="glyph">
-            <Lock size={13} />
+            <Hash size={13} />
           </span>
           {channel}
-        </span>
+        </h2>
         {meta.topic && (
           <span className="room-topic" data-testid="channel-topic-display" title={meta.topic}>
             {meta.topic}

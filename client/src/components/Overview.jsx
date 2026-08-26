@@ -1,6 +1,11 @@
 import React, { useEffect, useState } from 'react';
 import Seal from './Seal.jsx';
-import { describeAgo, describeUntil, canRemoveNotice } from '../lib/overview.js';
+import {
+  describeAgo,
+  describeUntil,
+  canRemoveNotice,
+  upcomingEvents,
+} from '../lib/overview.js';
 import {
   freshPresence,
   freshWant,
@@ -586,13 +591,7 @@ export default function Overview({
   // The schedule: the events array, or a lone legacy event from an older
   // client's payload. A just-passed event lingers as "up next" for a grace
   // window, then drops out of the upcoming list.
-  const events = overview?.events?.length
-    ? overview.events
-    : overview?.event
-      ? [{ id: 'legacy', ...overview.event }]
-      : [];
-  const EVENT_GRACE = 6 * 3600e3;
-  const upcoming = events.filter((e) => e.at >= now - EVENT_GRACE).sort((a, b) => a.at - b.at);
+  const upcoming = upcomingEvents(overview, now);
   const soonest = upcoming[0] ?? null;
   // Game nights: upcoming events tied to a game still on the shelf — these
   // also surface on the Play tab, next to the shelf they belong with.

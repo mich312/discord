@@ -1,12 +1,17 @@
 import React from 'react';
-import { QuorumGlyph, LinkGlyph, CommandGlyph, Sun, Moon, Menu, Users } from './icons.jsx';
+import { QuorumGlyph, LinkGlyph, CommandGlyph, Sun, Moon, Users } from './icons.jsx';
+import Seal from './Seal.jsx';
 import CircleMarker from './CircleMarker.jsx';
 
-// Full-width top bar: brand at the left edge, the current circle as a
-// title (not a sidebar header), and the session chrome (palette, theme,
-// relay state) at the right. Nothing here scrolls; this is the fascia.
-// On narrow screens the sidebar and roster become drawers; the menu and
-// roster toggles below only render (via CSS) when that layout is active.
+// Full-width top bar: the brand at the left edge, the marker saying which
+// circle and which room, and the session chrome — palette, theme, relay
+// state, who you are signed in as — at the right. Nothing here scrolls;
+// this is the fascia.
+//
+// There is no "circles & rooms" toggle any more. It opened a drawer holding
+// the rail and the channel column, and both are gone: rooms are the strip
+// under this bar at every width, and circles are a screen. The roster
+// toggle stays, and only renders (via CSS) at phone widths.
 export default function Masthead({
   server,
   channel,
@@ -21,8 +26,9 @@ export default function Masthead({
   onInvite,
   onPalette,
   onTheme,
-  onMenu,
   onRoster,
+  me,
+  onSettings,
   // Which drawer is open, so the toggles can announce their own state.
   // Without it a screen-reader user pressed "circles & rooms" and got no
   // indication that anything had happened.
@@ -30,16 +36,6 @@ export default function Masthead({
 }) {
   return (
     <header className="masthead">
-      <button
-        className="icon-btn menu-btn"
-        title="circles & rooms"
-        data-testid="menu-toggle"
-        aria-expanded={drawer === 'nav'}
-        aria-controls="nav-drawer"
-        onClick={onMenu}
-      >
-        <Menu />
-      </button>
       {/* The brand mark never leaves the fascia (§9.5) — but inside a circle
           the wordmark yields its width to the answer people actually need
           from this bar, which is which circle and which room. */}
@@ -94,6 +90,24 @@ export default function Masthead({
           <span className="conn-label">relay·{connection}</span>
           <span className="sr-only">relay {connection}</span>
         </span>
+        {/* Signed in as. The sidebar's self-card carried this, and it is the
+            one thing on screen that says which account these keys belong to
+            — so it moves to the fascia rather than to a screen you have to
+            navigate to. It opens settings, where logging out now lives with
+            room around it (§7.3). */}
+        {me && (
+          <button
+            className="self-chip"
+            data-testid="open-settings"
+            title={`${me} — settings`}
+            onClick={onSettings}
+          >
+            <Seal name={me} size={22} />
+            <span className="self-chip-name" data-testid="self-name">
+              {me}
+            </span>
+          </button>
+        )}
         {server && (
           <button
             className="icon-btn roster-btn"

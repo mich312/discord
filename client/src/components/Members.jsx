@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import Seal from './Seal.jsx';
-import { freshPresence } from '../lib/games.js';
+import { circlePresence } from '../lib/presence.js';
 import { describeAgo } from '../lib/overview.js';
 import { memberVtName } from '../lib/viewTransition.js';
 import { Check, Phone, X } from './icons.jsx';
@@ -19,19 +19,10 @@ export default function Members({ server, me, canManage, voice, onAdd, onMember,
   const adminCount = Object.values(roles).filter((r) => r === 'admin').length;
   const now = Date.now();
 
-  // Who is in which of this circle's voice rooms right now.
-  const inRoom = {};
-  for (const room of server.voiceChannels ?? ['lounge']) {
-    for (const p of voice?.presence?.[`${server.id}/${room}`] ?? []) {
-      if (!(p in inRoom)) inRoom[p] = room;
-    }
-  }
-  // Who claims to be in a game right now (fresh claims only).
-  const playing = {};
-  for (const [handle, entry] of Object.entries(server.presence ?? {})) {
-    const game = freshPresence(entry, now);
-    if (game) playing[handle] = { game, ts: entry.ts };
-  }
+  // Who is in a call, and who claims to be in a game. Shared with circles
+  // home so a card saying "3 here now" and this list naming them cannot
+  // disagree.
+  const { inRoom, playing } = circlePresence(server, voice, now);
 
   const occupiedRooms = [...new Set(Object.values(inRoom))];
   const inCallSet = new Set(Object.keys(inRoom).filter((m) => server.members.includes(m)));
