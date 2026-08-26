@@ -102,6 +102,15 @@ import {
 import { keyDirectory, mergeKeyDirectory } from './keys.js';
 import { deviceHalf, hydrate, mergeBackups, sharedHalf } from './circles.js';
 import { applyTake, normalizeOffer, upsertOffer } from './offers.js';
+import {
+  admitter,
+  applyObjection,
+  applySignature,
+  isCarried,
+  normalizeProposal,
+  normalizeThreshold,
+  upsertProposal,
+} from './quorum.js';
 import { VoiceManager } from './voice.js';
 import {
   b64url,
@@ -795,7 +804,7 @@ export class Controller {
           record.linkJoined = [...new Set([...(record.linkJoined ?? []), event.sender])];
           await this.addSystemMessage(
             record.id,
-            `${event.sender} joined via invite link — unverified (epoch ${event.epoch})`
+            `${event.sender} joined via invite link — unverified until someone checks their safety number`
           );
           // Link joiners have no scrollback; whoever owns invites for this
           // group rebroadcasts the metadata they missed (including channel
@@ -955,6 +964,13 @@ export class Controller {
         case 'backup':
           this.scheduleBackup();
           break;
+        case 'quorumCheck':
+          // Fire-and-forget: a re-key must never hold up applying the rest
+          // of the MLS stream.
+          this.admitIfCarried(record.id, e.id).catch((err) =>
+            console.warn(`admit: ${err.message}`)
+          );
+          break;
         default:
           // A descriptor with no interpreter is a bug in this file, not bad
           // input — the reducer is the only thing that produces them.
@@ -1047,6 +1063,8 @@ export class Controller {
       overview: record.overview ?? null,
       notices: record.notices ?? [],
       offers: record.offers ?? [],
+      proposals: record.proposals ?? [],
+      threshold: record.threshold,
       rsvps: record.rsvps ?? {},
     };
   }
@@ -1160,6 +1178,106 @@ export class Controller {
     await this.sendContent(serverId, { k: 'notice', op: 'del', id });
     await this.persistCircle(record);
     this.dispatch({ type: 'servers', servers: this.snapshotServers() });
+  }
+
+  // === who gets in ========================================================
+
+  /** How many signatures this circle asks for. Unset means it has never
+      chosen, and a majority is what it would have chosen. */
+  thresholdFor(record) {
+    return normalizeThreshold(record?.threshold, (record?.members ?? []).length);
+  }
+
+  /** Put someone forward. Any member may, and proposing counts as signing. */
+  async proposeMember(serverId, handle, why = '') {
+    const record = this.servers.get(serverId);
+    if (!record) return;
+    const who = String(handle ?? '').trim().toLowerCase();
+    if (!who || record.members.includes(who)) return;
+    const id = b64url.enc(crypto.getRandomValues(new Uint8Array(9)));
+    const proposal = normalizeProposal({ id, handle: who, why, at: Date.now() }, this.me);
+    if (!proposal) return;
+    record.proposals = upsertProposal(record.proposals, proposal);
+    await this.sendContent(serverId, {
+      k: 'quorum',
+      op: 'propose',
+      p: { id, handle: who, why: proposal.why ?? '', at: proposal.at },
+    });
+    await this.persistCircle(record);
+    this.dispatch({ type: 'servers', servers: this.snapshotServers() });
+    await this.admitIfCarried(serverId, id);
+  }
+
+  /** Sign for someone. */
+  async signProposal(serverId, id) {
+    const record = this.servers.get(serverId);
+    if (!record) return;
+    record.proposals = applySignature(record.proposals, id, this.me);
+    await this.sendContent(serverId, { k: 'quorum', op: 'sign', id });
+    await this.persistCircle(record);
+    this.dispatch({ type: 'servers', servers: this.snapshotServers() });
+    await this.admitIfCarried(serverId, id);
+  }
+
+  /** Object, with a reason. Does not touch the count — see quorum.js. */
+  async objectToProposal(serverId, id, why) {
+    const record = this.servers.get(serverId);
+    if (!record) return;
+    record.proposals = applyObjection(record.proposals, id, this.me, why);
+    await this.sendContent(serverId, { k: 'quorum', op: 'object', id, why: String(why ?? '') });
+    await this.persistCircle(record);
+    this.dispatch({ type: 'servers', servers: this.snapshotServers() });
+  }
+
+  /** Withdraw a proposal (its author, or an admin). */
+  async withdrawProposal(serverId, id) {
+    const record = this.servers.get(serverId);
+    if (!record) return;
+    record.proposals = (record.proposals ?? []).filter((p) => p.id !== id);
+    await this.sendContent(serverId, { k: 'quorum', op: 'withdraw', id });
+    await this.persistCircle(record);
+    this.dispatch({ type: 'servers', servers: this.snapshotServers() });
+  }
+
+  /** Change what the circle asks of itself. Admin-gated on the relay. */
+  async setThreshold(serverId, n) {
+    const record = this.servers.get(serverId);
+    if (!record) return;
+    record.threshold = normalizeThreshold(n, (record.members ?? []).length);
+    await this.sendContent(serverId, { k: 'threshold', n: record.threshold });
+    await this.persistCircle(record);
+    this.dispatch({ type: 'servers', servers: this.snapshotServers() });
+  }
+
+  /**
+   * A proposal reached the threshold: add them.
+   *
+   * Every member's client is watching the same ledger, so without a rule
+   * every admin online would call `addMember` at once and the circle would
+   * re-key itself several times over one decision. `admitter` picks the same
+   * one on every device — first admin in roster order — and only that device
+   * acts.
+   *
+   * This is also the honest seam in the whole feature: the relay's ACL still
+   * wants an admin. The signatures are what the circle sees and what every
+   * client enforces; they are not yet what the relay checks. The UI says so
+   * rather than implying the mathematics is doing more than it is.
+   */
+  async admitIfCarried(serverId, id) {
+    const record = this.servers.get(serverId);
+    const proposal = (record?.proposals ?? []).find((p) => p.id === id);
+    if (!proposal) return;
+    if (!isCarried(proposal, this.thresholdFor(record), record.members)) return;
+    if (admitter(record.roles, record.members) !== this.me) return;
+    if (record.members.includes(proposal.handle)) return;
+    try {
+      await this.addMember(serverId, proposal.handle);
+      await this.withdrawProposal(serverId, id);
+    } catch (e) {
+      // Leave the proposal standing: it carried, and the circle should see
+      // that it did even when the add itself could not go through.
+      this.dispatch({ type: 'toast', text: `could not add ${proposal.handle}: ${e.message}` });
+    }
   }
 
   /** Post a lift, a spare, a where-to-meet. Any member may; the author is
@@ -1961,7 +2079,10 @@ export class Controller {
     const record = this.servers.get(serverId);
     const reply = await this.relay.request({ t: 'fetch_kp', user });
     if (!reply.payload) {
-      throw new Error(`${user} has no published key packages (have they signed up?)`);
+      // §11.5 names this exact string as the reason the rule exists. What
+      // the organiser needs is the handle they typed and the one thing that
+      // would fix it, not the name of the artefact that was missing.
+      throw new Error(`no account called ${user} on this relay — check the spelling, or ask them to sign up`);
     }
     // The relay serves both halves, so make it commit to a consistent story:
     // the KeyPackage's credential must name `user` and carry the signature
@@ -1971,7 +2092,7 @@ export class Controller {
     // enough to do blind.
     if (!reply.pubkey) {
       throw new Error(
-        `the relay did not provide an identity key for ${user}; refusing to add them unverified`
+        `the relay didn't give an identity key for ${user}, so they can't be added yet — try again in a moment`
       );
     }
     const { commit, welcome, epoch, state } = await this.crypto('addMember', {
@@ -1994,7 +2115,7 @@ export class Controller {
     });
     record.members = members;
     record.epoch = epoch;
-    await this.addSystemMessage(serverId, `${user} added (epoch ${epoch}) — unverified until you check their safety number`);
+    await this.addSystemMessage(serverId, `${user} added — unverified until you check their safety number`);
     // Joiners have no scrollback: rebroadcast name + channels (and channel
     // settings, incl. history keys) so their placeholder record fills in.
     await this.sendContent(serverId, this.metaContent(record));
@@ -2148,7 +2269,7 @@ export class Controller {
     await this.relay
       .request({ t: 'disallow', group: serverId, user })
       .catch((e) => console.warn(`disallow ${user}: ${e.message}`));
-    await this.addSystemMessage(serverId, `${user} was removed from the circle by you (epoch ${epoch})`);
+    await this.addSystemMessage(serverId, `${user} was removed from the circle by you`);
 
     // Removal has to close every door, not just the MLS one.
     const rotated = this.rotateHistoryKeys(record);

@@ -285,6 +285,68 @@ try {
   await alice.waitForSelector('text=brakes bedded in', { timeout: 10000 });
   await alice.click('[data-testid=channel-general]');
 
+  console.log('4c. membership is the circle\'s decision: propose, ledger, object, withdraw');
+  // Two members now, so a third needs two signatures and alice cannot do it
+  // alone. The whole point of the mechanism is that this step CANNOT end
+  // with dave in the circle, so it asserts that as hard as it asserts the
+  // screen: 1 of 2, and nobody added.
+  await openBoard(alice);
+  await alice.fill('[data-testid=add-member-input]', 'dave');
+  await alice.click('[data-testid=propose-member]');
+  await alice.waitForSelector('[data-testid=overview-proposals]', { timeout: 10000 });
+  const aliceLedger = await alice.textContent('[data-testid=overview-proposals]');
+  if (!aliceLedger.includes('1 of 2 signed')) {
+    throw new Error(`alice's own proposal should stand at 1 of 2: ${aliceLedger}`);
+  }
+  if ((await alice.textContent('[data-testid=member-list]')).includes('dave')) {
+    throw new Error('dave was added by one person — the threshold did nothing');
+  }
+
+  // It reaches bob over MLS, and it reaches him as *his* decision.
+  await bob.waitForSelector('[data-testid^=overview-proposal-open-]', { timeout: 15000 });
+  const bobCall = await bob.textContent('[data-testid^=overview-proposal-open-]');
+  if (bobCall.trim() !== 'your call') {
+    throw new Error(`bob has not answered, so the button should say so: ${bobCall}`);
+  }
+  await bob.click('[data-testid^=overview-proposal-open-]');
+  await bob.waitForSelector('[data-testid=signing]', { timeout: 10000 });
+  const count = await bob.textContent('[data-testid=signing-count]');
+  if (!count.includes('1 of 2')) throw new Error(`ledger count wrong: ${count}`);
+  // Objecting takes a reason, and the post button stays disabled without one.
+  await bob.click('[data-testid=signing-object]');
+  if (await bob.isEnabled('[data-testid=signing-object-post]')) {
+    throw new Error('an objection with no reason is not an objection');
+  }
+  await bob.fill('[data-testid=signing-object-why]', 'nobody here has met dave');
+  await bob.click('[data-testid=signing-object-post]');
+  await bob.click('[data-testid=signing-close]');
+
+  // alice reads the objection, and the count has NOT moved: an objection is
+  // a member's opinion recorded beside the tally, not a veto over it.
+  await alice.waitForFunction(
+    () =>
+      document
+        .querySelector('[data-testid=overview-proposals]')
+        ?.textContent?.includes('1 objection'),
+    { timeout: 15000 }
+  );
+  const afterObject = await alice.textContent('[data-testid=overview-proposals]');
+  if (!afterObject.includes('1 of 2 signed')) {
+    throw new Error(`objection should sit beside the count, not cancel it: ${afterObject}`);
+  }
+
+  // The reason travels with it — an objection nobody can read is a veto with
+  // extra steps. Whoever put it forward then takes it down, for everyone.
+  await alice.click('[data-testid^=overview-proposal-open-]');
+  await alice.waitForSelector('[data-testid=signing-withdraw]', { timeout: 10000 });
+  await alice.waitForSelector('text=nobody here has met dave', { timeout: 10000 });
+  await alice.click('[data-testid=signing-withdraw]');
+  await bob.waitForFunction(
+    () => !document.querySelector('[data-testid=overview-proposals]'),
+    { timeout: 15000 }
+  );
+  await alice.click('[data-testid=channel-general]');
+
   console.log('5. encrypted chat, both directions');
   await bob.click('[data-testid=channel-general]'); // off the home base, into the room
   await alice.fill('[data-testid=composer]', 'welcome to the team, bob');
@@ -1045,8 +1107,9 @@ try {
   console.log('      voice, multi-room voice + active-speaker meter, direct 1:1');
   console.log('      calls, the call stage (bubbles, in-call chat, renegotiated');
   console.log('      screen share), deferred invite onboarding, password vault');
-  console.log('      sign-in, passkey (WebAuthn PRF) vault sign-in, and the');
-  console.log('      mobile drawer layout');
+  console.log('      sign-in, passkey (WebAuthn PRF) vault sign-in, the');
+  console.log('      membership ledger (propose, object, withdraw), and the');
+  console.log('      phone floor plan');
   await browser.close();
 } catch (e) {
   failed = true;

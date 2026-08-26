@@ -209,6 +209,27 @@ export function normalizeProposals(list, now = Date.now()) {
     .slice(0, PROPOSALS_MAX);
 }
 
+/**
+ * Every proposal, across every circle, still waiting on this member.
+ *
+ * Lives here rather than in the screen that draws it because it is the same
+ * question the board's membership block asks, one circle at a time — and a
+ * strip that says "one signature short" while the board it opens says two
+ * would be two components holding two copies of one rule.
+ */
+export function decisionsFor(servers, me) {
+  return (servers ?? []).flatMap((s) =>
+    (s.proposals ?? [])
+      .filter((p) => awaitingFrom(p, me))
+      .map((p) => ({
+        server: s,
+        proposal: p,
+        signed: standingSignatures(p, s.members).length,
+        threshold: normalizeThreshold(s.threshold, (s.members ?? []).length),
+      }))
+  );
+}
+
 /** Union for the joiner gap-fill: ids this device already has win. */
 export function mergeProposals(mine, incoming) {
   const have = new Set((mine ?? []).map((p) => p.id));

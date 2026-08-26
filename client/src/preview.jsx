@@ -5,6 +5,7 @@
 //   /preview.html?view=app&theme=paper
 //   /preview.html?view=onboarding | invited | empty | circles | banner | overview
 //   /preview.html?view=modal-safety | modal-invite | modal-secure | modal-identity
+//   /preview.html?view=signing        the membership ledger, over the board
 //   /preview.html?view=palette | call | call-share | game
 import React, { useState } from 'react';
 import { createRoot } from 'react-dom/client';
@@ -17,6 +18,7 @@ import Messages from './components/Messages.jsx';
 import Overview from './components/Overview.jsx';
 import Members from './components/Members.jsx';
 import Modal from './components/Modal.jsx';
+import { SigningDialog } from './components/Signing.jsx';
 import Onboarding from './components/Onboarding.jsx';
 import CallStage from './components/CallStage.jsx';
 import CallBar from './components/CallBar.jsx';
@@ -44,6 +46,21 @@ const servers = [
     verified: ['bob'],
     linkJoined: ['charlie'],
     chanMeta: { 'pit-wall': { topic: 'live timing chatter during sessions' } },
+    threshold: 3,
+    proposals: [
+      {
+        id: 'prop-edda',
+        handle: 'edda',
+        why: 'she runs the Otley lot and has a van',
+        by: 'dana',
+        at: now - 3 * H,
+        signatures: [
+          { who: 'dana', at: now - 3 * H },
+          { who: 'bob', at: now - 2 * H },
+        ],
+        objections: [{ who: 'charlie', why: 'she still has our spare wheel', at: now - 90 * 60e3 }],
+      },
+    ],
     offers: [
       {
         id: 'lift1',
@@ -272,7 +289,7 @@ const modals = {
   },
 };
 
-function PreviewShell({ empty = false, circles = false, banner = false, modal = null, palette = false, stage = null, landing = false, game = null, idle = false, emptyChat = false }) {
+function PreviewShell({ empty = false, circles = false, banner = false, modal = null, palette = false, stage = null, landing = false, game = null, idle = false, emptyChat = false, signing = false }) {
   const vc = idle ? voiceIdle : voice;
   const me = 'alice';
   // channel: null means the circle's hub page, same as App.jsx.
@@ -285,12 +302,12 @@ function PreviewShell({ empty = false, circles = false, banner = false, modal = 
   const [noticesBy, setNoticesBy] = useState({});
   const [openModal, setOpenModal] = useState(modal);
   const [paletteOpen, setPaletteOpen] = useState(palette);
-  const [drawer, setDrawer] = useState(null); // narrow screens: null | 'nav' | 'roster'
+  const [ledger, setLedger] = useState(signing ? 'prop-edda' : null);
   const list = empty ? [] : servers;
   const activeServer = list.find((s) => s.id === active.server) ?? null;
 
   return (
-    <div className="app-shell" data-drawer={drawer ?? undefined}>
+    <div className="app-shell">
       <a className="skip-link" href="#messages-pane">
         skip to conversation
       </a>
@@ -435,12 +452,24 @@ function PreviewShell({ empty = false, circles = false, banner = false, modal = 
                 onAddOffer={noop}
               onTakeOffer={noop}
               onRemoveOffer={noop}
+              onOpenProposal={(id) => setLedger(id)}
+              onCircleSettings={() =>
+                setOpenModal({
+                  type: 'circle',
+                  server: activeServer.id,
+                  name: activeServer.name,
+                  glyph: activeServer.overview?.glyph,
+                  threshold: activeServer.threshold,
+                  members: activeServer.members.length,
+                  canManage: true,
+                })
+              }
               people={
                 <Members
                   server={activeServer}
                   me={me}
                   voice={vc}
-                  onAdd={noop}
+                  onPropose={noop}
                   onMember={() => setOpenModal(modals['modal-safety'])}
                 />
               }
@@ -478,6 +507,10 @@ function PreviewShell({ empty = false, circles = false, banner = false, modal = 
             now={now}
             onOpen={(id) => setActive({ server: id, channel: null })}
             onCreate={noop}
+            onOpenProposal={(srv, id) => {
+              setActive({ server: srv, channel: null });
+              setLedger(id);
+            }}
             onIdentity={() => setOpenModal(modals['modal-identity'])}
             onSecure={() => setOpenModal(modals['modal-secure'])}
           />
@@ -503,6 +536,24 @@ function PreviewShell({ empty = false, circles = false, banner = false, modal = 
           />
         )}
       </div>
+      {ledger &&
+        (() => {
+          const proposal = (activeServer?.proposals ?? []).find((p) => p.id === ledger);
+          return proposal ? (
+            <SigningDialog
+              proposal={proposal}
+              server={activeServer}
+              me={me}
+              threshold={activeServer.threshold}
+              verified={(activeServer.verified ?? []).includes(proposal.by)}
+              onSign={noop}
+              onObject={noop}
+              onWithdraw={noop}
+              onCompare={() => setOpenModal(modals['modal-safety'])}
+              onClose={() => setLedger(null)}
+            />
+          ) : null;
+        })()}
       <PhoneTabs
         server={activeServer}
         channel={active.channel}
@@ -535,6 +586,7 @@ function pick() {
       />
     );
   if (view === 'call-share') return <PreviewShell stage={stageVoice(['bob'])} />;
+  if (view === 'signing') return <PreviewShell landing signing />;
   if (modals[view]) return <PreviewShell modal={modals[view]} />;
   return <PreviewShell />;
 }

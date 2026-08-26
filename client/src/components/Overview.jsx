@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import Seal from './Seal.jsx';
 import { canRemoveOffer, seatsLeft } from '../lib/offers.js';
+import { awaitingFrom, normalizeThreshold, standingSignatures } from '../lib/quorum.js';
 import {
   describeAgo,
   describeUntil,
@@ -538,6 +539,8 @@ export default function Overview({
   onAddOffer,
   onTakeOffer,
   onRemoveOffer,
+  onOpenProposal,
+  onCircleSettings,
   // The roster, rendered by the parent so the trust actions it carries
   // (verify, add, remove, call) stay wired in one place.
   people,
@@ -639,6 +642,9 @@ export default function Overview({
   const saveGames = (next) => onSave({ ...(overview ?? {}), games: next });
   const notices = server.notices ?? [];
   const offers = server.offers ?? [];
+  // Membership is the circle's decision, so the board carries the ledger.
+  const proposals = server.proposals ?? [];
+  const threshold = normalizeThreshold(server.threshold, (server.members ?? []).length);
   const voiceRooms = server.voiceChannels ?? ['lounge'];
   const byChannel = Object.fromEntries(digest.map((d) => [d.channel, d]));
   const unreadTotal = digest.reduce((n, d) => n + d.unread, 0);
@@ -719,6 +725,53 @@ export default function Overview({
                 conversation, which is where you look last. It is the first
                 thing on the board instead. */}
             {people}
+
+            {/* Who is waiting to get in.
+                Draws only when somebody is — a circle with nobody proposed
+                should not carry an empty governance block, and the roster
+                above already carries the propose form. */}
+            {proposals.length > 0 && (
+              <section className="overview-section" data-testid="overview-proposals">
+                <span className="overline">membership</span>
+                <ul className="overview-proposals">
+                  {proposals.map((p) => {
+                    const signed = standingSignatures(p, server.members).length;
+                    const togo = Math.max(0, threshold - signed);
+                    const mine = awaitingFrom(p, me);
+                    return (
+                      <li
+                        className={cx('proposal-row', mine && 'awaiting')}
+                        key={p.id}
+                        data-testid={`overview-proposal-${p.id}`}
+                      >
+                        <Seal name={p.handle} size={26} title={p.handle} />
+                        <div className="proposal-body">
+                          <span className="proposal-who">
+                            <strong>{p.handle}</strong> wants in
+                          </span>
+                          {/* §1.6 — the count is the state, in words, and it
+                              does not lean on the border colour to say it. */}
+                          <span className="proposal-head mono">
+                            {signed} of {threshold} signed
+                            {togo > 0 ? ` · ${togo} to go` : ' · carried'}
+                            {p.objections.length > 0 &&
+                              ` · ${p.objections.length} objection${p.objections.length === 1 ? '' : 's'}`}
+                            {` · ${p.by === me ? 'you' : p.by} put them forward`}
+                          </span>
+                        </div>
+                        <button
+                          className={cx('button', 'proposal-open', mine && 'primary')}
+                          data-testid={`overview-proposal-open-${p.id}`}
+                          onClick={() => onOpenProposal?.(p.id)}
+                        >
+                          {mine ? 'your call' : 'read it'}
+                        </button>
+                      </li>
+                    );
+                  })}
+                </ul>
+              </section>
+            )}
 
             {soonest &&
               (() => {

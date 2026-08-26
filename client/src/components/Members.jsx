@@ -1,23 +1,41 @@
 import React, { useState } from 'react';
 import Seal from './Seal.jsx';
 import { circlePresence } from '../lib/presence.js';
+import { normalizeThreshold } from '../lib/quorum.js';
 import { describeAgo } from '../lib/overview.js';
 import { memberVtName } from '../lib/viewTransition.js';
 import { Check, Phone, X } from './icons.jsx';
+import { cx } from '../lib/cx.js';
 
 // The roster is the security boundary: it is, exactly, who can read this
 // circle. Adding someone happens here, not in a settings page, because it
 // is a cryptographic act — a new epoch — not an administrative one.
 // Roles are relay-side and weaker: admins manage the ACL (adding members,
 // invites, promotions), but they gain no read access anyone else lacks.
+/** The circle's own answer, or the majority it would have chosen. */
+const thresholdFor = (server) =>
+  normalizeThreshold(server?.threshold, (server?.members ?? []).length);
+
 // Presence shown here is only what this device truly knows: who is in a
 // call (MLS voice signaling) and who says they're in a game (MLS rich
 // presence, expired client-side). No invented "online" dots.
-export default function Members({ server, me, canManage, voice, onAdd, onMember, onSetRole, onCall, onRemoveMember }) {
+export default function Members({
+  server,
+  me,
+  canManage,
+  voice,
+  onPropose,
+  onMember,
+  onSetRole,
+  onCall,
+  onRemoveMember,
+}) {
   const [name, setName] = useState('');
   const roles = server.roles ?? {};
   const adminCount = Object.values(roles).filter((r) => r === 'admin').length;
   const now = Date.now();
+  // What this circle asks of itself before it lets somebody in.
+  const needed = thresholdFor(server);
 
   // Who is in a call, and who claims to be in a game. Shared with circles
   // home so a card saying "3 here now" and this list naming them cannot
@@ -206,26 +224,41 @@ export default function Members({ server, me, canManage, voice, onAdd, onMember,
       <ul className="member-list" data-testid="member-list">
         {rest.map(row)}
       </ul>
-      {canManage ? (
-        <form
-          className="add-member"
-          onSubmit={(e) => {
-            e.preventDefault();
-            const user = name.trim().toLowerCase();
-            if (!user) return;
-            setName('');
-            onAdd(user);
-          }}
-        >
-          <input
-            value={name}
-            onChange={(e) => setName(e.target.value)}
-            placeholder="add by handle…"
-            data-testid="add-member-input"
-          />
-        </form>
-      ) : (
-        <p className="fineprint muted">Only admins of this circle can add members.</p>
+      {/* Anyone may put a name forward — that is the point, and gating it on
+          a role would put membership back in one person's hands. What
+          happens next depends on the circle: in a circle of one there is
+          nobody else to ask and it goes straight through, which is why this
+          reads the same either way. */}
+      <form
+        className="add-member"
+        onSubmit={(e) => {
+          e.preventDefault();
+          const user = name.trim().toLowerCase();
+          if (!user) return;
+          setName('');
+          onPropose(user);
+        }}
+      >
+        {/* §8.7 — a real name, not a placeholder standing in for one. */}
+        <label className="sr-only" htmlFor="propose-handle">
+          propose someone by handle
+        </label>
+        <input
+          id="propose-handle"
+          value={name}
+          onChange={(e) => setName(e.target.value)}
+          placeholder="propose someone by handle…"
+          data-testid="add-member-input"
+        />
+        <button className="button" data-testid="propose-member">
+          {needed > 1 ? `propose · needs ${needed}` : 'add'}
+        </button>
+      </form>
+      {needed > 1 && (
+        <p className="fineprint muted">
+          {needed} of {server.members.length} sign a new member in. Admins run the circle;
+          they don&rsquo;t decide this on their own.
+        </p>
       )}
     </aside>
   );

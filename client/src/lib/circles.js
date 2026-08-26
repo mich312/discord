@@ -42,6 +42,10 @@ export const SHARED_FIELDS = [
   'overview',
   'notices',
   'offers',
+  // Membership is the circle's decision, so the ledger of who has signed
+  // for whom — and the number it takes — travels with the circle.
+  'proposals',
+  'threshold',
   'rsvps',
   // Invite fragment keys. They have to travel with the circle now: the
   // parked GroupInfo blob goes stale every epoch and the creator's client

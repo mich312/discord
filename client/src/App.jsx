@@ -12,6 +12,7 @@ import CirclesHome from './components/CirclesHome.jsx';
 import RoomStrip from './components/RoomStrip.jsx';
 import Messages from './components/Messages.jsx';
 import Overview from './components/Overview.jsx';
+import { SigningDialog } from './components/Signing.jsx';
 import Members from './components/Members.jsx';
 import CallPanel from './components/CallPanel.jsx';
 import CallBar from './components/CallBar.jsx';
@@ -227,6 +228,10 @@ export default function App() {
   // A web game from the shelf, playing in the main pane with the room's
   // chat (and the call, if one is on) docked beside it.
   const [game, setGame] = useState(null);
+  // The membership ledger, open over whatever you were looking at. Held as
+  // {server, id} rather than the proposal itself so the dialog re-reads the
+  // live record and the count moves while you are looking at it.
+  const [signing, setSigning] = useState(null);
   // Where to land when the stage closes — the text channel we came from.
   const stageReturn = useRef(null);
   const controllerRef = useRef(null);
@@ -614,6 +619,30 @@ export default function App() {
   const canManage =
     state.globalAdmin || (activeServer && activeServer.roles?.[state.me] === 'admin');
 
+  // Comparing safety numbers with somebody, from wherever the question came
+  // up: the roster, or the signing ledger asking whether you know the member
+  // vouching for a newcomer. One definition, because the dialog it opens is
+  // the same dialog and its payload has to be built the same way.
+  const openSafety = async (srv, peer) => {
+    try {
+      const record = state.servers.find((x) => x.id === srv);
+      const number = await controllerRef.current.safetyNumber(srv, peer);
+      dispatch({
+        type: 'modal',
+        modal: {
+          type: 'safety',
+          server: srv,
+          peer,
+          number,
+          verified: (record?.verified ?? []).includes(peer),
+          mismatched: !!record?.mismatched?.[peer],
+        },
+      });
+    } catch (e) {
+      dispatch({ type: 'toast', text: e.message });
+    }
+  };
+
   // The roster, built once. It is the security boundary — it is exactly who
   // can read this circle — so it has one definition and one set of actions,
   // whether it is being read on the board or pulled open beside a room.
@@ -673,6 +702,24 @@ export default function App() {
       modal: { type: 'identity', key: controllerRef.current.identityKeyString() },
     });
   const openSecure = () => dispatch({ type: 'modal', modal: { type: 'secure' } });
+  // The circle's own settings. Everything in here used to hang off the
+  // sidebar's circle header; the floor plan removed the sidebar, so it hangs
+  // off the board instead — and off the palette, because leaving a circle
+  // should be reachable without first finding its board.
+  const openCircleSettings = () =>
+    activeServer &&
+    dispatch({
+      type: 'modal',
+      modal: {
+        type: 'circle',
+        server: activeServer.id,
+        name: activeServer.name,
+        glyph: activeServer.overview?.glyph,
+        threshold: activeServer.threshold,
+        members: (activeServer.members ?? []).length,
+        canManage,
+      },
+    });
   const openSettings = () => dispatch({ type: 'modal', modal: { type: 'settings' } });
   const openLogout = () => dispatch({ type: 'modal', modal: { type: 'logout' } });
   const openInvite = async () => {
@@ -1019,6 +1066,8 @@ export default function App() {
                     .removeOffer(server, id)
                     .catch((e) => dispatch({ type: 'toast', text: e.message }))
                 }
+                onOpenProposal={(id) => setSigning({ server, id })}
+                onCircleSettings={openCircleSettings}
                 people={roster}
               />
             )}
@@ -1045,6 +1094,7 @@ export default function App() {
               const id = await controllerRef.current.createServer(name);
               dispatch({ type: 'select', server: id, channel: null });
             }}
+            onOpenProposal={(srv, id) => setSigning({ server: srv, id })}
             onIdentity={openIdentity}
             onSecure={openSecure}
           />
@@ -1111,6 +1161,45 @@ export default function App() {
             onClose={dismissNotifPrompt}
           />
         )}
+        {/* The membership ledger. Reads the live record on every render, so
+            a signature arriving from another member moves the count under
+            the reader rather than waiting for them to close and reopen. */}
+        {signing &&
+          (() => {
+            const record = state.servers.find((x) => x.id === signing.server);
+            const proposal = (record?.proposals ?? []).find((p) => p.id === signing.id);
+            // The proposal can go out from under the dialog — it carried and
+            // was withdrawn, or somebody took it down. Close rather than
+            // render an empty ledger.
+            if (!record || !proposal) return null;
+            return (
+              <SigningDialog
+                proposal={proposal}
+                server={record}
+                me={state.me}
+                threshold={controllerRef.current.thresholdFor(record)}
+                verified={(record.verified ?? []).includes(proposal.by)}
+                onSign={() => {
+                  controllerRef.current
+                    .signProposal(record.id, proposal.id)
+                    .catch((e) => dispatch({ type: 'toast', text: e.message }));
+                }}
+                onObject={(why) => {
+                  controllerRef.current
+                    .objectToProposal(record.id, proposal.id, why)
+                    .catch((e) => dispatch({ type: 'toast', text: e.message }));
+                }}
+                onWithdraw={() => {
+                  setSigning(null);
+                  controllerRef.current
+                    .withdrawProposal(record.id, proposal.id)
+                    .catch((e) => dispatch({ type: 'toast', text: e.message }));
+                }}
+                onCompare={() => openSafety(record.id, proposal.by)}
+                onClose={() => setSigning(null)}
+              />
+            );
+          })()}
         {state.modal && state.modal.type !== 'settings' && (
           <Modal
             modal={state.modal}
@@ -1186,6 +1275,7 @@ export default function App() {
                 glyph,
               });
             }}
+            onSetThreshold={(srv, n) => controllerRef.current.setThreshold(srv, n)}
             onLeaveServer={(srv) => controllerRef.current.leaveServer(srv)}
             onDeleteServer={(srv) => controllerRef.current.deleteServer(srv)}
             identityKey={controllerRef.current?.identityKeyString()}

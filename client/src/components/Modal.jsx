@@ -3,6 +3,8 @@ import React, { useEffect, useState } from 'react';
 import { LinkGlyph, Key, ShieldCheck, Copy, Download, X, Check, AlertTriangle, Gear, LogOut } from './icons.jsx';
 import CircleMark from './CircleMark.jsx';
 import { CIRCLE_GLYPH_KEYS, DEFAULT_GLYPH } from '../lib/crest.js';
+import { normalizeThreshold } from '../lib/quorum.js';
+import { cx } from '../lib/cx.js';
 
 const RETENTION_CHOICES = [
   { value: 0, label: 'keep until deleted by hand' },
@@ -25,6 +27,7 @@ export default function Modal({
   onChannelDelete,
   onRenameServer,
   onSetGlyph,
+  onSetThreshold,
   onLeaveServer,
   onDeleteServer,
   onLogout,
@@ -45,6 +48,11 @@ export default function Modal({
   const [retention, setRetention] = useState(meta.retention ?? 0);
   const [renameTo, setRenameTo] = useState(modal.type === 'channel' ? modal.channel ?? '' : '');
   const [serverName, setServerName] = useState(modal.type === 'circle' ? modal.name ?? '' : '');
+  // How many signatures this circle asks for before it lets somebody in.
+  const memberCount = modal.type === 'circle' ? modal.members ?? 1 : 1;
+  const [threshold, setThreshold] = useState(() =>
+    modal.type === 'circle' ? normalizeThreshold(modal.threshold, memberCount) : 2
+  );
   const [confirmDelete, setConfirmDelete] = useState(false);
   // Enrolled devices. `null` = not loaded yet, so an empty account and a
   // still-loading one do not render the same thing.
@@ -598,6 +606,53 @@ export default function Modal({
                     })}
                   </div>
                 </fieldset>
+
+                {/* Governance, where the rest of the circle's settings are —
+                    not in a separate "advanced" place. This number is the
+                    circle's answer to the one irreversible thing it can do,
+                    and it belongs beside its name and its face. */}
+                <div className="divider">letting people in</div>
+                <p className="fineprint muted">
+                  Anyone here can put a name forward. It takes this many signatures
+                  before they are added — and one is not a choice, it is this switched
+                  off, so the lowest a circle of {memberCount} can set is{' '}
+                  {memberCount === 1 ? 1 : 2}.
+                </p>
+                <div className="threshold-picker">
+                  <label className="field">
+                    <span>signatures needed</span>
+                    <input
+                      type="number"
+                      min={memberCount === 1 ? 1 : 2}
+                      max={memberCount}
+                      value={threshold}
+                      onChange={(e) => setThreshold(e.target.value)}
+                      data-testid="circle-threshold-input"
+                    />
+                  </label>
+                  <span className="muted">of {memberCount}</span>
+                  <button
+                    className="button"
+                    type="button"
+                    disabled={
+                      busy ||
+                      normalizeThreshold(threshold, memberCount) ===
+                        normalizeThreshold(modal.threshold, memberCount)
+                    }
+                    data-testid="circle-threshold-save"
+                    onClick={() =>
+                      attempt(async () => {
+                        await onSetThreshold(
+                          modal.server,
+                          normalizeThreshold(threshold, memberCount)
+                        );
+                        onClose();
+                      })
+                    }
+                  >
+                    save
+                  </button>
+                </div>
               </>
             ) : (
               <p className="muted">

@@ -4,6 +4,7 @@ import Seal from './Seal.jsx';
 import { Plus, Key, ShieldCheck, Hash, Wave, Clock } from './icons.jsx';
 import { circlePresence } from '../lib/presence.js';
 import { describeUntil, soonestEvent } from '../lib/overview.js';
+import { decisionsFor } from '../lib/quorum.js';
 
 // What replaces the rail.
 //
@@ -18,10 +19,11 @@ import { describeUntil, soonestEvent } from '../lib/overview.js';
 // what is next, and what has moved since you last looked. Three circles fit
 // on it without scrolling, which is the number a person is actually in.
 //
-// The decisions strip the design puts above these cards — "edda is one
-// signature short of joining" — is deliberately absent. Signing does not
-// exist yet, and a strip that renders a made-up proposal is worse than no
-// strip: it teaches people to expect a mechanism the product does not have.
+// Above the cards sits the one thing on this screen that is not "pick a
+// room to go to": the decisions waiting on you. A proposal to let somebody
+// into a circle is the only irreversible thing the product does, and it can
+// sit unanswered in a circle you had no other reason to open today — so it
+// comes to the screen you land on rather than waiting to be found.
 
 function memberLine(n) {
   return `${n} member${n === 1 ? '' : 's'}`;
@@ -110,6 +112,7 @@ export default function CirclesHome({
   now = Date.now(),
   onOpen,
   onCreate,
+  onOpenProposal,
   onIdentity,
   onSecure,
 }) {
@@ -122,6 +125,7 @@ export default function CirclesHome({
   // roster *is* the security boundary, and this is the only place the whole
   // of it is in view.
   const reach = new Set(servers.flatMap((s) => s.members ?? []).filter((m) => m !== me)).size;
+  const decisions = decisionsFor(servers, me);
 
   return (
     <div className="circles-home" data-testid="circles-home">
@@ -162,6 +166,38 @@ export default function CirclesHome({
           </button>
         </div>
       </header>
+
+      {decisions.length > 0 && (
+        <section className="circles-decisions" data-testid="circles-decisions">
+          <span className="overline">waiting on you</span>
+          {decisions.map(({ server, proposal, signed, threshold }) => {
+            const togo = Math.max(0, threshold - signed);
+            return (
+              <button
+                className="decision-row"
+                key={`${server.id}:${proposal.id}`}
+                data-testid={`decision-${proposal.id}`}
+                onClick={() => onOpenProposal?.(server.id, proposal.id)}
+              >
+                <Seal name={proposal.handle} size={26} title={proposal.handle} />
+                <span className="decision-text">
+                  {/* The sentence the design asks for, and it is a sentence
+                      rather than a badge because the number on its own
+                      ("1/3") does not say what happens when it lands. */}
+                  <strong>{proposal.handle}</strong>{' '}
+                  {togo === 0
+                    ? 'has the signatures to join'
+                    : togo === 1
+                      ? 'is one signature short of joining'
+                      : `needs ${togo} more signatures to join`}{' '}
+                  <span className="decision-circle">{server.name}</span>
+                </span>
+                <span className="mono">read it</span>
+              </button>
+            );
+          })}
+        </section>
+      )}
 
       {loading && total === 0 ? (
         <p className="circles-placeholder" role="status" data-testid="circles-loading-row">

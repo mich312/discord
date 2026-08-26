@@ -36,6 +36,16 @@ import {
 } from './overview.js';
 import { normalizeGameRef, normalizePresence, normalizeWant } from './games.js';
 import {
+  applyObjection,
+  applySignature,
+  canWithdraw,
+  mergeProposals,
+  normalizeProposal,
+  normalizeProposals,
+  normalizeThreshold,
+  upsertProposal,
+} from './quorum.js';
+import {
   applyTake,
   canRemoveOffer,
   mergeOffers,
@@ -184,6 +194,15 @@ export function adminRequirement(content) {
     // and taking a line down drops content, so it fails closed.
     case 'offer':
       return content.op === 'del' ? { destructive: true, authorMayPass: true } : null;
+    // Any member may propose, sign or object — that is the whole point, and
+    // gating it on a role would put membership back in an admin's hands.
+    // Withdrawing drops content, so it fails closed like the rest.
+    case 'quorum':
+      return content.op === 'withdraw' ? { destructive: true, authorMayPass: true } : null;
+    // The number it takes is the circle's constitution. An admin changes it,
+    // and every member watches it change.
+    case 'threshold':
+      return { destructive: true };
     default:
       return null;
   }
@@ -530,6 +549,44 @@ export function applyEnvelope(record, sender, content, ctx = {}) {
       break;
     }
 
+    case 'quorum': {
+      // The signer is the sender, always. A ledger a member can write other
+      // people's names into is not a ledger.
+      if (content.op === 'propose') {
+        const proposal = normalizeProposal(content.p, sender);
+        if (proposal) {
+          record.proposals = upsertProposal(record.proposals, proposal);
+          emit({ t: 'quorumCheck', id: proposal.id });
+          emit({ t: 'backup' });
+        }
+      } else if (content.op === 'sign') {
+        record.proposals = applySignature(record.proposals, content.id, sender);
+        emit({ t: 'quorumCheck', id: content.id });
+        emit({ t: 'backup' });
+      } else if (content.op === 'object') {
+        record.proposals = applyObjection(record.proposals, content.id, sender, content.why);
+        emit({ t: 'backup' });
+      } else if (content.op === 'withdraw') {
+        const target = (record.proposals ?? []).find((p) => p.id === content.id);
+        if (target && canWithdraw(target, sender, isAdmin === true)) {
+          record.proposals = record.proposals.filter((p) => p.id !== content.id);
+          emit({ t: 'backup' });
+        }
+      }
+      break;
+    }
+
+    case 'threshold': {
+      record.threshold = normalizeThreshold(content.n, (record.members ?? []).length);
+      emit({
+        t: 'systemMessage',
+        server: record.id,
+        text: `${sender} set the signatures a new member needs to ${record.threshold}`,
+      });
+      emit({ t: 'backup' });
+      break;
+    }
+
     case 'chan': {
       clearChannelDeleted(record, content.ch);
       if (!record.channels.includes(content.ch)) {
@@ -729,6 +786,20 @@ function applyMeta(record, content, emit) {
       record.offers = merged;
       emit({ t: 'backup' });
     }
+  }
+
+  // The ledger, union the same way. A joiner needs to see what is already in
+  // front of the circle, including the proposal that let them in.
+  if (Array.isArray(content.proposals) && content.proposals.length) {
+    const merged = mergeProposals(record.proposals, normalizeProposals(content.proposals));
+    if (merged.length !== (record.proposals ?? []).length) {
+      record.proposals = merged;
+      emit({ t: 'backup' });
+    }
+  }
+  if (content.threshold !== undefined && record.threshold === undefined) {
+    record.threshold = normalizeThreshold(content.threshold, (record.members ?? []).length);
+    emit({ t: 'backup' });
   }
 
   // Gap-fill RSVPs the same way (a joiner has none). Bounded and
