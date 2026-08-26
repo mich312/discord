@@ -21,9 +21,8 @@ import Onboarding from './components/Onboarding.jsx';
 import CallStage from './components/CallStage.jsx';
 import CallBar from './components/CallBar.jsx';
 import GameStage from './components/GameStage.jsx';
-import Seal from './components/Seal.jsx';
 import BootLoader from './components/BootLoader.jsx';
-import { Key, ShieldCheck, QuorumGlyph, Gear, LogOut } from './components/icons.jsx';
+import { Key } from './components/icons.jsx';
 
 const params = new URLSearchParams(location.search);
 const view = params.get('view') ?? 'app';

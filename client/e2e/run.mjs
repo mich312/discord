@@ -233,9 +233,23 @@ try {
   await bob.click('[data-testid=channel-logistics]');
   await bob.waitForSelector('text=trailer leaves at 6am', { timeout: 10000 });
 
-  globalThis.__pages = [['alice', alice], ['bob', bob]];
-  console.log('6a. home base catch-up: unread badge counts what landed while away');
+  console.log('6a. board catch-up: unread badge counts what landed while away');
   await alice.click('[data-testid=channel-overview]');
+  // Wait for alice to actually be off the room before bob posts. "Away" is
+  // the thing being tested, and a message that lands while she is still on
+  // #logistics is one she has read — the seen marker follows what is on
+  // screen, so posting into the gap measures nothing.
+  await alice.waitForSelector('[data-testid=overview-pane]', { timeout: 10000 });
+  await alice.waitForFunction(
+    () => !document.querySelector('[data-testid=composer]'),
+    { timeout: 10000 }
+  );
+  // And let the clock tick over. Unread is counted by the relay from
+  // `after_ts` in whole seconds (controller.fetchUnread), so a message that
+  // lands in the same second as the seen marker is not "after" it. The steps
+  // above run well inside one second, which is why this step failed about
+  // two runs in three without saying anything useful.
+  await new Promise((r) => setTimeout(r, 1200));
   await bob.fill('[data-testid=composer]', 'one more pallet to load');
   await bob.press('[data-testid=composer]', 'Enter');
   // The badge appears live while alice sits on the home base…
@@ -891,19 +905,6 @@ try {
 } catch (e) {
   failed = true;
   console.error('\nFAIL:', e.message);
-  if (process.env.E2E_DUMP) {
-    for (const [name, page] of globalThis.__pages ?? []) {
-      try {
-        console.error(`--- ${name} ---`);
-        console.error(await page.evaluate(() => ({
-          board: !!document.querySelector('[data-testid=overview-pane]'),
-          rooms: [...document.querySelectorAll('[data-testid^=overview-room-]')].map((e) => e.textContent.slice(0, 60)),
-          badges: [...document.querySelectorAll('[data-testid^=overview-unread-]')].map((e) => e.dataset.testid + '=' + e.textContent),
-          chips: [...document.querySelectorAll('.room-chip')].map((e) => e.textContent),
-        })));
-      } catch {}
-    }
-  }
 } finally {
   cleanup();
 }

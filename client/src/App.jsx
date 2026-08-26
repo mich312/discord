@@ -25,9 +25,8 @@ import {
   notifAlreadyPrompted,
   markNotifPrompted,
 } from './lib/notify-prompt.js';
-import Seal from './components/Seal.jsx';
 import BootLoader from './components/BootLoader.jsx';
-import { Key, ShieldCheck, LinkGlyph, Sun, QuorumGlyph, Gear, LogOut } from './components/icons.jsx';
+import { Key, ShieldCheck, LinkGlyph, Sun, Gear } from './components/icons.jsx';
 import { markPlayed, bumpPlayCount } from './lib/games.js';
 import { withViewTransition } from './lib/viewTransition.js';
 import { useMinuteClock } from './lib/clock.js';
