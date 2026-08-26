@@ -785,6 +785,7 @@ export default function App() {
                     type: 'circle',
                     server,
                     name: activeServer.name,
+                    glyph: activeServer.overview?.glyph,
                     canManage: canManage && !activeServer.restored,
                   },
                 })
@@ -1172,6 +1173,17 @@ export default function App() {
                 : controllerRef.current.deleteChannel(srv, ch)
             }
             onRenameServer={(srv, name) => controllerRef.current.renameServer(srv, name)}
+            onSetGlyph={(srv, glyph) => {
+              // The glyph rides the overview record, so it has to be written
+              // as an edit to that record and not as a replacement — saving
+              // {glyph} alone would drop the blurb, the shelf and the
+              // schedule for every member of the circle.
+              const rec = state.servers.find((x) => x.id === srv);
+              return controllerRef.current.setOverview(srv, {
+                ...(rec?.overview ?? {}),
+                glyph,
+              });
+            }}
             onLeaveServer={(srv) => controllerRef.current.leaveServer(srv)}
             onDeleteServer={(srv) => controllerRef.current.deleteServer(srv)}
             identityKey={controllerRef.current?.identityKeyString()}

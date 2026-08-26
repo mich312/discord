@@ -19,8 +19,12 @@ const defined = new Set([...bare.matchAll(/^\s*--([a-z0-9-]+):/gm)].map((m) => m
 const used = new Set([...bare.matchAll(/var\(\s*--([a-z0-9-]+)/g)].map((m) => m[1]));
 
 // Custom properties set from JSX rather than declared in the stylesheet.
-// Empty today; an entry here must name the component that sets it.
-const SET_IN_JS = new Set([]);
+// An entry here must name the component that sets it.
+const SET_IN_JS = new Set([
+  // CircleMark.jsx — a circle's tile colour is generated from its id, so it
+  // cannot be a token. crest.test.mjs holds its contrast instead.
+  'circle-fill',
+]);
 
 test('every var(--x) resolves to a definition', () => {
   const missing = [...used].filter((t) => !defined.has(t) && !SET_IN_JS.has(t)).sort();

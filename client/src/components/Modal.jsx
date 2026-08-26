@@ -1,6 +1,8 @@
 import { useDialog } from '../lib/useDialog.js';
 import React, { useEffect, useState } from 'react';
 import { LinkGlyph, Key, ShieldCheck, Copy, Download, X, Check, AlertTriangle, Gear, LogOut } from './icons.jsx';
+import CircleMark from './CircleMark.jsx';
+import { CIRCLE_GLYPH_KEYS, DEFAULT_GLYPH } from '../lib/crest.js';
 
 const RETENTION_CHOICES = [
   { value: 0, label: 'keep until deleted by hand' },
@@ -22,6 +24,7 @@ export default function Modal({
   onChannelRename,
   onChannelDelete,
   onRenameServer,
+  onSetGlyph,
   onLeaveServer,
   onDeleteServer,
   onLogout,
@@ -533,6 +536,7 @@ export default function Modal({
         {modal.type === 'circle' && (
           <>
             {modal.canManage ? (
+              <>
               <form
                 onSubmit={(e) => {
                   e.preventDefault();
@@ -559,6 +563,42 @@ export default function Modal({
                   rename circle
                 </button>
               </form>
+                <fieldset className="glyph-picker">
+                  {/* A real fieldset/legend, not a styled div — the four
+                      buttons are one choice and a screen reader has to hear
+                      the question before the options (§8.7). */}
+                  <legend>circle face</legend>
+                  <p className="fineprint muted">
+                    The colour is the circle&rsquo;s own and can&rsquo;t be changed — it&rsquo;s
+                    how members pick it out of a list. Everyone sees the face you choose.
+                  </p>
+                  <div className="glyph-options">
+                    {CIRCLE_GLYPH_KEYS.map((key) => {
+                      const on = (modal.glyph ?? DEFAULT_GLYPH) === key;
+                      return (
+                        <button
+                          key={key}
+                          type="button"
+                          className={on ? 'glyph-option on' : 'glyph-option'}
+                          // §7.9 — the visual state needs an ARIA one beside
+                          // it; `.on` tells assistive tech nothing.
+                          aria-pressed={on}
+                          disabled={busy || on}
+                          data-testid={`circle-glyph-${key}`}
+                          onClick={() =>
+                            attempt(async () => {
+                              await onSetGlyph(modal.server, key);
+                            })
+                          }
+                        >
+                          <CircleMark id={modal.server} name="" glyph={key} size={36} />
+                          <span>{key}</span>
+                        </button>
+                      );
+                    })}
+                  </div>
+                </fieldset>
+              </>
             ) : (
               <p className="muted">
                 Only an admin can rename or delete this circle. You can leave it below.

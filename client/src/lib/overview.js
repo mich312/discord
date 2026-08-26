@@ -6,6 +6,7 @@
 // owns sending/receiving, this owns the shapes and the merge rules.
 
 import { normalizeGames } from './games.js';
+import { normalizeGlyph, DEFAULT_GLYPH } from './crest.js';
 
 export const BLURB_MAX = 4000;
 export const LINKS_MAX = 12;
@@ -41,11 +42,23 @@ export function normalizeOverview(ov, now = Date.now()) {
     .filter((l) => l.url);
   const events = normalizeEvents(ov.events ?? (ov.event ? [ov.event] : []));
   const games = normalizeGames(ov.games);
-  if (!blurb && links.length === 0 && events.length === 0 && games.length === 0) return null;
+  // The circle's face. Only kept when it is a deliberate choice: a stored
+  // `people` is indistinguishable from never having picked, and writing the
+  // default into every record would put a field on the wire that carries no
+  // decision. Absent means "the default", which is what CircleMark renders.
+  // Whitelist first, then drop the default — in that order. The other way
+  // round, an unrecognised glyph normalizes *into* `people` and gets stored,
+  // which is the one value that should never travel.
+  const chosen = normalizeGlyph(ov.glyph);
+  const glyph = chosen === DEFAULT_GLYPH ? '' : chosen;
+  if (!blurb && links.length === 0 && events.length === 0 && games.length === 0 && !glyph) {
+    return null;
+  }
   const mirror = legacyEventMirror(events, now);
   return {
     blurb,
     links,
+    ...(glyph ? { glyph } : {}),
     ...(events.length ? { events } : {}),
     ...(mirror ? { event: mirror } : {}),
     ...(games.length ? { games } : {}),

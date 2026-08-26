@@ -1965,6 +1965,45 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
   line-height: 1.5;
 }
 .check input { accent-color: var(--accent); margin-top: 2px; }
+
+/* The circle's face. Four options, so they are all on screen at once — a
+   select would hide three of the four things being compared. */
+.glyph-picker { border: 0; padding: 0; margin: 20px 0 0; min-width: 0; }
+.glyph-picker legend {
+  padding: 0;
+  font-family: var(--mono);
+  font-size: var(--text-xs);
+  letter-spacing: 0.14em;
+  text-transform: uppercase;
+  color: var(--ink-mute);
+}
+.glyph-options { display: flex; flex-wrap: wrap; gap: 10px; margin-top: 10px; }
+.glyph-option {
+  flex: 1 1 0;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 8px;
+  padding: 12px 10px;
+  background: var(--raised);
+  border: 1px solid var(--hairline);
+  border-radius: var(--r);
+  color: var(--ink-dim);
+  font-family: var(--sans);
+  font-size: var(--text-sm);
+  cursor: pointer;
+  transition: border-color var(--fast) var(--ease), color var(--fast) var(--ease);
+}
+.glyph-option:hover:not(:disabled) { border-color: var(--hairline-strong); color: var(--ink); }
+/* Coral marks the selected thing — one of its three jobs (§1.1). The chosen
+   option is also `disabled`, so the cursor says so too rather than inviting a
+   click that does nothing. */
+.glyph-option.on {
+  border-color: var(--accent);
+  color: var(--ink);
+  cursor: default;
+}
 .card .button + .check { margin-top: 16px; }
 .card .row { margin-top: 4px; }
 
@@ -3250,7 +3289,25 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
 .game-voice-row li.speaking .voice-meter { color: var(--ok); opacity: 1; }
 
 /* ------------------------------------------------------------------ mark -- */
+/* Two marks, two shapes. Round is a person, tile is a place — the shape
+   carries it, so neither depends on recognising the colour. */
 .seal-avatar { flex-shrink: 0; display: block; border-radius: 50%; }
+
+.circle-mark {
+  flex-shrink: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  /* Set by CircleMark.jsx: the circle's hue, solved onto a fixed relative
+     luminance so every tile in the product sits at the same contrast. */
+  background: var(--circle-fill);
+  border-radius: 32%;
+  /* Not var(--ink): the glyph must stay light in both themes, or a circle's
+     face changes when the user changes theme — and a mark that moves is not
+     identity. §2.4 sends a two-consumer colour to the literal. 5.00:1 against
+     every tile the wheel can produce; crest.test.mjs holds the number. */
+  color: #fff;
+}
 
 /* ------------------------------------------------------------------ touch -- */
 /* Devices without hover can't reveal hover-gated affordances — surface the

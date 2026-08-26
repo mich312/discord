@@ -114,3 +114,93 @@ export function crestParams(id) {
     sheen: 0.16 + r() * 0.16,
   };
 }
+
+/* ------------------------------------------------ the production mark -- */
+
+// What shipped, after the treatments above: a flat tile in the circle's
+// colour carrying one glyph. Everything from `crestParams` down is the
+// gradient treatment the prototype boards compared and the design did not
+// take — kept because it records why, not because anything renders it.
+//
+// Flat won for a reason the gradient could not answer: a glyph has to sit on
+// top of the mark, and a glyph on a gradient has a different contrast ratio
+// in every corner of the tile. Flat makes that one number, and one number is
+// something a test can hold.
+
+// Every tile is generated, so its contrast against the glyph is generated
+// too — and a hue wheel does not hold lightness still. `hsl(60 55% 42%)` is
+// yellow at Y≈0.44; `hsl(255 55% 42%)` is indigo at Y≈0.08. Pinning the
+// *lightness* would ship one circle whose glyph is illegible and another
+// whose tile disappears into the panel.
+//
+// So the fixed point is relative luminance, not lightness: solve for the L
+// that puts every hue at the same Y. White-on-tile is then the same ratio
+// for every circle in the product, and the tile clears 3:1 against the panel
+// in both themes. `crest.test.mjs` asserts both, over every hue the wheel
+// can produce.
+//
+// 0.16 is chosen for what it buys at both ends: white-on-tile lands at
+// 5.00:1 (past AA for text, so the glyph is safe at any weight), and the
+// tile clears --panel at 3.75:1 on carbon and 4.43:1 on paper.
+const TILE_LUMINANCE = 0.16;
+const TILE_SATURATION = 55;
+
+/** sRGB relative luminance of an hsl() triple, per WCAG 2.x. */
+function hslLuminance(h, s, l) {
+  const S = s / 100;
+  const L = l / 100;
+  const c = (1 - Math.abs(2 * L - 1)) * S;
+  const x = c * (1 - Math.abs(((h / 60) % 2) - 1));
+  const m = L - c / 2;
+  const [r, g, b] = (
+    h < 60 ? [c, x, 0]
+    : h < 120 ? [x, c, 0]
+    : h < 180 ? [0, c, x]
+    : h < 240 ? [0, x, c]
+    : h < 300 ? [x, 0, c]
+    : [c, 0, x]
+  ).map((v) => {
+    const u = v + m;
+    return u <= 0.04045 ? u / 12.92 : ((u + 0.055) / 1.055) ** 2.4;
+  });
+  return 0.2126 * r + 0.7152 * g + 0.0722 * b;
+}
+
+/**
+ * The circle's tile colour: its anchor hue, at whatever lightness puts it on
+ * the shared luminance. Bisection rather than a formula because luminance is
+ * not invertible in closed form through the sRGB transfer curve — 24 steps
+ * lands well inside a single 8-bit level.
+ */
+export function circleFill(id) {
+  const h = idHue(id);
+  let lo = 0;
+  let hi = 100;
+  for (let i = 0; i < 24; i++) {
+    const mid = (lo + hi) / 2;
+    if (hslLuminance(h, TILE_SATURATION, mid) < TILE_LUMINANCE) lo = mid;
+    else hi = mid;
+  }
+  return `hsl(${h} ${TILE_SATURATION}% ${((lo + hi) / 2).toFixed(2)}%)`;
+}
+
+/** The luminance every tile is solved onto — for the tests, and for anything
+    that needs to know what a glyph is sitting on without re-deriving it. */
+export { TILE_LUMINANCE, hslLuminance };
+
+/** The glyphs a circle can wear. Keys, not components — this is lib, and the
+    value travels inside an MLS envelope to every member's device, so it has
+    to be a short string from a closed set rather than anything renderable.
+    CircleMark.jsx owns the mapping to actual paths. */
+export const CIRCLE_GLYPH_KEYS = ['people', 'games', 'photo', 'project'];
+
+/** `people` — so a circle has a face the moment it is created and nobody has
+    to configure anything for a list of circles to be legible. */
+export const DEFAULT_GLYPH = 'people';
+
+/** Whitelist a glyph off the wire. Anything unrecognised becomes the default
+    rather than nothing: a circle whose admin is running a newer build should
+    still have a face here, not a hole. */
+export function normalizeGlyph(v) {
+  return CIRCLE_GLYPH_KEYS.includes(v) ? v : DEFAULT_GLYPH;
+}

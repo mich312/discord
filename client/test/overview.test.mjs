@@ -219,3 +219,42 @@ test('describeAgo ranges', () => {
   assert.equal(describeAgo(NOW - 7 * HOUR, NOW), '7 h ago');
   assert.equal(describeAgo(NOW - 4 * DAY, NOW), '4 days ago');
 });
+
+/* ------------------------------------------------------------- the face -- */
+
+test('a circle glyph is whitelisted, and an unknown one falls back to a face', () => {
+  // The value arrives inside an MLS envelope from another member's client.
+  // Trusting it would let one member put an arbitrary string where every
+  // other member's UI expects a key, so it goes through the same whitelist
+  // the rest of this record does.
+  assert.equal(normalizeOverview({ glyph: 'games' }).glyph, 'games');
+  assert.equal(normalizeOverview({ glyph: 'photo' }).glyph, 'photo');
+  // Not a crash and not a hole: a circle from a newer build still has a face.
+  assert.equal(normalizeOverview({ glyph: 'wormhole', blurb: 'x' }).glyph, undefined);
+  assert.equal(normalizeOverview({ glyph: { toString: () => 'games' }, blurb: 'x' }).glyph, undefined);
+});
+
+test('the default face is never written to the wire', () => {
+  // `people` is what an unset glyph renders as, so storing it would put a
+  // field carrying no decision into every member's record and backup.
+  assert.equal(normalizeOverview({ glyph: 'people', blurb: 'x' }).glyph, undefined);
+  assert.equal(normalizeOverview({ glyph: 'people' }), null);
+});
+
+test('a chosen face alone is worth keeping a record for', () => {
+  // normalizeOverview returns null when there is nothing to keep. Picking a
+  // glyph and nothing else is a real edit, and dropping it would have made
+  // the choice silently fail to save.
+  assert.deepEqual(normalizeOverview({ glyph: 'project' }), {
+    blurb: '',
+    links: [],
+    glyph: 'project',
+  });
+});
+
+test('a face survives a meta rebroadcast', () => {
+  // reconcileMeta adopts a rebroadcaster's snapshot wholesale. A field it
+  // does not carry through is a field that disappears for any device that
+  // rejoins — which is how the glyph would have quietly reset itself.
+  assert.equal(reconcileMeta({ overview: { glyph: 'games' } }).overview.glyph, 'games');
+});
