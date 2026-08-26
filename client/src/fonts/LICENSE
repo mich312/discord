@@ -1,0 +1,14 @@
+Both families here are licensed under the SIL Open Font License 1.1, which
+permits bundling them with, and redistributing them inside, this application.
+
+  Inter — Copyright (c) 2016 The Inter Project Authors
+  https://github.com/rsms/inter
+  https://openfontlicense.org
+
+  IBM Plex Mono — Copyright (c) 2017 IBM Corp.
+  https://github.com/IBM/plex
+  https://openfontlicense.org
+
+The files are the woff2 subsets Google Fonts serves (latin and latin-ext),
+vendored rather than linked so that no client ever makes a request to a third
+party in order to render the interface.
