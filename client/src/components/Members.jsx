@@ -62,7 +62,7 @@ export default function Members({
     return (
       <li
         key={m}
-        className={speaking ? 'member speaking' : 'member'}
+        className={cx('member', speaking && 'speaking')}
         // Stable per-member name so the browser slides the row (FLIP) as it
         // moves between the rest / in-call / playing groups, rather than
         // cross-dissolving it. Named only while it's a real roster row.

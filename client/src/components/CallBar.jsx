@@ -2,6 +2,7 @@ import React from 'react';
 import Seal from './Seal.jsx';
 import { Wave, Mic, MicOff, ArrowRight } from './icons.jsx';
 import { describeCallLength } from '../lib/overview.js';
+import { cx } from '../lib/cx.js';
 
 // The call you are still in, following you out of the room it is in.
 //
@@ -51,7 +52,7 @@ export default function CallBar({ voice, me, now, onOpen, onToggleMute }) {
 
       <div className="call-bar-actions">
         <button
-          className={muted ? 'call-bar-mic muted' : 'call-bar-mic'}
+          className={cx('call-bar-mic', muted && 'muted')}
           data-testid="call-bar-mute"
           // §1.6 again — "mic on" is not conveyed by the glyph alone, and
           // §7.9: this is a toggle, so it says which way it is set.

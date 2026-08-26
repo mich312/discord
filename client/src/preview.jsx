@@ -329,13 +329,13 @@ function PreviewShell({ empty = false, circles = false, banner = false, modal = 
           document.documentElement.dataset.theme =
             document.documentElement.dataset.theme === 'paper' ? 'carbon' : 'paper';
         }}
-        onRoster={() => setDrawer((d) => (d === 'roster' ? null : 'roster'))}
       />
       {banner && (
         <div className="secure-banner" data-testid="secure-banner">
           <Key size={14} />
           <span>
-            this account exists only in this browser — lose it and <strong>{me}</strong> is gone forever
+            <strong>{me}</strong> lives only in this browser. Park an encrypted copy on the
+            relay and you can sign in on another device.
           </span>
           <button className="button">secure account</button>
         </div>
@@ -354,10 +354,7 @@ function PreviewShell({ empty = false, circles = false, banner = false, modal = 
           )}
           voice={vc}
           canManage
-          onSelect={(ch) => {
-            setActive({ ...active, channel: ch });
-            setDrawer(null);
-          }}
+          onSelect={(ch) => setActive({ ...active, channel: ch })}
           onSettings={noop}
           onCreate={noop}
           onVoiceCreate={noop}
@@ -367,7 +364,6 @@ function PreviewShell({ empty = false, circles = false, banner = false, modal = 
         />
       )}
       <div className="app">
-        {drawer && <div className="drawer-backdrop" onClick={() => setDrawer(null)} />}
         {activeServer && liveGame && active.channel ? (
           <GameStage
             game={liveGame}

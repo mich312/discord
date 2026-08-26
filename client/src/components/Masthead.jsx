@@ -2,6 +2,7 @@ import React from 'react';
 import { QuorumGlyph, LinkGlyph, CommandGlyph, Sun, Moon } from './icons.jsx';
 import Seal from './Seal.jsx';
 import CircleMarker from './CircleMarker.jsx';
+import { cx } from '../lib/cx.js';
 
 // Full-width top bar: the brand at the left edge, the marker saying which
 // circle and which room, and the session chrome — palette, theme, relay
@@ -34,7 +35,7 @@ export default function Masthead({
       {/* The brand mark never leaves the fascia (§9.5) — but inside a circle
           the wordmark yields its width to the answer people actually need
           from this bar, which is which circle and which room. */}
-      <div className={server ? 'masthead-brand compact' : 'masthead-brand'}>
+      <div className={cx('masthead-brand', server && 'compact')}>
         <span className="brand-glyph">
           <QuorumGlyph />
         </span>

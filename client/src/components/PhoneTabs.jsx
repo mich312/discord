@@ -1,5 +1,6 @@
 import React from 'react';
 import { Users, Hash, QuorumGlyph } from './icons.jsx';
+import { cx } from '../lib/cx.js';
 
 // The three crossings, where a thumb can reach them.
 //
@@ -14,12 +15,15 @@ import { Users, Hash, QuorumGlyph } from './icons.jsx';
 // is a worse answer than the room itself, and the strip is still right there
 // for picking a different one.
 export default function PhoneTabs({ server, channel, onStage, onGame, onCircles, onBoard, onRooms }) {
-  const inRoom = Boolean(channel) && !onStage && !onGame;
+  // No circle open means no room, whatever a stale channel says. Without
+  // the first clause the rooms tab lit up on circles home — marked current
+  // and disabled at the same time, which is two contradictory claims.
+  const inRoom = Boolean(server) && Boolean(channel) && !onStage && !onGame;
   const onBoardNow = Boolean(server) && channel == null && !onStage && !onGame;
   const tab = (key, label, Glyph, current, run, disabled = false) => (
     <li key={key}>
       <button
-        className={current ? 'phone-tab on' : 'phone-tab'}
+        className={cx('phone-tab', current && 'on')}
         // §7.9 — the class is decoration; this is the state a screen reader
         // gets, and it is the same `page` the strip and the marker use.
         aria-current={current ? 'page' : undefined}

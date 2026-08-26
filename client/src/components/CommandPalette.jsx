@@ -2,6 +2,7 @@ import React, { useEffect, useMemo, useRef, useState } from 'react';
 import { Hash, CircleGlyph } from './icons.jsx';
 import { useDialog } from '../lib/useDialog.js';
 import { MIN_QUERY } from '../lib/search.js';
+import { cx } from '../lib/cx.js';
 
 // Long enough that typing a word does not fire a full scan per keystroke,
 // short enough that pausing feels like the results were already there.
@@ -177,7 +178,7 @@ export default function CommandPalette({ servers, active, actions, onSearch, onN
                   // Options are driven by aria-activedescendant, so they are
                   // not tab stops — Tab must leave the list, not walk it.
                   tabIndex={-1}
-                  className={i === index ? 'palette-item selected' : 'palette-item'}
+                  className={cx('palette-item', i === index && 'selected')}
                   onMouseEnter={() => setIndex(i)}
                   onClick={() => {
                     it.run();

@@ -22,7 +22,8 @@ import {
   normalizeGame,
 } from '../lib/games.js';
 import { nameHue } from '../lib/avatar.js';
-import { Hash, Wave, Bell, Clock, LinkGlyph, Plus, X, ArrowRight, Gamepad, External, Copy, Check } from './icons.jsx';
+import { Hash, Wave, Bell, Clock, LinkGlyph, Plus, X, ArrowRight, Gamepad, External, Copy, Check, Gear } from './icons.jsx';
+import { cx } from '../lib/cx.js';
 
 // The circle's game hub. Two faces off one page, so the thing the page is
 // named for leads:
@@ -275,7 +276,7 @@ function LiveBand({ game, players, me, onJoin }) {
         }}
         aria-hidden="true"
       >
-        <span className={game.glyph ? 'game-cover-mark glyph' : 'game-cover-mark'}>
+        <span className={cx('game-cover-mark', game.glyph && 'glyph')}>
           {game.glyph ?? game.name.slice(0, 1).toUpperCase()}
         </span>
       </div>
@@ -345,7 +346,7 @@ function GameCard({ game, players, canManage, rallied, onLaunch, onRally, onRemo
     .filter(Boolean)
     .join(' · ');
   return (
-    <li className={live ? 'game-card live' : 'game-card'} data-testid={`game-card-${game.id}`}>
+    <li className={cx('game-card', live && 'live')} data-testid={`game-card-${game.id}`}>
       <div
         className="game-cover"
         style={{
@@ -353,7 +354,7 @@ function GameCard({ game, players, canManage, rallied, onLaunch, onRally, onRemo
         }}
       >
         <span className="game-grain" aria-hidden="true" />
-        <span className={game.glyph ? 'game-cover-mark glyph' : 'game-cover-mark'}>
+        <span className={cx('game-cover-mark', game.glyph && 'glyph')}>
           {game.glyph ?? game.name.slice(0, 1).toUpperCase()}
         </span>
         {live ? (
@@ -379,7 +380,7 @@ function GameCard({ game, players, canManage, rallied, onLaunch, onRally, onRemo
         <div className="game-name-row">
           <span className="game-name">{game.name}</span>
           <button
-            className={fav ? 'game-fav on' : 'game-fav'}
+            className={cx('game-fav', fav && 'on')}
             title={fav ? 'unstar — remove from your favorites' : 'star — pin to the front for you'}
             aria-pressed={fav}
             data-testid={`game-favorite-${game.id}`}
@@ -450,7 +451,7 @@ function GameCard({ game, players, canManage, rallied, onLaunch, onRally, onRemo
         </div>
         {!live && onRally && (
           <button
-            className={rallied ? 'game-rally on' : 'game-rally'}
+            className={cx('game-rally', rallied && 'on')}
             data-testid={`game-rally-${game.id}`}
             aria-pressed={rallied}
             title={rallied ? 'stand down your rally' : 'ping the circle — “I want to play this”'}
@@ -669,17 +670,33 @@ export default function Overview({
             one module some circles never populate is the intent drift the
             floor plan is correcting. */}
         <h2 className="room-name">{server.name}&rsquo;s board</h2>
-        {canManage && !editing && (
+        {!editing && (
           <span className="pane-actions">
-            <button className="button" data-testid="overview-edit" onClick={() => setEditing(true)}>
-              customize
-            </button>
-            {!addingGame && (
+            {canManage && (
+              <button className="button" data-testid="overview-edit" onClick={() => setEditing(true)}>
+                customize
+              </button>
+            )}
+            {canManage && !addingGame && (
               <button className="button" data-testid="game-add" onClick={() => setAddingGame(true)}>
                 <Plus size={13} />
                 register a game
               </button>
             )}
+            {/* The circle's own settings — its name, its face, how many
+                signatures it asks for, and leaving it. Not admin-gated: the
+                only way out of a circle is in that dialog, and gating the
+                exit on a role would be the product deciding who may leave.
+                (It lived on the sidebar's circle header until the floor plan
+                took the sidebar away, and went with it.) */}
+            <button
+              className="ghost"
+              title={`${server.name} — circle settings`}
+              data-testid="circle-settings"
+              onClick={onCircleSettings}
+            >
+              <Gear size={14} />
+            </button>
           </span>
         )}
       </header>
@@ -804,7 +821,7 @@ export default function Overview({
                       {canSend && (
                         <div className="hub-rsvp">
                           <button
-                            className={iAmIn ? 'button live' : 'button primary'}
+                            className={cx('button', iAmIn ? 'live' : 'primary')}
                             data-testid="rsvp-toggle"
                             onClick={() => onRsvp(soonest.at, !iAmIn)}
                           >
@@ -873,7 +890,7 @@ export default function Overview({
                           <span className="when mono">{describeUntil(ev.at, now)}</span>
                           {canSend && (
                             <button
-                              className={iAmIn ? 'button live cal-rsvp' : 'button cal-rsvp'}
+                              className={cx('button', 'cal-rsvp', iAmIn && 'live')}
                               data-testid={`cal-rsvp-${ev.id}`}
                               onClick={() => onRsvp(ev.at, !iAmIn)}
                             >
@@ -897,7 +914,7 @@ export default function Overview({
                   return (
                     <li key={ch}>
                       <button
-                        className={d.unread ? 'overview-room has-unread' : 'overview-room'}
+                        className={cx('overview-room', d.unread && 'has-unread')}
                         data-testid={`overview-room-${ch}`}
                         onClick={() => onSelectChannel(ch)}
                       >
@@ -930,7 +947,7 @@ export default function Overview({
                   return (
                     <li key={`v:${ch}`}>
                       <button
-                        className={present.length ? 'overview-room voice live' : 'overview-room voice'}
+                        className={cx('overview-room voice', present.length && 'live')}
                         data-testid={`overview-voice-${ch}`}
                         onClick={() => onVoiceJoin(ch)}
                         title={`join "${ch}"`}
@@ -1071,7 +1088,7 @@ export default function Overview({
                                button and nothing else. §5.3 — one filled
                                button per row, and taking the seat is it. */
                             <button
-                              className={mine ? 'button live offer-take' : 'button primary offer-take'}
+                              className={cx('button', 'offer-take', mine ? 'live' : 'primary')}
                               disabled={!mine && left === 0}
                               data-testid={`overview-offer-take-${o.id}`}
                               onClick={() => onTakeOffer(o.id, !mine)}
@@ -1194,7 +1211,7 @@ export default function Overview({
                         ) : (
                           canSend && (
                             <button
-                              className={iAmIn ? 'button live night-action' : 'button night-action'}
+                              className={cx('button', 'night-action', iAmIn && 'live')}
                               data-testid={`night-rsvp-${ev.id}`}
                               onClick={() => onRsvp(ev.at, !iAmIn)}
                             >
@@ -1226,7 +1243,7 @@ export default function Overview({
                   {filterChips.map((f) => (
                     <button
                       key={f}
-                      className={filter === f ? 'fchip on' : 'fchip'}
+                      className={cx('fchip', filter === f && 'on')}
                       data-testid={`game-filter-${f}`}
                       aria-pressed={filter === f}
                       onClick={() => setFilter(f)}

@@ -1266,7 +1266,7 @@ kbd {
   position: fixed;
   right: 20px;
   bottom: 20px;
-  z-index: 40;
+  z-index: var(--z-dock);
   display: flex;
   align-items: center;
   gap: 10px;
@@ -1649,10 +1649,10 @@ kbd {
 }
 .msg-group .seal-avatar { grid-row: 1 / span 99; margin-top: 3px; }
 .msg-head { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
-.msg-head .sender { font-weight: 650; font-size: 13.5px; letter-spacing: -0.01em; }
+.msg-head .sender { font-weight: 650; font-size: 13px; letter-spacing: -0.01em; }
 .msg-head .sender.self::after {
   content: 'YOU';
-  font: 600 9px var(--mono);
+  font: 600 var(--text-xs) var(--mono);
   letter-spacing: 0.1em;
   color: var(--on-accent);
   background: var(--accent);
@@ -1902,7 +1902,8 @@ kbd {
 .badge-admin { color: var(--ink-mute); border-color: var(--hairline-strong); margin-right: 4px; }
 
 .role-toggle {
-  font: 600 9px var(--mono);
+  /* A control that hands somebody the ACL. §4.3's 12px floor, not 10. */
+  font: 600 var(--text-sm) var(--mono);
   text-transform: uppercase;
   letter-spacing: 0.08em;
   color: var(--ink-mute);
@@ -2177,7 +2178,7 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
   box-shadow: var(--overlay-shadow);
   animation: rise var(--slow) var(--ease);
   /* Topmost: a toast must be readable over modals, drawers, everything. */
-  z-index: 70;
+  z-index: var(--z-toast);
 }
 
 /* --------------------------------------------------------------- modals -- */
@@ -2188,9 +2189,9 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
   display: flex;
   align-items: center;
   justify-content: center;
-  /* Above the call panel (40), drawers (44/45) and palette (50): a modal
-     is the most deliberate thing on screen — nothing floats over it. */
-  z-index: 60;
+  /* Above the dock and the palette: a modal is the most deliberate thing
+     on screen — nothing floats over it but the toast that reports on it. */
+  z-index: var(--z-modal);
   animation: fade var(--fast) var(--ease);
 }
 
@@ -2437,7 +2438,7 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
 }
 .qr { width: 232px; height: 232px; line-height: 0; }
 .qr svg { display: block; width: 100%; height: 100%; }
-.link-code { text-align: center; font-size: 13.5px; color: var(--ink-dim); margin: 12px 0; }
+.link-code { text-align: center; font-size: 13px; color: var(--ink-dim); margin: 12px 0; }
 .link-code strong, .mono { font-family: var(--mono); letter-spacing: .1em; color: var(--ink); }
 .link-handle { color: var(--accent-ink); }
 .waiting { text-align: center; }
@@ -2469,7 +2470,7 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
   max-width: 16ch;
 }
 .gate-tagline em { font-style: normal; color: var(--accent-ink); }
-.gate-sub { color: var(--ink-dim); max-width: 46ch; font-size: 13.5px; line-height: 1.6; }
+.gate-sub { color: var(--ink-dim); max-width: 46ch; font-size: 13px; line-height: 1.6; }
 
 .principles {
   list-style: none;
@@ -2491,7 +2492,7 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
   padding-top: 1px;
   flex-shrink: 0;
 }
-.principles strong { display: block; font-size: 13.5px; letter-spacing: -0.01em; }
+.principles strong { display: block; font-size: 13px; letter-spacing: -0.01em; }
 .principles span { color: var(--ink-mute); font-size: var(--text-sm); line-height: 1.5; }
 
 .gate-form {
@@ -2528,7 +2529,7 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
   justify-content: center;
   align-items: flex-start;
   padding-top: 14vh;
-  z-index: 50;
+  z-index: var(--z-palette);
   animation: fade var(--fast) var(--ease);
 }
 .palette {
@@ -2637,7 +2638,7 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
   position: absolute;
   top: -13px;
   right: 8px;
-  z-index: 5;
+  z-index: var(--z-raised);
   display: flex;
   gap: 1px;
   padding: 2px;
@@ -2680,7 +2681,7 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
   position: absolute;
   top: calc(100% + 6px);
   right: 0;
-  z-index: 10;
+  z-index: var(--z-pop);
   display: flex;
   gap: 2px;
   padding: 5px 7px;
@@ -3086,7 +3087,7 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
   gap: 2px;
   padding: 10px 13px 11px;
 }
-.game-invite .gi-title { font-weight: 700; font-size: 13.5px; letter-spacing: -0.01em; }
+.game-invite .gi-title { font-weight: 700; font-size: 13px; letter-spacing: -0.01em; }
 .game-invite .gi-sub {
   font-size: var(--text-xs);
   color: var(--ink-mute);
@@ -3425,7 +3426,7 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  font: 600 9px var(--mono);
+  font: 600 var(--text-xs) var(--mono);
   text-transform: uppercase;
   letter-spacing: 0.1em;
   color: rgba(255, 255, 255, 0.85);
@@ -3471,7 +3472,7 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
   flex: 1;
 }
 .game-name-row { display: flex; align-items: center; gap: 8px; }
-.game-name { font-weight: 700; font-size: 13.5px; letter-spacing: -0.01em; flex: 1; min-width: 0; }
+.game-name { font-weight: 700; font-size: 13px; letter-spacing: -0.01em; flex: 1; min-width: 0; }
 .game-fav {
   flex-shrink: 0;
   background: none;
@@ -3916,7 +3917,7 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
   position: absolute;
   left: 8px;
   top: 8px;
-  z-index: 80;
+  z-index: var(--z-skip);
   clip-path: inset(50%);
   width: 1px;
   height: 1px;

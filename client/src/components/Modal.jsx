@@ -260,8 +260,8 @@ export default function Modal({
                     someone is holding, unlocked, it is not that. */}
                 <p className="fineprint muted">
                   Revoking stops that passkey unlocking your account from now on. It cannot erase
-                  what is already stored on a device someone is holding — if one was lost while
-                  signed in, treat its messages as compromised.
+                  what is already stored on a device someone is holding — if one went missing
+                  while signed in, treat its messages as read by whoever has it.
                 </p>
               </>
             )}
@@ -587,7 +587,7 @@ export default function Modal({
                         <button
                           key={key}
                           type="button"
-                          className={on ? 'glyph-option on' : 'glyph-option'}
+                          className={cx('glyph-option', on && 'on')}
                           // §7.9 — the visual state needs an ARIA one beside
                           // it; `.on` tells assistive tech nothing.
                           aria-pressed={on}
@@ -686,7 +686,7 @@ export default function Modal({
 
             {modal.canManage && (
               <>
-                <div className="divider">danger zone</div>
+                <div className="divider">deleting the circle</div>
                 <p className="fineprint muted">
                   Deleting removes every member (their access is re-keyed away) and purges
                   the circle from the relay. This can&rsquo;t be undone.
@@ -727,7 +727,9 @@ export default function Modal({
             {unsecured ? (
               <p className="error" role="alert" data-testid="logout-unsecured-warning">
                 This account isn&rsquo;t secured yet — there is no passkey, password, or
-                exported key. If you log out now it is gone <strong>for good</strong>.
+                exported key, so this browser holds the <strong>only</strong> copy of your
+                identity. Log out now and there is nothing left to sign back in with. Secure
+                the account first and logging out costs you nothing.
               </p>
             ) : (
               <p className="fineprint muted">

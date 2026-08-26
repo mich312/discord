@@ -486,10 +486,10 @@ Rules that are only prose drift. These are the checks that hold them.
 |---|---|---|
 | `contrast.test.mjs` | WCAG matrix over every text token × every surface, both themes | 3.1, 3.2 |
 | `tokens.test.mjs` | no raw colour outside token blocks; no undefined tokens; no dead tokens; no fallback on a defined token; colour-token theme parity | 2.1–2.3, 3.3 |
-| `scale.test.mjs` | spacing, type, motion and z-index come from their scales | 2.6–2.9 |
+| `scale.test.mjs` | spacing, type and motion literals held to today's count; the 10px floor and the z-index scale asserted at zero | 2.6–2.9, 4.3 |
 | `vocabulary.test.mjs` | JSX ↔ CSS class integrity; no base-duplicating ternary; inline-style budget | 5.7 |
 | `theme.test.mjs` | paper block ⇔ media-query mirror parity | 3.4 |
-| copy lint | banned protocol and fear vocabulary in `client/src/**` | 11.5, 11.6 |
+| `copy.test.mjs` | banned protocol and fear vocabulary in user-facing strings under `client/src/**` | 11.5, 11.6 |
 
 **Allowlists shrink, never grow.** Each linter is seeded with today's
 violation count and the count is a ceiling, so existing debt is visible and

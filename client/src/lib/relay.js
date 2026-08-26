@@ -113,7 +113,7 @@ export class Relay {
     ws.onclose = () => {
       this.ready = false;
       this.stopHeartbeat();
-      for (const { reject } of this.pending.values()) reject(new Error('connection lost'));
+      for (const { reject } of this.pending.values()) reject(new Error('the connection dropped — reconnecting'));
       this.pending.clear();
       this.opts.onStatus('offline');
       if (!this.closed) {

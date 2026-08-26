@@ -3,6 +3,7 @@ import Seal from './Seal.jsx';
 import VoiceMeter from './VoiceMeter.jsx';
 import { activitySrc, freshPresence, gameHost, isSameOriginSrc } from '../lib/games.js';
 import { X, Lock, External, Gamepad, Wave, Users, LinkGlyph } from './icons.jsx';
+import { cx } from '../lib/cx.js';
 
 /** Sandbox tokens for a game frame.
 
@@ -120,7 +121,7 @@ export default function GameStage({
         <aside className="game-dock" data-testid="game-dock">
           <div className="dock-tabs" role="tablist">
             <button
-              className={tab === 'chat' ? 'dock-tab on' : 'dock-tab'}
+              className={cx('dock-tab', tab === 'chat' && 'on')}
               role="tab"
               aria-selected={tab === 'chat'}
               data-testid="dock-tab-chat"
@@ -129,7 +130,7 @@ export default function GameStage({
               #{channel}
             </button>
             <button
-              className={tab === 'crew' ? 'dock-tab on' : 'dock-tab'}
+              className={cx('dock-tab', tab === 'crew' && 'on')}
               role="tab"
               aria-selected={tab === 'crew'}
               data-testid="dock-tab-crew"
@@ -145,7 +146,7 @@ export default function GameStage({
                 const p = freshPresence(server.presence?.[m]);
                 const speaking = voice?.speaking?.includes(m);
                 return (
-                  <div key={m} className={speaking ? 'dock-crew-row speaking' : 'dock-crew-row'}>
+                  <div key={m} className={cx('dock-crew-row', speaking && 'speaking')}>
                     <Seal name={m} size={22} title={m} />
                     <span className="dock-crew-name">{m === me ? 'you' : m}</span>
                     <span className="dock-crew-state">
@@ -170,7 +171,7 @@ export default function GameStage({
               ) : (
                 <div className="stage-chat-line" key={i}>
                   <Seal name={m.sender} size={18} title={m.sender} />
-                  <span className={m.sender === me ? 'sender self' : 'sender'}>{m.sender}</span>
+                  <span className={cx('sender', m.sender === me && 'self')}>{m.sender}</span>
                   <span className="text">
                     {m.file ? `sent a file: ${m.file.name}` : m.game ? `opened ${m.game.name}` : m.text}
                   </span>
@@ -209,7 +210,7 @@ export default function GameStage({
                 <span className="game-voice-ctl">
                   {onToggleMute && !voice.listenOnly && (
                     <button
-                      className={voice.muted ? 'voice-join muted-on' : 'voice-join'}
+                      className={cx('voice-join', voice.muted && 'muted-on')}
                       title={voice.muted ? 'unmute your mic' : 'mute your mic'}
                       data-testid="game-voice-mute"
                       onClick={onToggleMute}

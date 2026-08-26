@@ -17,6 +17,7 @@ import './prototypes.css';
 import Crest from './components/Crest.jsx';
 import Seal from './components/Seal.jsx';
 import { idHue } from './lib/crest.js';
+import { cx } from './lib/cx.js';
 import {
   Camera, Gamepad, Users, Wave, Screen, Archive, Clock, Key,
   Hash, External, LinkGlyph, Bell, Lock, Check, AlertTriangle, X,
@@ -114,7 +115,7 @@ function Identity() {
       <Row label="D · the rail, in context" note="Eight circles as you would actually scan them.">
         <div className="p-rail">
           {CIRCLES.map((c, i) => (
-            <span key={c.id} className={i === 0 ? 'p-railslot active' : 'p-railslot'}>
+            <span key={c.id} className={cx('p-railslot', i === 0 && 'active')}>
               <Crest id={c.id} name={c.name} glyph={c.glyph} size={44} />
             </span>
           ))}
@@ -148,7 +149,7 @@ function HueRoom({ circle, rooms, active }) {
         <span className="overline p-tinted">rooms</span>
         <ul className="p-rooms">
           {rooms.map((r) => (
-            <li key={r} className={r === active ? 'p-roomrow on' : 'p-roomrow'}>
+            <li key={r} className={cx('p-roomrow', r === active && 'on')}>
               <Hash size={13} /> {r}
             </li>
           ))}
@@ -536,7 +537,7 @@ function Panel({ title, people, kept, retention, connection, unchecked }) {
       </ul>
 
       <h4 className="overline">history</h4>
-      <p className={kept ? 'p-panel-line warn' : 'p-panel-line'}>
+      <p className={cx('p-panel-line', kept && 'warn')}>
         {kept
           ? 'Kept. Anyone added to this circle later can read everything in this room, including messages sent before they joined.'
           : 'Not kept. People added later start from their first message — nobody can hand them the past.'}
@@ -550,7 +551,7 @@ function Panel({ title, people, kept, retention, connection, unchecked }) {
       </p>
 
       <h4 className="overline">connection</h4>
-      <p className={connection === 'live' ? 'p-panel-line' : 'p-panel-line warn'}>
+      <p className={cx('p-panel-line', !(connection === 'live') && 'warn')}>
         {connection === 'live'
           ? 'Live. Messages are going out as you send them.'
           : 'Offline. Messages will send when the relay is back.'}

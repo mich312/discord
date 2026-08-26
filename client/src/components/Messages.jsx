@@ -6,6 +6,7 @@ import { meshFull, meshFullMessage } from '../lib/voice.js';
 import { nameHue } from '../lib/avatar.js';
 import { fold, dayLabel } from '../lib/fold.js';
 import { AlertTriangle, Lock, Hash, Paperclip, Clock, Archive, Wave, Gamepad, Check, Plus, Reply, Pencil, Trash, X } from './icons.jsx';
+import { cx } from '../lib/cx.js';
 
 // The reaction palette: small on purpose. Reactions ride MLS like any
 // message and live on the folded message; each is its own log entry.
@@ -23,7 +24,7 @@ function ReactionPills({ message, me, onReact }) {
       {entries.map(([emo, who]) => (
         <button
           key={emo}
-          className={who.includes(me) ? 'react on' : 'react'}
+          className={cx('react', who.includes(me) && 'on')}
           title={who.join(', ')}
           data-testid={`react-${emo}`}
           onClick={() => onReact?.(target, emo)}
@@ -138,7 +139,7 @@ function MessageText({ text, members, me }) {
       out.push(
         <span
           key={`${m.index}`}
-          className={handle === me ? 'mention self' : 'mention'}
+          className={cx('mention', handle === me && 'self')}
           data-testid="mention"
         >
           @{handle}
@@ -177,7 +178,7 @@ function QuotedReply({ reply, me, onJump }) {
   return (
     <button
       type="button"
-      className={onJump ? 'reply-quote' : 'reply-quote orphan'}
+      className={cx('reply-quote', !(onJump) && 'orphan')}
       data-testid="reply-quote"
       onClick={onJump ?? undefined}
       disabled={!onJump}
@@ -515,7 +516,7 @@ export default function Messages({
             that fits in five words. The people themselves are on the board,
             which is where this goes. */}
         <button className="room-here" data-testid="room-here" onClick={onOpenBoard}>
-          <span className={liveHere.length ? 'room-here-n live' : 'room-here-n'}>
+          <span className={cx('room-here-n', liveHere.length && 'live')}>
             {liveHere.length} of {server.members.length}
           </span>{' '}
           here
@@ -564,7 +565,7 @@ export default function Messages({
           </button>
         ) : liveRoom && onVoiceJoin ? (
           <button
-            className={liveRoom.n ? 'button pane-call live' : 'button pane-call'}
+            className={cx('button pane-call', liveRoom.n && 'live')}
             data-testid="pane-join-voice"
             // Say "full" before the click rather than after. The join is
             // refused either way, but a disabled button with a reason is not
@@ -639,7 +640,7 @@ export default function Messages({
             <div className="msg-group" key={item.key}>
               <Seal name={item.sender} size={34} title={item.sender} />
               <div className="msg-head">
-                <span className={item.sender === me ? 'sender self' : 'sender'}>{item.sender}</span>
+                <span className={cx('sender', item.sender === me && 'self')}>{item.sender}</span>
                 {/* Two different claims, and they must not be confused.
                     `auth` is whether this line's own signature checked out
                     against the key the roster holds for its sender — a line

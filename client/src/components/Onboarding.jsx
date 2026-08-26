@@ -3,6 +3,7 @@ import { generateCode, wrapIdentity, unwrapIdentity } from '../lib/recovery.js';
 import { createLinkOffer, openSealed } from '../lib/link.js';
 import { QuorumGlyph, Key, Download, LinkGlyph, Copy, Check } from './icons.jsx';
 import Qr from './Qr.jsx';
+import { cx } from '../lib/cx.js';
 
 // The gate: brand panel on the left states the contract, the form on the
 // right performs it. Three ways in:
@@ -383,7 +384,7 @@ export default function Onboarding({ controller }) {
         <div className="card" data-testid="recovery-step">
           <h1>Save your recovery key</h1>
           <p className="muted lede">
-            This file plus this code gets your account back if this device is lost. The
+            This file plus this code gets your account back on any device. The
             server cannot reset it — it never sees your keys. (You can also add a passkey
             or password later, from inside.)
           </p>
@@ -463,13 +464,13 @@ export default function Onboarding({ controller }) {
         <p className="muted lede">Your identity is a keypair. Everything else follows from that.</p>
         <div className="tabs">
           <button
-            className={mode === 'create' ? 'tab active' : 'tab'}
+            className={cx('tab', mode === 'create' && 'active')}
             onClick={() => { setMode('create'); setError(null); }}
           >
             new identity
           </button>
           <button
-            className={mode === 'signin' ? 'tab active' : 'tab'}
+            className={cx('tab', mode === 'signin' && 'active')}
             data-testid="tab-signin"
             onClick={() => { setMode('signin'); setSigninKind(undefined); setError(null); }}
           >

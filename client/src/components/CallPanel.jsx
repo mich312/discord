@@ -2,6 +2,7 @@ import React from 'react';
 import Seal from './Seal.jsx';
 import VoiceMeter from './VoiceMeter.jsx';
 import { Phone, Screen, X, Mic, MicOff } from './icons.jsx';
+import { cx } from '../lib/cx.js';
 
 // The direct-call surface: an incoming ring to answer, an outgoing ring we're
 // placing, or the live 1:1 call itself. A direct call is an ad-hoc voice room
@@ -75,7 +76,7 @@ export default function CallPanel({ voice, me, stageOpen, onAccept, onDecline, o
         </ul>
         {onToggleMute && !voice.listenOnly && (
           <button
-            className={voice.muted ? 'call-btn muted-on' : 'call-btn'}
+            className={cx('call-btn', voice.muted && 'muted-on')}
             data-testid="call-mute"
             title={voice.muted ? 'unmute your mic (M)' : 'mute your mic (M)'}
             onClick={onToggleMute}

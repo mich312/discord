@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { Hash, Wave, Plus, Gear, Clock } from './icons.jsx';
+import { cx } from '../lib/cx.js';
 
 // The rooms of a circle, as a strip rather than a wall.
 //
@@ -55,7 +56,7 @@ export default function RoomStrip({
       <ul className="room-chips">
         <li>
           <button
-            className={onBoard ? 'room-chip active' : 'room-chip'}
+            className={cx('room-chip', onBoard && 'active')}
             // §7.9 — the class is decoration; this is the state.
             aria-current={onBoard ? 'page' : undefined}
             data-testid="channel-overview"
@@ -72,7 +73,7 @@ export default function RoomStrip({
           return (
             <li key={ch}>
               <button
-                className={here ? 'room-chip active' : 'room-chip'}
+                className={cx('room-chip', here && 'active')}
                 aria-current={here ? 'page' : undefined}
                 data-testid={`channel-${ch}`}
                 // The count belongs in the name, not only in a badge — the

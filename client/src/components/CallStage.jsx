@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import Seal from './Seal.jsx';
 import VoiceMeter from './VoiceMeter.jsx';
 import { Wave, X, Lock, Screen, Mic, MicOff, Camera, CameraOff } from './icons.jsx';
+import { cx } from '../lib/cx.js';
 
 function timeOf(ts) {
   return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
@@ -52,7 +53,7 @@ function CameraTile({ stream, name, mine }) {
   return (
     <video
       ref={ref}
-      className={mine ? 'bubble-cam mirror' : 'bubble-cam'}
+      className={cx('bubble-cam', mine && 'mirror')}
       autoPlay
       playsInline
       muted
@@ -125,7 +126,7 @@ export default function CallStage({
         <div className="stage-actions">
           {onToggleMute && !voice.listenOnly && (
             <button
-              className={voice.muted ? 'call-btn muted-on' : 'call-btn'}
+              className={cx('call-btn', voice.muted && 'muted-on')}
               title={voice.muted ? 'unmute your mic (M)' : 'mute your mic (M)'}
               data-testid="stage-mute"
               onClick={onToggleMute}
@@ -177,7 +178,7 @@ export default function CallStage({
               {sharing.map((name) => (
                 <button
                   key={name}
-                  className={name === shown ? 'sharer-pill active' : 'sharer-pill'}
+                  className={cx('sharer-pill', name === shown && 'active')}
                   data-testid={`sharer-pill-${name}`}
                   onClick={() => setFocus(name)}
                 >
@@ -187,7 +188,7 @@ export default function CallStage({
               ))}
             </div>
           )}
-          <ul className={shown ? 'stage-bubbles compact' : 'stage-bubbles'} data-testid="stage-bubbles">
+          <ul className={cx('stage-bubbles', shown && 'compact')} data-testid="stage-bubbles">
             {participants.map((p) => {
               const speaking = voice.speaking?.includes(p);
               const conn = p === me ? null : voice.connections[p];
@@ -195,7 +196,7 @@ export default function CallStage({
               return (
                 <li
                   key={p}
-                  className={speaking ? 'stage-bubble speaking' : 'stage-bubble'}
+                  className={cx('stage-bubble', speaking && 'speaking')}
                   data-testid={`stage-bubble-${p}`}
                   data-speaking={speaking ? 'true' : 'false'}
                 >
@@ -204,7 +205,7 @@ export default function CallStage({
                       hue. Not a live region: who is talking changes several
                       times a second and would be a firehose. */}
                   {speaking && <span className="sr-only">{p} is speaking</span>}
-                  <span className={camStream ? 'bubble-seal has-cam' : 'bubble-seal'}>
+                  <span className={cx('bubble-seal', camStream && 'has-cam')}>
                     {camStream ? (
                       <CameraTile stream={camStream} name={p} mine={p === me} />
                     ) : (
@@ -257,7 +258,7 @@ export default function CallStage({
               ) : (
                 <div className="stage-chat-line" key={i}>
                   <Seal name={m.sender} size={18} title={m.sender} />
-                  <span className={m.sender === me ? 'sender self' : 'sender'}>{m.sender}</span>
+                  <span className={cx('sender', m.sender === me && 'self')}>{m.sender}</span>
                   <span className="text">
                     {m.file ? `sent a file: ${m.file.name}` : m.game ? `opened ${m.game.name}` : m.text}
                   </span>

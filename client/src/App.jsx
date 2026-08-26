@@ -658,9 +658,9 @@ export default function App() {
           .then(() => openStage())
           .catch((e) => dispatch({ type: 'toast', text: `call: ${e.message}` }));
       }}
-      onAdd={(user) =>
+      onPropose={(user) =>
         controllerRef.current
-          .addMember(server, user)
+          .proposeMember(server, user)
           .catch((e) => dispatch({ type: 'toast', text: e.message }))
       }
       onSetRole={(user, role) =>
@@ -673,24 +673,7 @@ export default function App() {
           .removeMember(server, user)
           .catch((e) => dispatch({ type: 'toast', text: `remove: ${e.message}` }))
       }
-      onMember={async (peer) => {
-        try {
-          const number = await controllerRef.current.safetyNumber(server, peer);
-          dispatch({
-            type: 'modal',
-            modal: {
-              type: 'safety',
-              server,
-              peer,
-              number,
-              verified: (activeServer.verified ?? []).includes(peer),
-              mismatched: !!activeServer.mismatched?.[peer],
-            },
-          });
-        } catch (e) {
-          dispatch({ type: 'toast', text: e.message });
-        }
-      }}
+      onMember={(peer) => openSafety(server, peer)}
     />
 
   ) : null;
@@ -748,6 +731,17 @@ export default function App() {
       : []),
     ...(state.globalAdmin
       ? [{ id: 'act:admin', label: 'relay admin overview', hint: 'action', glyph: <ShieldCheck />, run: openAdminOverview }]
+      : []),
+    ...(activeServer
+      ? [
+          {
+            id: 'act:circle',
+            label: `${activeServer.name} — circle settings`,
+            hint: 'action',
+            glyph: <Gear />,
+            run: openCircleSettings,
+          },
+        ]
       : []),
     { id: 'act:settings', label: 'open settings', hint: 'action', glyph: <Gear />, run: openSettings },
     { id: 'act:identity', label: 'show identity key', hint: 'action', glyph: <Key />, run: openIdentity },
