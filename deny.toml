@@ -55,6 +55,15 @@ unmaintained = "workspace"
 #     unreachable from the environment this was assessed in (blocked by the
 #     org egress policy), so it has NOT been confirmed.
 #
+# A THIRD, same shape: GHSA-hc3c-63hc-2r9f against libcrux-chacha20poly1305
+# 0.0.7 — `encrypt` panics when handed a ciphertext buffer longer than
+# ptxt.len() + TAG_LEN. It arrives as openmls_rust_crypto 0.4 -> hpke-rs 0.6.1
+# -> hpke-rs-libcrux -> libcrux-aead 0.0.7, which pins it to ^0.0.7; the fix is
+# 0.0.8 and is only reachable through libcrux-aead 0.0.8, i.e. hpke-rs 0.7+
+# and openmls_rust_crypto 0.6 — an OpenMLS major upgrade, not a lockfile bump.
+# Availability at worst, and quorum's ciphersuite seals with AES-GCM, not
+# ChaCha20-Poly1305; hpke-rs sizes that buffer itself in any case.
+#
 # So the supply-chain job stays non-blocking, but for a weaker reason than
 # before: not "assessed unreachable" — "unresolved, with the assessment
 # still owed". The `cargo tree` evidence step in ci.yml prints the
