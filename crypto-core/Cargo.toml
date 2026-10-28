@@ -10,18 +10,26 @@ crate-type = ["cdylib", "rlib"]
 
 [dependencies]
 argon2 = "0.5"
-openmls = "0.7"
-openmls_rust_crypto = "0.4"
-openmls_traits = "0.4"
-openmls_basic_credential = "0.4"
-tls_codec = "0.4"
+openmls = "0.9.2"
+openmls_rust_crypto = "0.6"
+openmls_traits = "0.6"
+openmls_basic_credential = "0.6"
+tls_codec = "0.5"
 serde = { version = "1", features = ["derive"] }
 serde_json = "1"
 sha2 = "0.10"
 thiserror = "2"
 
 [target.'cfg(target_arch = "wasm32")'.dependencies]
-openmls = { version = "0.7", features = ["js"] }
+openmls = { version = "0.9.2", features = ["js"] }
+# openmls_basic_credential 0.6 (identity key generation, OsRng) and
+# openmls_rust_crypto 0.6 (seeding the provider's ChaCha20 RNG,
+# from_entropy) still draw entropy through rand_core 0.6 -> getrandom 0.2.
+# Up to openmls 0.7 its `js` feature switched that getrandom to the browser's
+# crypto.getRandomValues; from 0.9 `js` only covers getrandom 0.4, so it is
+# named here directly. Without it the wasm build fails to compile rather than
+# running without an entropy source.
+getrandom_02 = { package = "getrandom", version = "0.2", features = ["js"] }
 wasm-bindgen = "0.2"
 serde-wasm-bindgen = "0.6"
 

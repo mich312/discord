@@ -40,16 +40,11 @@ remains open.
    real options and a recommendation are in §0.7 below.
 2. **Commissioning the cryptographic review and penetration test.** Phase 7
    prepared the materials; engaging a firm needs a human and a budget.
-3. **`libcrux-sha3` (RUSTSEC-2026-0207 and -0208).** Blocked upstream:
-   `hpke-rs` pins `^0.0.8`. An earlier note here and in `deny.toml` called
-   these unreachable "because libcrux arrives through post-quantum support";
-   `cargo tree -e features` in CI shows the opposite — `libcrux-sha3` is an
-   unconditional dependency of `hpke-rs` itself and `hpke-rs-libcrux` is not
-   activated at all. The claim is withdrawn. Settling it means reading
-   `hpke-rs` 0.6.1 to see whether it squeezes a SHAKE XOF on our classical
-   path; -0207 is silently wrong output rather than a panic, so it is worth
-   an hour of somebody's time. Only the cargo-deny advisories *step* is
-   tolerated — the supply-chain job itself blocks again.
+3. ~~**`libcrux-sha3` (RUSTSEC-2026-0207 and -0208).**~~ Fixed by the
+   OpenMLS 0.9.2 upgrade (hpke-rs 0.7, libcrux-sha3 0.0.10), which also
+   cleared GHSA-hc3c-63hc-2r9f and RUSTSEC-2026-0212. The cargo-deny
+   advisories *step* is still tolerated for the unrelated advisories listed
+   in `deny.toml`.
 
 ### Next, in order
 
