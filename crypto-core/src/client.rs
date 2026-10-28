@@ -12,7 +12,7 @@ use openmls_traits::crypto::OpenMlsCrypto;
 use openmls_traits::signatures::Signer;
 use serde::{Deserialize, Serialize};
 use std::collections::HashMap;
-use tls_codec::{Deserialize as TlsDeserialize, Serialize as TlsSerialize};
+use ::tls_codec::{Deserialize as TlsDeserialize, Serialize as TlsSerialize};
 
 const CIPHERSUITE: Ciphersuite = Ciphersuite::MLS_128_DHKEMX25519_AES128GCM_SHA256_Ed25519;
 
@@ -635,6 +635,19 @@ impl ChatClient {
                     .map_err(CoreError::mls)?;
                 let epoch = group.epoch().as_u64();
                 Ok(Event::ProposalStored { group: id, epoch })
+            }
+            // OpenMLS 0.9 reports our own messages fanned back by the relay
+            // as successes; 0.7 rejected them. Both stay errors here, because
+            // the controller reads a successful decrypt as proof that the
+            // ratchet is still shared with the sender (it clears fork
+            // suspicion), and neither of these proves that. Merging our own
+            // staged commit remains `merge_staged_commit`'s job, driven by the
+            // relay's ack — never by an echo.
+            ProcessedMessageContent::OwnPendingCommit => {
+                Err(CoreError::Mls("own pending commit echoed back".into()))
+            }
+            ProcessedMessageContent::OwnPrivateMessage => {
+                Err(CoreError::Mls("cannot decrypt own message".into()))
             }
         }
     }

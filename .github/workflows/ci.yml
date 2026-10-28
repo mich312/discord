@@ -91,11 +91,10 @@ jobs:
       # tree has never been audited on either axis, so failing on them now
       # would be red for reasons unrelated to the change under review. Same
       # staging as clippy above.
-      # Tolerated at the STEP, not the job: the two outstanding libcrux-sha3
-      # advisories cannot be fixed from this repository (hpke-rs pins ^0.0.8)
-      # and the reasoning — including what is and is not established about
-      # reachability — is in deny.toml. Findings stay visible in the log on
-      # every run. Drop this line once the upstream bump lands.
+      # Tolerated at the STEP, not the job. The libcrux advisories this was
+      # first added for are fixed (OpenMLS 0.9.2); what still fails it is
+      # listed in deny.toml. Findings stay visible in the log on every run.
+      # Drop this line once that list is empty.
       - name: cargo-deny advisories and sources (tolerated, see deny.toml)
         continue-on-error: true
         uses: EmbarkStudios/cargo-deny-action@v2
@@ -107,20 +106,6 @@ jobs:
         uses: EmbarkStudios/cargo-deny-action@v2
         with:
           command: check licenses bans
-
-      # Evidence for the two outstanding libcrux-sha3 advisories, printed on
-      # every run so the exception argument in deny.toml can be checked
-      # against the resolver rather than taken on trust. `-e features` is the
-      # point: it shows which feature actually pulls the crate in, which a
-      # plain lockfile read cannot — and misreading exactly that is how the
-      # earlier version of that argument went wrong. Never blocking; this
-      # step exists to inform a decision, not to gate one.
-      - name: why is libcrux-sha3 in the tree (evidence, advisory)
-        continue-on-error: true
-        run: |
-          cargo tree -i libcrux-sha3 -e features || true
-          echo '--- forward, from hpke-rs ---'
-          cargo tree -p hpke-rs -e features --depth 1 || true
 
       - uses: actions/setup-node@v4
         with:
