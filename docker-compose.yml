@@ -31,6 +31,12 @@ services:
       # Invite-only registration is the default (first user bootstraps);
       # set OPEN_REGISTRATION=1 to let anyone create an account.
       OPEN_REGISTRATION: ${OPEN_REGISTRATION:-}
+      # Comma-separated handles that are global admins: they can list every
+      # account and circle on this relay and delete any circle. Metadata
+      # only — they cannot read a message. The relay has always read this
+      # variable; it was never passed through here, so on a compose
+      # deployment there was no way to turn it on.
+      RELAY_ADMINS: ${RELAY_ADMINS:-}
       # Voice ICE servers (JSON array of RTCIceServer). The default public STUN
       # only traverses cone NATs — supply your own TURN for calls to work
       # across restrictive networks (TURN relays ciphertext only). Example:

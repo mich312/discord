@@ -2057,3 +2057,23 @@ test('a write the relay cannot take yet waits for a load instead of spinning', a
   assert.equal(c.backupDirty, true, 'still owed');
   assert.ok(c.db.kv.get('pendingCircles')?.servers?.length, 'and still written down on the device');
 });
+
+test('a global admin can purge a circle by id, whether or not this device holds it', async () => {
+  const sent = [];
+  const { c } = makeController({ relayHandler: (msg) => (sent.push(msg), Promise.resolve({ seq: 1 })) });
+  c.db = memoryDb();
+  // One this account is in, and one it has never seen.
+  c.servers.set('mine', record({ id: 'mine', name: 'Mine' }));
+  c.mlsGroups = new Set(['mine']);
+  await c.adminDeleteGroup('someone-elses');
+  await c.adminDeleteGroup('mine');
+  assert.deepEqual(
+    sent.filter((m) => m.t === 'delete_group').map((m) => m.group),
+    ['someone-elses', 'mine']
+  );
+  assert.ok(!c.servers.has('mine'), 'its own copy goes with it');
+  // No MLS removal is attempted: there may be no working ratchet to do it
+  // with, which is the situation this exists for.
+  assert.ok(!sent.some((m) => m.t === 'send'));
+  clearTimeout(c.backupTimer);
+});

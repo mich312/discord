@@ -578,7 +578,17 @@ export class Controller {
             // undecryptable blobs with nothing new to say.
             this.relay
               .request({ t: 'subscribe', group: record.id, after: Number.MAX_SAFE_INTEGER })
-              .catch((e) => console.warn(`subscribe (read-only) ${record.id}: ${e.message}`));
+              .catch((e) => {
+                // Same as below: a circle that is gone, or that this account
+                // is no longer in, is forgotten rather than kept as a ghost
+                // that can be read and never updated.
+                if (/not a member|no such group/i.test(e.message)) {
+                  this.toast(`you no longer have access to "${record.name}"`);
+                  this.forgetServerLocal(record.id).catch(() => {});
+                } else {
+                  console.warn(`subscribe (read-only) ${record.id}: ${e.message}`);
+                }
+              });
             continue;
           }
           const sub = await this.relay
@@ -2863,6 +2873,24 @@ export class Controller {
       Metadata only — the relay cannot read names or messages. */
   adminList() {
     return this.relay.request({ t: 'admin_list' });
+  }
+
+  /**
+   * Global admin: purge a circle from the relay — its roster, its log, its
+   * history and its invites.
+   *
+   * This is the way out for a circle nobody can use: one from before a
+   * storage change, one whose only admin is gone, one no device can open.
+   * The ordinary delete needs somebody who can open the circle; this needs
+   * only its id. It skips the MLS half on purpose — there may be no working
+   * ratchet to remove anyone with, which is the situation it exists for.
+   * Members' devices drop the circle the next time they connect and are
+   * told it is gone.
+   */
+  async adminDeleteGroup(group) {
+    await this.relay.request({ t: 'delete_group', group });
+    // If it is one of this account's own, forget it here as well.
+    if (this.servers.has(group)) await this.forgetServerLocal(group);
   }
 
   // === circles on the relay ===============================================

@@ -6,6 +6,7 @@
 //   B. the same account open in two tabs
 //   C. the same account on several devices, all of them sending
 //   D. more than one circle: getting to the list of them, and staying there
+//   E. a global admin deleting a circle that nobody can open any more
 //
 // `run.mjs` walks one long happy path with one tab per person. These are
 // short, independent, and about what ordinary use does to that path. Every
@@ -284,11 +285,54 @@ try {
 }
 
 await stack.stop().catch(() => {});
+
+// -------------------------------------------------------------------- E --
+// Its own relay: a global admin is a deployment setting (RELAY_ADMINS).
+if (!crashed) {
+  const admin = await startStack(Number(process.env.E2E_PORT ?? 9710) + 1, { RELAY_ADMINS: 'root' });
+  try {
+    t.section('E. a global admin clears out a circle nobody can use');
+    const amy = (await admin.device('amy5')).page;
+    const root = (await admin.device('root')).page;
+    await onboard(amy, admin.base, 'amy');
+    await createCircle(amy, 'Stuck Circle');
+    await say(amy, 'something said in it');
+    await onboard(root, admin.base, 'root');
+
+    // root is not in the circle and never was: the relay's overview is the
+    // only place it appears for them, by id.
+    await root.keyboard.press('Control+k');
+    await root.waitForSelector('.palette-input');
+    await root.fill('.palette-input', 'relay admin');
+    await root.keyboard.press('Enter');
+    const row = root.locator('[data-testid^=admin-delete-stuck-circle]');
+    t.check('the overview lists a circle the admin is not in', await row.waitFor({ timeout: 10000 }).then(() => true, () => false));
+    root.once('dialog', (d) => d.accept());
+    await row.click();
+    t.check('deleting it removes it from the relay', await row.waitFor({ state: 'detached', timeout: 10000 }).then(() => true, () => false));
+
+    await amy.reload();
+    t.check(
+      'its members’ devices drop it the next time they connect',
+      await amy.waitForSelector('[data-testid=circles-home]', { timeout: 20000 }).then(() => true, () => false)
+    );
+    t.check('…and say why', await sees(amy, 'you no longer have access', 8000));
+    // Not for everyone: amy has no such entry in her palette.
+    await amy.keyboard.press('Control+k');
+    await amy.waitForSelector('.palette-input');
+    await amy.fill('.palette-input', 'relay admin');
+    await amy.waitForTimeout(400);
+    t.check('someone who is not a global admin is not offered the overview', (await amy.locator('text=relay admin overview').count()) === 0);
+  } catch (e) {
+    crashed = e;
+  }
+  await admin.stop().catch(() => {});
+}
 const failed = t.failed();
 if (crashed) console.error(`\nstopped early: ${crashed.message}`);
 if (failed.length || crashed) {
   console.error(`\nFAIL: ${failed.length} expectation(s) did not hold${failed.length ? ':\n  - ' + failed.join('\n  - ') : ''}`);
   process.exit(1);
 }
-console.log('\nPASS: reloads at bad moments, two tabs, several devices, several circles');
+console.log('\nPASS: reloads at bad moments, two tabs, several devices, several circles, admin clean-up');
 process.exit(0);

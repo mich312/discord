@@ -30,6 +30,7 @@ export default function Modal({
   onSetThreshold,
   onLeaveServer,
   onDeleteServer,
+  onAdminDeleteGroup,
   onLogout,
   onLinkSend,
   onEnrollDevice,
@@ -400,11 +401,32 @@ export default function Modal({
               <span className="overline">groups</span>
               <span className="member-count">{modal.groups.length}</span>
             </div>
+            <p className="fineprint muted">
+              Deleting a circle here purges it from the relay — roster, messages and
+              invites — for everyone in it, whether or not anyone can still open it.
+              Their devices drop it the next time they connect. This can&rsquo;t be undone.
+            </p>
             <ul className="member-list" data-testid="admin-groups">
               {modal.groups.map((g) => (
-                <li key={g.group} className="member">
-                  <span className="member-name">{g.group}</span>
+                <li key={g.group} className="member" data-testid={`admin-group-${g.group}`}>
+                  <span className="member-name">
+                    {modal.names?.[g.group] ? `${modal.names[g.group]} · ${g.group}` : g.group}
+                  </span>
                   <span className="tag muted">created by {g.created_by}</span>
+                  <button
+                    className="ghost member-remove danger"
+                    data-testid={`admin-delete-${g.group}`}
+                    title={`delete ${g.group} for everyone`}
+                    disabled={busy}
+                    onClick={() => {
+                      const ok = window.confirm(
+                        `Delete "${modal.names?.[g.group] ?? g.group}" for everyone in it? This can't be undone.`
+                      );
+                      if (ok) attempt(() => onAdminDeleteGroup(g.group));
+                    }}
+                  >
+                    delete
+                  </button>
                 </li>
               ))}
             </ul>

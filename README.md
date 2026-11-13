@@ -262,7 +262,7 @@ relay).
 | `STUN_URLS` | unset | comma-separated STUN URLs, merged into the served ICE list. An alternative to the public-STUN default when you run your own |
 | `RUST_LOG` | unset | standard `tracing` filter, e.g. `relay=debug`. The relay logs connect/disconnect at info and subscribe at debug |
 | `RP_ID` / `RP_ORIGIN` | `localhost` / `http://localhost:9601` | WebAuthn relying party — must match the origin users load the client from |
-| `RELAY_ADMINS` | unset | comma-separated handles treated as global admins: they can manage any group's ACL/roles and list all users/groups — metadata only, they cannot read messages |
+| `RELAY_ADMINS` | unset | comma-separated handles treated as global admins: they can manage any group's ACL/roles, list all users/groups, and delete any circle from the relay — including one nobody can open any more (command palette → "relay admin overview"). Metadata only, they cannot read messages. `docker-compose.yml` passes it through from `deploy/.env` |
 | `BLOB_TTL_DAYS` | unset | unset/`0` = attachments are kept forever (the default). Set to a whole number of days to delete attachment blobs older than that. Age-based by necessity: the blob id lives inside the encrypted message referring to it, so the relay cannot know which blobs are still wanted. **Set it above your longest kept-history retention**, or an attachment can 404 while its message is still readable |
 | `METRICS_TOKEN` | unset | unset = `/metrics` returns 404 and no metrics are served at all. Set it to enable a Prometheus scrape at `/metrics`, authenticated with `Authorization: Bearer <token>`. Treat it as a secret: the metrics are pure metadata — online counts, circle counts, message rates — which is exactly what the relay is otherwise the only party to see |
 

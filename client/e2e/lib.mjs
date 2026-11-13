@@ -11,7 +11,7 @@ import { chromium } from 'playwright';
 const here = (p) => fileURLToPath(new URL(p, import.meta.url));
 
 /** Start a relay on `port` serving the built client, and a browser. */
-export async function startStack(port) {
+export async function startStack(port, env = {}) {
   const relayBin = here('../../target/debug/relay');
   const clientDir = here('../dist');
   if (!existsSync(relayBin)) throw new Error('relay binary missing — run: cargo build -p relay');
@@ -27,6 +27,7 @@ export async function startStack(port) {
       // These journeys create identities directly; the invite-only gate has
       // its own relay-level tests.
       OPEN_REGISTRATION: '1',
+      ...env,
     },
   });
   process.on('exit', () => relay.kill());
