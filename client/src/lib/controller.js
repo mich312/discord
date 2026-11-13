@@ -290,6 +290,9 @@ export class Controller {
   // === boot paths =========================================================
 
   async boot() {
+    // A sign-up that never reached the relay (made offline, or the tab was
+    // closed first) is still a sign-up after a reload.
+    this.registering = (await this.db.kvGet('registering')) === true;
     const session = await this.db.kvGet('session');
     const state = session ? await this.db.kvGet('mlsState') : null;
     if (session && state) {
@@ -316,7 +319,9 @@ export class Controller {
     // wiped state), but the user is still themselves.
     const storedIdentity = localStorage.getItem(IDENTITY_LS_KEY);
     if (storedIdentity) {
-      await this.restoreIdentity(b64.dec(storedIdentity));
+      // Nobody asked for this — it is the app recovering by itself — so it
+      // is not a request to create an account.
+      await this.restoreIdentity(b64.dec(storedIdentity), { explicit: false });
       await this.completeOnboarding();
       this.toast(
         'storage was cleared: your identity and your circles survived, but this device cannot send until someone re-adds you'
@@ -333,6 +338,14 @@ export class Controller {
     this.me = result.name;
     this.mlsGroups = new Set(result.groups ?? []);
     await this.persistState(result.state);
+    // A new account starts with nothing: whatever an earlier account on
+    // this device left staged or remembered is not this one's.
+    this.deviceState = {};
+    this.pendingCarry = null;
+    this.pendingLeft.clear();
+    await this.db.kvPut('deviceState', {});
+    await this.db.kvPut('pendingCircles', null);
+    await this.markRegistering(true);
     const identity = new Uint8Array(await this.crypto('exportIdentity'));
     localStorage.setItem(IDENTITY_LS_KEY, b64.enc(identity));
     return identity;
@@ -340,15 +353,37 @@ export class Controller {
 
   /** Onboarding path B: restore from an identity bundle (recovery file or
       pasted key). */
-  async restoreIdentity(identity) {
+  async restoreIdentity(identity, { explicit = true } = {}) {
     const result = await this.crypto('boot', { identity });
     this.me = result.name;
+    // Somebody restoring an identity by hand means for it to exist on this
+    // relay — on a new deployment that is how an account is brought over.
+    if (explicit) await this.markRegistering(true);
     // An identity-only restore carries no ratchets by design, so this is
     // empty and every circle loads read-only until a re-add — which is the
     // true answer here, unlike the stored flag it replaces.
     this.mlsGroups = new Set(result.groups ?? []);
     await this.persistState(result.state);
     localStorage.setItem(IDENTITY_LS_KEY, b64.enc(identity));
+  }
+
+  /**
+   * Whether the next connection may create this account on the relay.
+   *
+   * True from the moment a person makes or restores an identity in the
+   * onboarding screen until the relay has accepted it once; false for every
+   * connection after that. Written down, because the first connection can
+   * fail and the page can reload before it succeeds.
+   *
+   * It exists because registering used to be something a connection did by
+   * itself whenever the relay did not know its handle. A tab left open
+   * across a database reset reconnected, was not recognised, and signed
+   * itself up again — taking an empty relay's one invite-free account before
+   * its owner had opened the sign-up screen.
+   */
+  async markRegistering(on) {
+    this.registering = on;
+    await this.db?.kvPut?.('registering', on);
   }
 
   /** The raw identity key as a copyable string. Anyone holding it IS this
@@ -507,6 +542,7 @@ export class Controller {
       // carries a usable invite id (link joiners have one pending).
       getInvite: () => this.pendingInvite?.id ?? null,
       getDevice: () => this.deviceName(),
+      getRegister: () => this.registering === true,
       onAuthError: (message) => {
         this.onAuthRejected(message).catch((e) => console.warn(`auth rejection: ${e.message}`));
       },
@@ -527,6 +563,15 @@ export class Controller {
       await this.db.kvPut('session', null);
       this.me = null;
     }
+    // The relay has no such account: it was reset, or this session belongs
+    // to a different deployment. Nothing is wiped — the identity may be the
+    // only copy of a key somebody still wants — but the session is over, so
+    // the gate is where this goes, saying why. Signing up or restoring from
+    // there is the explicit act that creates an account.
+    if (/unknown account/.test(message)) {
+      const who = this.me ? `"${this.me}"` : 'this device';
+      message = `this server has no account for ${who} — it may have been reset. Create the account again, or restore it from its recovery file.`;
+    }
     this.authError = message;
     this.dispatch({ type: 'phase', phase: 'onboarding' });
   }
@@ -546,6 +591,9 @@ export class Controller {
   async onRelayEvent(msg) {
     switch (msg.t) {
       case 'ready': {
+        // The account exists here now, however it came to. From this point
+        // on a connection is a reconnection.
+        if (this.registering) await this.markRegistering(false);
         // Whether the relay treats us as a global admin (RELAY_ADMINS).
         this.globalAdmin = !!msg.global_admin;
         this.dispatch({ type: 'admin', globalAdmin: this.globalAdmin });

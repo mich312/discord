@@ -16,22 +16,34 @@ export async function startStack(port, env = {}) {
   const clientDir = here('../dist');
   if (!existsSync(relayBin)) throw new Error('relay binary missing — run: cargo build -p relay');
   if (!existsSync(clientDir)) throw new Error('client build missing — run: npm run build');
-  const relay = spawn(relayBin, [], {
-    stdio: process.env.E2E_RELAY_LOG ? 'inherit' : 'ignore',
-    env: {
-      ...process.env,
-      RELAY_PORT: port,
-      CLIENT_DIR: clientDir,
-      RP_ID: 'localhost',
-      RP_ORIGIN: `http://localhost:${port}`,
-      // These journeys create identities directly; the invite-only gate has
-      // its own relay-level tests.
-      OPEN_REGISTRATION: '1',
-      ...env,
-    },
-  });
-  process.on('exit', () => relay.kill());
-  await new Promise((r) => setTimeout(r, 800)); // let it bind
+  let relay = null;
+  const startRelay = async () => {
+    relay = spawn(relayBin, [], {
+      stdio: process.env.E2E_RELAY_LOG ? 'inherit' : 'ignore',
+      env: {
+        ...process.env,
+        RELAY_PORT: port,
+        CLIENT_DIR: clientDir,
+        RP_ID: 'localhost',
+        RP_ORIGIN: `http://localhost:${port}`,
+        // These journeys create identities directly; the invite-only gate has
+        // its own relay-level tests.
+        OPEN_REGISTRATION: '1',
+        ...env,
+      },
+    });
+    await new Promise((r) => setTimeout(r, 800)); // let it bind
+  };
+  process.on('exit', () => relay?.kill());
+  await startRelay();
+  /** Stop the relay and start a new one on the same port. With the
+      in-memory store that is a relay whose database was wiped. */
+  const restartRelay = async () => {
+    const gone = new Promise((r) => relay.once('exit', r));
+    relay.kill();
+    await gone;
+    await startRelay();
+  };
   const browser = await chromium.launch({
     ...(process.env.CHROMIUM_PATH ? { executablePath: process.env.CHROMIUM_PATH } : {}),
     args: ['--use-fake-ui-for-media-capture', '--use-fake-device-for-media-capture'],
@@ -62,7 +74,7 @@ export async function startStack(port, env = {}) {
     return { label, context, page: watch(await context.newPage()), newTab: async () => watch(await context.newPage()) };
   }
 
-  return { base, browser, device, stop: () => browser.close().then(() => relay.kill()) };
+  return { base, browser, device, restartRelay, stop: () => browser.close().then(() => relay.kill()) };
 }
 
 export async function onboard(page, base, handle) {

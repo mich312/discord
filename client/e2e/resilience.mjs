@@ -7,6 +7,7 @@
 //   C. the same account on several devices, all of them sending
 //   D. more than one circle: getting to the list of them, and staying there
 //   E. a global admin deleting a circle that nobody can open any more
+//   F. the relay's database reset while a session is still open
 //
 // `run.mjs` walks one long happy path with one tab per person. These are
 // short, independent, and about what ordinary use does to that path. Every
@@ -328,11 +329,45 @@ if (!crashed) {
   }
   await admin.stop().catch(() => {});
 }
+
+// -------------------------------------------------------------------- F --
+// Its own relay again, invite-only as deployed, and restarted mid-test: the
+// in-memory store makes a restart the same thing as a database reset.
+if (!crashed) {
+  const port = Number(process.env.E2E_PORT ?? 9710) + 2;
+  const wiped = await startStack(port, { OPEN_REGISTRATION: '' });
+  const users = async () => (await (await fetch(`${wiped.base}healthz`)).json()).users;
+  try {
+    t.section('F. the relay is reset while a session is still open');
+    const old = (await wiped.device('old-session')).page;
+    await onboard(old, wiped.base, 'michael');
+    t.check('the first account on an empty relay needs no invite', (await users()) === 1);
+
+    await wiped.restartRelay();
+    // The open tab reconnects by itself. It used to be signed up again on
+    // the spot — taking the empty relay's one invite-free account.
+    t.check(
+      'the old session is told its account is gone, and sent to the gate',
+      await old.waitForSelector('text=has no account for', { timeout: 30000 }).then(() => true, () => false)
+    );
+    t.check('…and it did not register itself', (await users()) === 0);
+
+    const owner = (await wiped.device('owner')).page;
+    await onboard(owner, wiped.base, 'owner');
+    t.check('so the first account is still there for whoever signs up', (await users()) === 1);
+    await createCircle(owner, 'Fresh Start');
+    await say(owner, 'first line on the new relay');
+    t.check('…and it works', true);
+  } catch (e) {
+    crashed = e;
+  }
+  await wiped.stop().catch(() => {});
+}
 const failed = t.failed();
 if (crashed) console.error(`\nstopped early: ${crashed.message}`);
 if (failed.length || crashed) {
   console.error(`\nFAIL: ${failed.length} expectation(s) did not hold${failed.length ? ':\n  - ' + failed.join('\n  - ') : ''}`);
   process.exit(1);
 }
-console.log('\nPASS: reloads at bad moments, two tabs, several devices, several circles, admin clean-up');
+console.log('\nPASS: reloads at bad moments, two tabs, several devices, several circles, admin clean-up, a relay reset');
 process.exit(0);

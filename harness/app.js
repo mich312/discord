@@ -122,7 +122,7 @@ const ready = new Promise((resolve) => {
 ws.onopen = async () => {
   await mls('init', { name: NAME });
   const pubkey = await mls('pubkey');
-  ws.send(JSON.stringify({ t: 'hello', user: NAME, pubkey: b64.enc(pubkey) }));
+  ws.send(JSON.stringify({ t: 'hello', user: NAME, register: true, pubkey: b64.enc(pubkey) }));
   await ready;
   log('system', `authenticated as ${NAME}`);
 

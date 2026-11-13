@@ -33,6 +33,7 @@ export class Relay {
    *          sign: (bytes: Uint8Array) => Promise<Uint8Array>,
    *          getInvite?: () => string|null,
    *          getDevice?: () => Promise<string|null>,
+   *          getRegister?: () => boolean,
    *          onAuthError?: (message: string) => void,
    *          onEvent: (msg: any) => void,
    *          onStatus: (status: 'online'|'offline'|'connecting') => void}} opts
@@ -68,6 +69,12 @@ export class Relay {
           user: this.opts.name,
           pubkey: b64.enc(pubkey),
           device,
+          // "Create this account if it does not exist" — true only while a
+          // person's sign-up or restore is still waiting for its first
+          // connection. A session that is merely reconnecting never asks,
+          // so a relay that no longer knows it refuses instead of quietly
+          // signing it up again. Must match relay/src/proto.rs.
+          register: this.opts.getRegister?.() === true,
           invite,
           v: PROTOCOL_VERSION,
         })

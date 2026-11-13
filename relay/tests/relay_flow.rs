@@ -101,6 +101,7 @@ impl TestClient {
         client
             .send_raw(json!({
                 "t": "hello",
+                "register": true,
                 "user": name,
                 "pubkey": B64.encode(client.mls.signature_public_key()),
                 "invite": invite,
@@ -1567,7 +1568,7 @@ impl TestClient {
         };
         client
             .send_raw(json!({
-                "t": "hello", "user": name, "device": device,
+                "t": "hello", "user": name, "device": device, "register": true,
                 "pubkey": B64.encode(client.mls.signature_public_key()),
             }))
             .await;
@@ -1684,4 +1685,61 @@ async fn an_addressed_welcome_reaches_only_its_device_and_waits_for_it() {
         .await;
     phone.recv_until(|m| m["t"] == "welcome").await;
     laptop.expect_none("welcome").await;
+}
+
+// --- registering is something a person does ----------------------------------
+
+impl TestClient {
+    /// The handshake a session sends when it is only reconnecting: no
+    /// `register`. Returns the relay's first reply after the auth frame.
+    async fn reconnect_only(addr: SocketAddr, mls: &ChatClient, name: &str) -> Value {
+        let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/ws")).await.unwrap();
+        let hello = json!({"t": "hello", "user": name, "pubkey": B64.encode(mls.signature_public_key())});
+        ws.send(Message::Text(hello.to_string())).await.unwrap();
+        async fn next(ws: &mut WebSocketStream<MaybeTlsStream<TcpStream>>) -> Value {
+            match ws.next().await {
+                Some(Ok(Message::Text(t))) => serde_json::from_str::<Value>(&t).unwrap(),
+                other => panic!("expected a text frame, got {other:?}"),
+            }
+        }
+        let challenge = next(&mut ws).await;
+        let nonce = B64.decode(challenge["nonce"].as_str().unwrap()).unwrap();
+        let mut signed = b"relay-auth-v2".to_vec();
+        signed.extend_from_slice(&nonce);
+        signed.extend_from_slice(&(name.len() as u32).to_be_bytes());
+        signed.extend_from_slice(name.as_bytes());
+        let sig = mls.sign(&signed).unwrap();
+        ws.send(Message::Text(json!({"t": "auth", "sig": B64.encode(sig)}).to_string())).await.unwrap();
+        next(&mut ws).await
+    }
+}
+
+#[tokio::test]
+async fn a_reconnecting_session_cannot_take_an_empty_relays_first_account() {
+    // What happened on a real deployment: the database was reset, and a tab
+    // left open on the old one reconnected twelve seconds later. Not being
+    // recognised, it was registered — as the invite-free first account.
+    let (addr, app) = spawn_relay_parts(false, &[]).await;
+    let stale = ChatClient::new("michael").unwrap();
+    let reply = TestClient::reconnect_only(addr, &stale, "michael").await;
+    assert_eq!(reply["t"], "error", "{reply}");
+    assert!(reply["message"].as_str().unwrap().contains("unknown account"), "{reply}");
+    assert_eq!(app.store.user_count().await.unwrap(), 0, "nothing was created");
+
+    // The slot is still there for the person who actually signs up…
+    let owner = TestClient::connect(addr, ChatClient::new("michael").unwrap(), "michael").await;
+    assert!(owner.is_ok(), "the first real sign-up is still invite-free");
+    assert_eq!(app.store.user_count().await.unwrap(), 1);
+    // …and after it, a stranger with no invite is told the relay is
+    // invite-only, which is a different refusal from "unknown account".
+    let err = TestClient::connect(addr, ChatClient::new("eve").unwrap(), "eve").await.err().unwrap();
+    assert!(err.contains("invite-only"), "{err}");
+}
+
+#[tokio::test]
+async fn a_known_account_reconnects_without_asking_to_register() {
+    let addr = spawn_relay().await;
+    let alice = TestClient::connect(addr, ChatClient::new("alice").unwrap(), "alice").await.unwrap();
+    let reply = TestClient::reconnect_only(addr, &alice.mls, "alice").await;
+    assert_eq!(reply["t"], "ready", "{reply}");
 }

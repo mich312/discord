@@ -393,14 +393,14 @@ fn clean_device_id(device: Option<String>) -> String {
 /// device id the connection gave ("" if none).
 async fn authenticate(socket: &mut WebSocket, app: &App) -> Option<(String, String)> {
     let hello = next_text(socket).await?;
-    let (user, claimed_key, invite, device) = match serde_json::from_str::<ClientMsg>(&hello) {
-        Ok(ClientMsg::Hello { user, pubkey, invite, device, v }) => {
+    let (user, claimed_key, invite, device, register) = match serde_json::from_str::<ClientMsg>(&hello) {
+        Ok(ClientMsg::Hello { user, pubkey, invite, device, register, v }) => {
             if let Some(v) = v {
                 if v != PROTOCOL_VERSION {
                     tracing::debug!(client_version = v, "protocol version skew");
                 }
             }
-            (user, pubkey, invite, clean_device_id(device))
+            (user, pubkey, invite, clean_device_id(device), register == Some(true))
         }
         _ => {
             let _ = send_json(socket, &ServerMsg::Error { rid: None, message: "expected hello".into() }).await;
@@ -452,6 +452,19 @@ async fn authenticate(socket: &mut WebSocket, app: &App) -> Option<(String, Stri
     }
 
     if pinned.is_none() {
+        // Not an account here, and not asking to become one: a session from
+        // before a reset, or one pointed at the wrong relay. Refused before
+        // the invite gate is consulted, so it can neither spend an invite
+        // nor take an empty relay's first-account slot. See `Hello::register`.
+        if !register {
+            app.metrics.auth_failures.unregistered.inc();
+            let _ = send_json(
+                socket,
+                &ServerMsg::Error { rid: None, message: "unknown account on this relay".into() },
+            )
+            .await;
+            return None;
+        }
         if !registration_allowed(app, &user, invite.as_deref()).await {
             app.metrics.auth_failures.unregistered.inc();
             let _ = send_json(
