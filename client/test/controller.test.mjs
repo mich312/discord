@@ -822,10 +822,16 @@ test('chanset from a sender whose role cannot be established cannot flip kept hi
   await c.onContent(
     r,
     'mallory',
-    JSON.stringify({ k: 'chanset', ch: 'general', meta: { hid: 'log1', hkey: 'k' } })
+    JSON.stringify({ k: 'chanset', ch: 'general', meta: { hid: 'log1', hkey: 'k', retention: 3600, topic: 'x' } })
   );
 
-  assert.equal(r.chanMeta?.general, undefined, 'the settings change was refused');
+  // Retention is what makes the relay delete entries, and the topic is the
+  // room's. Neither is taken from a sender who is not known to be an admin.
+  assert.equal(r.chanMeta?.general?.retention, undefined, 'the settings change was refused');
+  assert.equal(r.chanMeta?.general?.topic, undefined);
+  // The room key is another matter: any member may announce one, or a room
+  // first written to by a non-admin could be read by nobody else.
+  assert.equal(r.chanMeta?.general?.hkey, 'k');
   clearTimeout(c.backupTimer);
 });
 
@@ -1615,4 +1621,515 @@ test('being the first into a voice room starts a call rather than throwing', asy
     said.some((m) => m.text === 'you started a call in lounge'),
     'the room says who opened the call',
   );
+});
+
+/* ------------------------------------------- what survives a bad moment -- */
+// The relay's blob is where circles live, but the write to it is debounced
+// and needs a socket. Everything below is about the window before it lands:
+// a reload inside it used to cost a device a room key, or a whole circle,
+// with nothing to say so.
+
+/** A database that actually keeps what it is given. */
+function memoryDb(initial = {}) {
+  const kv = new Map(Object.entries(initial));
+  return {
+    kv,
+    kvPut: async (key, value) => void kv.set(key, value),
+    kvGet: async (key) => kv.get(key) ?? null,
+  };
+}
+
+const KEY_A = b64.enc(new Uint8Array(32).fill(1));
+const KEY_B = b64.enc(new Uint8Array(32).fill(2));
+
+test('a change is written down on the device before the relay has it', async () => {
+  const { c } = makeController();
+  c.db = memoryDb();
+  c.identityBytes = () => new Uint8Array(32).fill(7);
+  c.circlesLoaded = true;
+  c.servers.set('srv', record({ chanMeta: { general: { hid: 'h', hkey: KEY_A } } }));
+  c.scheduleBackup();
+  await Promise.resolve();
+  const staged = c.db.kv.get('pendingCircles');
+  assert.equal(staged.servers[0].chanMeta.general.hkey, KEY_A, 'the room key is staged');
+
+  // …and the note goes once the relay has acknowledged a blob holding it.
+  await runPendingBackup(c);
+  assert.equal(c.db.kv.get('pendingCircles'), null);
+  clearTimeout(c.backupTimer);
+});
+
+test('a failed upload leaves the note in place', async () => {
+  const { c } = makeController({
+    relayHandler: (msg) =>
+      msg.t === 'backup_set' ? Promise.reject(new Error('the connection dropped')) : Promise.resolve({ seq: 1 }),
+  });
+  c.db = memoryDb();
+  c.identityBytes = () => new Uint8Array(32).fill(7);
+  c.circlesLoaded = true;
+  c.servers.set('srv', record());
+  c.scheduleBackup();
+  await runPendingBackup(c);
+  assert.ok(c.db.kv.get('pendingCircles')?.servers?.length, 'still staged after the relay refused');
+  clearTimeout(c.backupTimer);
+});
+
+test('a later change is not cleared by an earlier upload landing', async () => {
+  let release;
+  const { c } = makeController({
+    relayHandler: (msg) =>
+      msg.t === 'backup_set'
+        ? new Promise((resolve) => (release = () => resolve({ version: 1 })))
+        : Promise.resolve({ seq: 1 }),
+  });
+  c.db = memoryDb();
+  c.identityBytes = () => new Uint8Array(32).fill(7);
+  c.circlesLoaded = true;
+  c.servers.set('srv', record());
+  const first = c.flushBackup();
+  // Arrives while the first upload is in the air, so that blob lacks it.
+  await new Promise((r) => setTimeout(r, 5));
+  c.servers.get('srv').chanMeta = { general: { hid: 'h', hkey: KEY_A } };
+  c.scheduleBackup();
+  release();
+  await first;
+  assert.equal(
+    c.db.kv.get('pendingCircles')?.servers?.[0]?.chanMeta?.general?.hkey,
+    KEY_A,
+    'the key the upload did not carry is still staged'
+  );
+  clearTimeout(c.backupTimer);
+});
+
+test('a reload inside the window gets back what was staged, folded into the blob', async () => {
+  // Last session: the room key for #general arrived and the tab reloaded
+  // before it was parked. The relay's blob still has the circle without it.
+  const identity = new Uint8Array(32).fill(7);
+  const parked = await sealBackup(identity, {
+    v: 2,
+    servers: [
+      { id: 'srv', name: 'Race Team', channels: ['general'], chanMeta: {} },
+      { id: 'other', name: 'Photo Club', channels: ['general'], chanMeta: { general: { hid: 'o', hkey: KEY_B } } },
+    ],
+  });
+  const { c } = makeController({
+    relayHandler: (msg) =>
+      Promise.resolve(msg.t === 'backup_get' ? { payload: parked, version: 3 } : { seq: 1, version: 4 }),
+  });
+  c.db = memoryDb({
+    pendingCircles: {
+      rev: 9,
+      servers: [{ id: 'srv', name: 'Race Team', channels: ['general'], chanMeta: { general: { hid: 'h', hkey: KEY_A } } }],
+      left: [],
+    },
+  });
+  c.identityBytes = () => identity;
+  await c.loadDeviceState();
+  await c.readCircles();
+  assert.equal(c.servers.get('srv').chanMeta.general.hkey, KEY_A, 'the staged key is back');
+  assert.ok(c.servers.has('other'), 'and nothing the relay had is lost to it');
+  assert.ok(c.backupDirty, 'the merged result is on its way to the relay');
+  clearTimeout(c.backupTimer);
+});
+
+test('a circle left in that window stays left', async () => {
+  const identity = new Uint8Array(32).fill(7);
+  const parked = await sealBackup(identity, { v: 2, servers: [{ id: 'gone', name: 'Left', channels: ['general'] }] });
+  const { c } = makeController({
+    relayHandler: (msg) =>
+      Promise.resolve(msg.t === 'backup_get' ? { payload: parked, version: 1 } : { seq: 1, version: 2 }),
+  });
+  c.db = memoryDb({ pendingCircles: { rev: 2, servers: [], left: ['gone'] } });
+  c.identityBytes = () => identity;
+  await c.loadDeviceState();
+  await c.readCircles();
+  assert.ok(!c.servers.has('gone'), 'a blob that predates the leave does not bring it back');
+  clearTimeout(c.backupTimer);
+});
+
+test('a reconnect folds in room keys another device parked', async () => {
+  const identity = new Uint8Array(32).fill(7);
+  const parked = await sealBackup(identity, {
+    v: 2,
+    servers: [{ id: 'srv', name: 'circle', channels: ['general'], chanMeta: { general: { hid: 'h', hkey: KEY_B, hkeys: [KEY_A], kv: 1 } } }],
+  });
+  const { c } = makeController({
+    relayHandler: (msg) =>
+      Promise.resolve(msg.t === 'backup_get' ? { payload: parked, version: 5 } : { seq: 1, version: 6 }),
+  });
+  c.db = memoryDb();
+  c.identityBytes = () => identity;
+  c.mlsGroups = new Set(['srv']);
+  // Held in memory from before the socket dropped, with the pre-rotation key.
+  c.servers.set('srv', record({ chanMeta: { general: { hid: 'h', hkey: KEY_A } } }));
+  await c.readCircles();
+  assert.equal(c.servers.get('srv').chanMeta.general.hkey, KEY_B);
+  assert.deepEqual(c.servers.get('srv').chanMeta.general.hkeys, [KEY_A]);
+  clearTimeout(c.backupTimer);
+});
+
+test('a ratchet with no circle record is rebuilt as a stub, and asks', async () => {
+  // The known failure: added to a circle, reloaded before the blob was
+  // written, and the circle was simply absent afterwards — still a member,
+  // still holding the ratchet, with nothing on screen.
+  const { c } = makeController({
+    relayHandler: (msg) => Promise.resolve(msg.t === 'backup_get' ? { payload: null, version: 0 } : { seq: 1, version: 1 }),
+  });
+  c.db = memoryDb();
+  c.identityBytes = () => new Uint8Array(32).fill(7);
+  c.mlsGroups = new Set(['race-team-x1']);
+  await c.readCircles();
+  const stub = c.servers.get('race-team-x1');
+  assert.ok(stub, 'the circle is back');
+  assert.ok(!stub.restored, 'and it can send — the ratchet is what says so');
+  assert.equal(c.needsMeta(stub), true);
+
+  c.crypto = async (cmd) =>
+    cmd === 'memberKeys' ? { alice: new Uint8Array(32), bob: new Uint8Array(32) } : { blob: new Uint8Array(1), epoch: 1 };
+  const sent = [];
+  c.sendContent = async (_id, content) => void sent.push(content);
+  await c.requestMeta(stub);
+  assert.deepEqual(sent, [{ k: 'meta-req' }]);
+  clearTimeout(c.backupTimer);
+});
+
+test('a metadata request is answered once, and not after someone else answers', async () => {
+  const { c } = makeController();
+  const r = record({ chanMeta: { general: { hid: 'h', hkey: KEY_A } } });
+  c.servers.set('srv', r);
+  await c.onContent(r, 'bob', JSON.stringify({ k: 'meta-req' }));
+  await c.onContent(r, 'bob', JSON.stringify({ k: 'meta-req' }));
+  assert.equal(c.metaReplies.size, 1, 'one pending answer however many times it is asked');
+
+  // carol's snapshot arrives first: ours would be a repeat.
+  await c.onContent(r, 'carol', JSON.stringify({ k: 'meta', name: 'circle', channels: ['general'] }));
+  assert.equal(c.metaReplies.size, 0);
+
+  // A device still waiting on its own first snapshot has nothing to offer.
+  r.pendingMetaSync = true;
+  await c.onContent(r, 'bob', JSON.stringify({ k: 'meta-req' }));
+  assert.equal(c.metaReplies.size, 0);
+  clearTimeout(c.backupTimer);
+});
+
+test('deleting a circle removes every member, one accepted commit at a time', async () => {
+  // It used to publish the first removal without marking it a commit and
+  // never merge it — so the second removal was refused for the pending one,
+  // and everyone past the first member kept a working ratchet.
+  const calls = [];
+  const { c } = makeController({
+    relayHandler: (msg) => {
+      calls.push(msg.t === 'send' ? `send${msg.commit ? ':commit' : ''}` : msg.t);
+      return Promise.resolve({ seq: calls.length });
+    },
+  });
+  let epoch = 3;
+  c.crypto = async (cmd, args) => {
+    calls.push(cmd === 'removeMember' ? `remove:${args.name}` : cmd);
+    if (cmd === 'removeMember') return { commit: new Uint8Array([1]), epoch: epoch + 1, state: null };
+    if (cmd === 'mergeStagedCommit') return { epoch: ++epoch, members: ['alice'], state: null };
+    return { state: null };
+  };
+  c.servers.set('srv', record({ members: ['alice', 'bob', 'carol'], epoch }));
+  await c.deleteServer('srv');
+  assert.deepEqual(calls.slice(0, 7), [
+    'remove:bob',
+    'send:commit',
+    'mergeStagedCommit',
+    'remove:carol',
+    'send:commit',
+    'mergeStagedCommit',
+    'delete_group',
+  ]);
+  assert.ok(!c.servers.has('srv'));
+  clearTimeout(c.backupTimer);
+});
+
+test('blobs are applied in order, so the newest ratchet is the one left on disk', async () => {
+  // The first blob's handler needs the relay (an admin check) and so
+  // finishes after the second's. Each ends by writing the ratchet snapshot
+  // it was handed; unqueued, the first — older — snapshot was written last.
+  let releaseRoles;
+  const { c } = makeController({
+    relayHandler: (msg) =>
+      msg.t === 'members'
+        ? new Promise((resolve) => (releaseRoles = () => resolve({ members: [{ user: 'bob', role: 'admin' }] })))
+        : Promise.resolve({ seq: 1 }),
+  });
+  const written = [];
+  c.db = { kvGet: async () => null, kvPut: async (k, v) => void (k === 'mlsState' && written.push(v)) };
+  const opened = [];
+  c.crypto = async (cmd, args) => {
+    if (cmd !== 'receive') return {};
+    const n = args.bytes[0];
+    opened.push(n);
+    const text = n === 1
+      ? JSON.stringify({ k: 'overview', ov: { blurb: 'slow: needs an admin check' } })
+      : JSON.stringify({ k: 'chat', ch: 'general', text: 'fast', ts: 5 });
+    return { event: { kind: 'message', sender: 'bob', text }, state: `ratchet-after-${n}` };
+  };
+  c.servers.set('srv', record({ roles: {} }));
+  const first = c.onGroupMessage({ group: 'srv', seq: 1, epoch: 1, sender: 'bob', payload: b64.enc(new Uint8Array([1])) });
+  const second = c.onGroupMessage({ group: 'srv', seq: 2, epoch: 1, sender: 'bob', payload: b64.enc(new Uint8Array([2])) });
+  assert.deepEqual(opened, [1, 2], 'decryption starts at once, in arrival order');
+  await new Promise((r) => setTimeout(r, 10));
+  assert.deepEqual(written, [], 'the second does not overtake the first');
+  releaseRoles();
+  await Promise.all([first, second]);
+  assert.deepEqual(written, ['ratchet-after-1', 'ratchet-after-2']);
+  clearTimeout(c.backupTimer);
+});
+
+/* ------------------------------------------------ an account's devices -- */
+// Each device is its own MLS leaf. Adding a person takes a KeyPackage from
+// every device they use; a device that signs in later asks the circle to
+// let it in, and any member may — the crypto core checks the certificate.
+
+/** A crypto stub that records what it was asked to add. */
+function addingCrypto({ devices = [], roster = {} } = {}) {
+  const calls = [];
+  const fn = async (cmd, args = {}) => {
+    calls.push({ cmd, ...args });
+    if (cmd === 'memberDevices') return devices;
+    if (cmd === 'memberKeys') return roster;
+    if (cmd === 'addMember') return { commit: new Uint8Array([1]), welcome: new Uint8Array([9]), epoch: 4, state: null };
+    if (cmd === 'mergeStagedCommit') return { epoch: 4, members: ['alice', 'bob'], state: null };
+    if (cmd === 'send') return { blob: new Uint8Array([1]), epoch: 4, state: null };
+    return {};
+  };
+  fn.calls = calls;
+  return fn;
+}
+
+test('adding a person adds every device they have, in one commit', async () => {
+  const sent = [];
+  const { c } = makeController({
+    relayHandler: (msg) => {
+      sent.push(msg);
+      if (msg.t === 'fetch_kps') {
+        return Promise.resolve({
+          pubkey: b64.enc(new Uint8Array(32).fill(5)),
+          packages: [
+            { device: 'laptop', payload: b64.enc(new Uint8Array([1])) },
+            { device: 'phone', payload: b64.enc(new Uint8Array([2])) },
+          ],
+        });
+      }
+      if (msg.t === 'members') return Promise.resolve({ members: [] });
+      return Promise.resolve({ seq: 7 });
+    },
+  });
+  c.crypto = addingCrypto();
+  c.servers.set('srv', record({ members: ['alice'] }));
+  await c.addMember('srv', 'bob');
+
+  const adds = c.crypto.calls.filter((x) => x.cmd === 'addMember');
+  assert.equal(adds.length, 1, 'one commit');
+  assert.equal(adds[0].keyPackages.length, 2, 'carrying both devices');
+  assert.equal(adds[0].expectIdentity, 'bob');
+  // One Welcome each, addressed, so the phone's waits for the phone.
+  const welcomes = sent.filter((m) => m.t === 'welcome');
+  assert.deepEqual(welcomes.map((w) => [w.to, w.device]), [['bob', 'laptop'], ['bob', 'phone']]);
+  assert.ok(sent.findIndex((m) => m.t === 'send' && m.commit) < sent.findIndex((m) => m.t === 'welcome'));
+  clearTimeout(c.backupTimer);
+});
+
+test('an account whose devices are unnamed is still added the old way', async () => {
+  const sent = [];
+  const { c } = makeController({
+    relayHandler: (msg) => {
+      sent.push(msg);
+      if (msg.t === 'fetch_kps') return Promise.resolve({ packages: [], pubkey: 'AAAA' });
+      if (msg.t === 'fetch_kp') return Promise.resolve({ payload: b64.enc(new Uint8Array([3])), pubkey: 'AAAA' });
+      if (msg.t === 'members') return Promise.resolve({ members: [] });
+      return Promise.resolve({ seq: 7 });
+    },
+  });
+  c.crypto = addingCrypto();
+  c.servers.set('srv', record({ members: ['alice'] }));
+  await c.addMember('srv', 'bob');
+  const welcome = sent.find((m) => m.t === 'welcome');
+  assert.equal(welcome.device, undefined, 'unaddressed: any device of theirs may open it');
+  clearTimeout(c.backupTimer);
+});
+
+test('a read-only device asks for a seat, and does not nag', async () => {
+  const sent = [];
+  const { c } = makeController({ relayHandler: (msg) => (sent.push(msg), Promise.resolve({ seq: 1 })) });
+  const r = record({ restored: true });
+  c.servers.set('srv', r);
+  await c.requestSeat(r);
+  await c.requestSeat(r);
+  assert.deepEqual(sent.map((m) => m.t), ['device_join'], 'once per window, however often it is prompted');
+
+  // A device that can already send has nothing to ask for.
+  const live = record({ id: 'other' });
+  c.servers.set('other', live);
+  await c.requestSeat(live);
+  assert.equal(sent.length, 1);
+});
+
+test('any member lets a member’s new device in, against the circle’s own key for them', async () => {
+  const sent = [];
+  const circleKey = new Uint8Array(32).fill(4);
+  const { c } = makeController({
+    relayHandler: (msg) => {
+      sent.push(msg);
+      if (msg.t === 'fetch_kps') {
+        return Promise.resolve({
+          // The relay's idea of bob's key is deliberately NOT what gets used.
+          pubkey: b64.enc(new Uint8Array(32).fill(9)),
+          packages: [{ device: msg.device, payload: b64.enc(new Uint8Array([2])) }],
+        });
+      }
+      return Promise.resolve({ seq: 7 });
+    },
+  });
+  c.crypto = addingCrypto({ devices: [{ name: 'bob', key: new Uint8Array([1, 1]) }], roster: { bob: circleKey } });
+  c.servers.set('srv', record());
+
+  assert.equal(await c.admitDevice('srv', 'bob', 'phone'), true);
+  const add = c.crypto.calls.find((x) => x.cmd === 'addMember');
+  assert.deepEqual([...add.expectKey], [...circleKey], 'authorized by the key the circle holds, not the relay');
+  assert.equal(sent.find((m) => m.t === 'fetch_kps').device, 'phone');
+  const welcome = sent.find((m) => m.t === 'welcome');
+  assert.deepEqual([welcome.to, welcome.device], ['bob', 'phone']);
+  clearTimeout(c.backupTimer);
+});
+
+test('a device is not added twice, nor for someone who is not in the circle', async () => {
+  const { c } = makeController();
+  const bobsPhone = new Uint8Array([7, 7, 7]);
+  const name = Buffer.from(bobsPhone).toString('base64url');
+  c.crypto = addingCrypto({ devices: [{ name: 'bob', key: bobsPhone }], roster: { bob: new Uint8Array(32) } });
+  c.servers.set('srv', record());
+  assert.equal(await c.admitDevice('srv', 'bob', name), false, 'already in');
+  assert.equal(c.crypto.calls.some((x) => x.cmd === 'addMember'), false);
+
+  // carol was removed (or never joined): the roster has no key for her, so
+  // asking is not a way back in.
+  assert.equal(await c.admitDevice('srv', 'carol', 'tablet'), false);
+  assert.equal(c.crypto.calls.some((x) => x.cmd === 'addMember'), false);
+
+  // And a device that is itself read-only has no ratchet to add with.
+  c.servers.set('ro', record({ id: 'ro', restored: true }));
+  assert.equal(await c.admitDevice('ro', 'bob', 'tablet'), false);
+});
+
+test('being let in keeps what the account’s copy of the circle already held', async () => {
+  const { c } = makeController();
+  c.db = memoryDb();
+  c.crypto = async (cmd) =>
+    cmd === 'joinFromWelcome' ? { group: 'srv', epoch: 5, members: ['alice', 'bob'], state: null } : {};
+  c.servers.set(
+    'srv',
+    record({
+      restored: true,
+      name: 'Race Team',
+      keys: { bob: 'bobs-identity-key' },
+      invites: [{ id: 'inv', key: 'frag' }],
+      chanMeta: { general: { hid: 'h', hkey: KEY_A } },
+    })
+  );
+  await c.onWelcome({ group: 'srv', after: 9, payload: b64.enc(new Uint8Array([1])) });
+  const r = c.servers.get('srv');
+  assert.ok(!r.restored, 'it can send now');
+  assert.deepEqual(r.keys, { bob: 'bobs-identity-key' }, 'the key directory survives');
+  assert.deepEqual(r.invites, [{ id: 'inv', key: 'frag' }], 'and so do invite keys the other device relies on');
+  assert.equal(r.chanMeta.general.hkey, KEY_A);
+  clearTimeout(c.backupTimer);
+});
+
+test('a write the relay cannot take yet waits for a load instead of spinning', async () => {
+  // No blob has been read, so the upload declines. It used to reschedule
+  // itself at once — and since nothing was ever parked, "at once" meant
+  // 0ms, forever, for as long as the relay could not serve the blob.
+  let uploads = 0;
+  const { c } = makeController();
+  c.db = memoryDb();
+  c.identityBytes = () => new Uint8Array(32).fill(7);
+  const upload = c.uploadBackup.bind(c);
+  c.uploadBackup = async () => (uploads++, upload());
+  c.servers.set('srv', record());
+  c.scheduleBackup();
+  await new Promise((r) => setTimeout(r, 60));
+  assert.equal(uploads, 1, 'asked once, declined, and left alone');
+  assert.equal(c.backupDirty, true, 'still owed');
+  assert.ok(c.db.kv.get('pendingCircles')?.servers?.length, 'and still written down on the device');
+});
+
+test('a global admin can purge a circle by id, whether or not this device holds it', async () => {
+  const sent = [];
+  const { c } = makeController({ relayHandler: (msg) => (sent.push(msg), Promise.resolve({ seq: 1 })) });
+  c.db = memoryDb();
+  // One this account is in, and one it has never seen.
+  c.servers.set('mine', record({ id: 'mine', name: 'Mine' }));
+  c.mlsGroups = new Set(['mine']);
+  await c.adminDeleteGroup('someone-elses');
+  await c.adminDeleteGroup('mine');
+  assert.deepEqual(
+    sent.filter((m) => m.t === 'delete_group').map((m) => m.group),
+    ['someone-elses', 'mine']
+  );
+  assert.ok(!c.servers.has('mine'), 'its own copy goes with it');
+  // No MLS removal is attempted: there may be no working ratchet to do it
+  // with, which is the situation this exists for.
+  assert.ok(!sent.some((m) => m.t === 'send'));
+  clearTimeout(c.backupTimer);
+});
+
+/* ------------------------------------------- registering is deliberate -- */
+
+test('only a sign-up or a hand-made restore asks the relay to create an account', async () => {
+  const { c } = makeController();
+  c.db = memoryDb();
+  c.crypto = async (cmd) => (cmd === 'exportIdentity' ? new Uint8Array(4) : { name: 'michael', groups: [], state: null });
+  globalThis.localStorage ??= { getItem: () => null, setItem() {}, removeItem() {} };
+
+  assert.notEqual(c.registering, true, 'a controller that has done nothing is not registering');
+  await c.createIdentity('michael');
+  assert.equal(c.registering, true, 'signing up is');
+  assert.equal(c.db.kv.get('registering'), true, 'and it survives a reload before the first connection');
+
+  // The relay accepted it: every connection after this is a reconnection.
+  c.loadCircles = async () => [];
+  c.voice = { probe() {} };
+  c.relay.request = async () => ({ servers: '[]', seq: 1 });
+  await c.onRelayEvent({ t: 'ready' }).catch(() => {});
+  assert.equal(c.registering, false);
+  assert.equal(c.db.kv.get('registering'), false);
+
+  // The app recovering an identity by itself is nobody asking for an account…
+  await c.restoreIdentity(new Uint8Array(4), { explicit: false });
+  assert.equal(c.registering, false);
+  // …a person restoring one is.
+  await c.restoreIdentity(new Uint8Array(4));
+  assert.equal(c.registering, true);
+  clearTimeout(c.backupTimer);
+});
+
+test('a relay that no longer knows the account sends the session to the gate, keeping the key', async () => {
+  const { c, dispatched } = makeController();
+  c.db = memoryDb({ session: { name: 'michael' } });
+  let removed = false;
+  globalThis.localStorage = { getItem: () => 'key', setItem() {}, removeItem: () => void (removed = true) };
+  c.me = 'michael';
+  await c.onAuthRejected('unknown account on this relay');
+  assert.match(c.authError, /no account for "michael"/);
+  assert.match(c.authError, /may have been reset/);
+  assert.equal(removed, false, 'the identity is not wiped: it may be the only copy of a key somebody wants');
+  assert.deepEqual(dispatched.at(-1), { type: 'phase', phase: 'onboarding' });
+});
+
+test('a new account starts without what an earlier one on this device left behind', async () => {
+  const { c } = makeController();
+  c.db = memoryDb({ deviceState: { old: { lastSeq: 9 } }, pendingCircles: { rev: 1, servers: [{ id: 'old' }], left: [] } });
+  globalThis.localStorage = { getItem: () => null, setItem() {}, removeItem() {} };
+  c.crypto = async (cmd) => (cmd === 'exportIdentity' ? new Uint8Array(4) : { name: 'michael', groups: [], state: null });
+  await c.loadDeviceState();
+  assert.ok(c.pendingCarry, 'the earlier account had staged a circle');
+  await c.createIdentity('michael');
+  assert.equal(c.pendingCarry, null);
+  assert.deepEqual(c.db.kv.get('deviceState'), {});
+  assert.equal(c.db.kv.get('pendingCircles'), null);
 });

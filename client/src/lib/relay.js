@@ -32,6 +32,8 @@ export class Relay {
    * @param {{url: string, name: string, getPubkey: () => Promise<Uint8Array>,
    *          sign: (bytes: Uint8Array) => Promise<Uint8Array>,
    *          getInvite?: () => string|null,
+   *          getDevice?: () => Promise<string|null>,
+   *          getRegister?: () => boolean,
    *          onAuthError?: (message: string) => void,
    *          onEvent: (msg: any) => void,
    *          onStatus: (status: 'online'|'offline'|'connecting') => void}} opts
@@ -57,11 +59,22 @@ export class Relay {
       // First-time registration on an invite-only relay must present a
       // usable invite id; pinned users are admitted regardless.
       const invite = this.opts.getInvite?.() ?? null;
+      // Which of the account's devices this is. Routing only: it is what
+      // lets the relay keep this device's KeyPackages and Welcomes apart
+      // from its siblings'.
+      const device = (await this.opts.getDevice?.()) ?? null;
       ws.send(
         JSON.stringify({
           t: 'hello',
           user: this.opts.name,
           pubkey: b64.enc(pubkey),
+          device,
+          // "Create this account if it does not exist" — true only while a
+          // person's sign-up or restore is still waiting for its first
+          // connection. A session that is merely reconnecting never asks,
+          // so a relay that no longer knows it refuses instead of quietly
+          // signing it up again. Must match relay/src/proto.rs.
+          register: this.opts.getRegister?.() === true,
           invite,
           v: PROTOCOL_VERSION,
         })

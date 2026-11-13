@@ -306,3 +306,261 @@ fn expect_message_edge(event: Event, sender: &str, text: &str) {
         other => panic!("expected message, got {other:?}"),
     }
 }
+
+// --- one name, one key ----------------------------------------------------
+//
+// A basic credential is a self-asserted string. These pin the rule that a
+// commit may not put a name in the group under a key other than the one a
+// current member already holds for it — on every path a leaf can arrive by.
+
+/// alice creates the group and adds bob; both are at the same epoch.
+fn pair() -> (ChatClient, ChatClient) {
+    let mut alice = ChatClient::new("alice").unwrap();
+    let mut bob = ChatClient::new("bob").unwrap();
+    alice.create_group(G).unwrap();
+    let add = alice
+        .add_member(G, &bob.key_package().unwrap(), "bob", &bob.signature_public_key())
+        .unwrap();
+    alice.merge_staged_commit(G).unwrap();
+    bob.join_from_welcome(&add.welcome).unwrap();
+    (alice, bob)
+}
+
+#[test]
+fn a_link_joiner_cannot_take_an_existing_members_name() {
+    let (mut alice, mut bob) = pair();
+    // Somebody else entirely, calling themselves alice.
+    let mut mallory = ChatClient::new("alice").unwrap();
+    assert_ne!(alice.signature_public_key(), mallory.signature_public_key());
+
+    let info = alice.export_group_info(G).unwrap();
+    let (_, commit) = mallory.join_by_external_commit(&info).unwrap();
+
+    let epoch = bob.epoch(G).unwrap();
+    let err = bob.process_incoming(&commit).unwrap_err();
+    assert!(
+        err.to_string().starts_with("identity conflict: alice"),
+        "the refusal names who was being impersonated: {err}"
+    );
+    // Refused before the merge: nothing about bob's group moved.
+    assert_eq!(bob.epoch(G).unwrap(), epoch);
+    assert_eq!(bob.members(G).unwrap(), vec!["alice", "bob"]);
+    let keys = bob.member_keys(G).unwrap();
+    assert_eq!(keys.len(), 2);
+    assert!(keys.iter().any(|(n, k)| n == "alice" && *k == alice.signature_public_key()));
+
+    // And the real alice is still who bob hears.
+    let blob = alice.send_message(G, "still me").unwrap();
+    match bob.process_incoming(&blob).unwrap() {
+        Event::Message { sender, text, .. } => {
+            assert_eq!((sender.as_str(), text.as_str()), ("alice", "still me"));
+        }
+        other => panic!("expected a message, got {other:?}"),
+    }
+    // Nothing the impostor sends from their own branch is readable.
+    let forged = mallory.send_message(G, "it's me, alice").unwrap();
+    assert!(bob.process_incoming(&forged).is_err());
+}
+
+#[test]
+fn an_adder_is_refused_a_second_account_under_a_members_name() {
+    // The adder's check used to compare the KeyPackage only with what the
+    // relay pinned — so a relay that lies about bob's key got a second
+    // "bob" in. The group already knows which key speaks for bob, and that
+    // answer outranks the relay's.
+    let (mut alice, _bob) = pair();
+    let fake_bob = ChatClient::new("bob").unwrap();
+    let err = alice
+        .add_member(G, &fake_bob.key_package().unwrap(), "bob", &fake_bob.signature_public_key())
+        .unwrap_err();
+    assert!(err.to_string().starts_with("identity conflict: bob"), "{err}");
+    assert_eq!(alice.members(G).unwrap(), vec!["alice", "bob"]);
+}
+
+/// A second device of the same account: same identity key, its own device
+/// key. `import_identity` is what a sign-in or a device link ends in.
+fn second_device(of: &ChatClient) -> ChatClient {
+    let device = ChatClient::import_identity(&of.export_identity().unwrap()).unwrap();
+    assert_eq!(of.signature_public_key(), device.signature_public_key(), "one account");
+    assert_ne!(of.device_public_key(), device.device_public_key(), "two devices");
+    device
+}
+
+fn message_from(event: Event) -> (String, String) {
+    match event {
+        Event::Message { sender, text, .. } => (sender, text),
+        other => panic!("expected a message, got {other:?}"),
+    }
+}
+
+#[test]
+fn a_second_device_joins_beside_the_first_and_both_keep_working() {
+    // This used to evict the first device: both presented the same signature
+    // key, which MLS reads as one device resyncing.
+    let (mut alice, mut bob) = pair();
+    let mut phone = second_device(&bob);
+
+    let info = alice.export_group_info(G).unwrap();
+    let (_, commit) = phone.join_by_external_commit(&info).unwrap();
+    for member in [&mut alice, &mut bob] {
+        match member.process_incoming(&commit).unwrap() {
+            Event::MembershipChange { members, active, .. } => {
+                assert_eq!(members, vec!["alice", "bob"], "one bob in the roster, not two");
+                assert!(active, "nobody was displaced");
+            }
+            other => panic!("expected a membership change, got {other:?}"),
+        }
+    }
+    assert_eq!(alice.member_devices(G).unwrap().len(), 3, "and three devices behind it");
+
+    // Each of bob's devices sends; the other, and alice, read it as bob.
+    let from_phone = phone.send_message(G, "from the phone").unwrap();
+    for reader in [&mut alice, &mut bob] {
+        let (sender, text) = message_from(reader.process_incoming(&from_phone).unwrap());
+        assert_eq!((sender.as_str(), text.as_str()), ("bob", "from the phone"));
+    }
+    let from_laptop = bob.send_message(G, "from the laptop").unwrap();
+    for reader in [&mut alice, &mut phone] {
+        let (sender, text) = message_from(reader.process_incoming(&from_laptop).unwrap());
+        assert_eq!((sender.as_str(), text.as_str()), ("bob", "from the laptop"));
+    }
+}
+
+#[test]
+fn any_member_can_add_an_accounts_new_device() {
+    // The device's certificate is what authorizes it, so the account's own
+    // devices need not be the ones online to let it in.
+    let (mut alice, mut bob) = pair();
+    let mut phone = second_device(&bob);
+
+    let identity = alice
+        .member_keys(G)
+        .unwrap()
+        .into_iter()
+        .find(|(name, _)| name == "bob")
+        .map(|(_, key)| key)
+        .unwrap();
+    let add = alice.add_member(G, &phone.key_package().unwrap(), "bob", &identity).unwrap();
+    alice.merge_staged_commit(G).unwrap();
+    bob.process_incoming(&add.commit).unwrap();
+    phone.join_from_welcome(&add.welcome).unwrap();
+
+    let blob = phone.send_message(G, "let in by alice").unwrap();
+    assert_eq!(message_from(bob.process_incoming(&blob).unwrap()).0, "bob");
+    assert_eq!(message_from(alice.process_incoming(&blob).unwrap()).0, "bob");
+}
+
+#[test]
+fn several_devices_of_one_account_are_added_in_one_commit() {
+    let mut alice = ChatClient::new("alice").unwrap();
+    let mut laptop = ChatClient::new("bob").unwrap();
+    let mut phone = second_device(&laptop);
+    alice.create_group(G).unwrap();
+
+    let (kp_laptop, kp_phone) = (laptop.key_package().unwrap(), phone.key_package().unwrap());
+    let add = alice
+        .add_members(G, &[&kp_laptop, &kp_phone], "bob", &laptop.signature_public_key())
+        .unwrap();
+    alice.merge_staged_commit(G).unwrap();
+    assert_eq!(alice.epoch(G).unwrap(), 1, "one commit, however many devices");
+    assert_eq!(alice.members(G).unwrap(), vec!["alice", "bob"]);
+
+    // The one Welcome opens on each of them.
+    laptop.join_from_welcome(&add.welcome).unwrap();
+    phone.join_from_welcome(&add.welcome).unwrap();
+    let blob = alice.send_message(G, "to both").unwrap();
+    assert_eq!(message_from(laptop.process_incoming(&blob).unwrap()).1, "to both");
+    assert_eq!(message_from(phone.process_incoming(&blob).unwrap()).1, "to both");
+}
+
+#[test]
+fn a_device_certified_by_someone_else_cannot_take_a_members_name() {
+    // Mallory has her own valid account and her own valid device
+    // certificate — signed by HER identity key, under bob's handle.
+    let (mut alice, mut bob) = pair();
+    let mut mallory = ChatClient::new("bob").unwrap();
+
+    let info = alice.export_group_info(G).unwrap();
+    let (_, commit) = mallory.join_by_external_commit(&info).unwrap();
+    for member in [&mut alice, &mut bob] {
+        let err = member.process_incoming(&commit).unwrap_err();
+        assert!(err.to_string().starts_with("identity conflict: bob"), "{err}");
+    }
+    // And the adder's path refuses it before a commit is even built, relay
+    // or no relay: the roster already knows which key speaks for bob.
+    let err = alice
+        .add_member(G, &mallory.key_package().unwrap(), "bob", &mallory.signature_public_key())
+        .unwrap_err();
+    assert!(err.to_string().starts_with("identity conflict: bob"), "{err}");
+    let err = alice
+        .add_member(G, &mallory.key_package().unwrap(), "bob", &bob.signature_public_key())
+        .unwrap_err();
+    assert!(err.to_string().contains("unexpected signature key"), "{err}");
+}
+
+#[test]
+fn removing_a_member_removes_every_device_of_theirs() {
+    let (mut alice, mut bob) = pair();
+    let mut phone = second_device(&bob);
+    let info = alice.export_group_info(G).unwrap();
+    let (_, join) = phone.join_by_external_commit(&info).unwrap();
+    alice.process_incoming(&join).unwrap();
+    bob.process_incoming(&join).unwrap();
+
+    alice.remove_member(G, "bob").unwrap();
+    alice.merge_staged_commit(G).unwrap();
+    assert_eq!(alice.members(G).unwrap(), vec!["alice"]);
+    assert_eq!(alice.member_devices(G).unwrap().len(), 1);
+
+    let after = alice.send_message(G, "just me now").unwrap();
+    assert!(bob.process_incoming(&after).is_err());
+    assert!(phone.process_incoming(&after).is_err());
+}
+
+#[test]
+fn safety_numbers_and_log_signatures_follow_the_account_not_the_device() {
+    let (mut alice, mut bob) = pair();
+    let mut phone = second_device(&bob);
+    let before = alice.safety_number(G, "bob").unwrap();
+
+    let info = alice.export_group_info(G).unwrap();
+    let (_, join) = phone.join_by_external_commit(&info).unwrap();
+    alice.process_incoming(&join).unwrap();
+    bob.process_incoming(&join).unwrap();
+
+    // Adding a device must not change the number two people already compared,
+    // and the new device must show the same one.
+    assert_eq!(alice.safety_number(G, "bob").unwrap(), before);
+    assert_eq!(phone.safety_number(G, "alice").unwrap(), before);
+
+    // A log entry signed on the phone verifies against the key the roster
+    // holds for bob — the same key the laptop signs with.
+    let roster_key = alice
+        .member_keys(G)
+        .unwrap()
+        .into_iter()
+        .find(|(name, _)| name == "bob")
+        .unwrap()
+        .1;
+    let sig = phone.sign(b"an entry").unwrap();
+    assert!(alice.verify(&roster_key, b"an entry", &sig));
+    assert_eq!(alice.member_keys(G).unwrap().len(), 2, "one key per member, not per device");
+}
+
+#[test]
+fn a_devices_state_survives_a_reload_with_both_of_its_keys() {
+    let (mut alice, mut bob) = pair();
+    let mut phone = second_device(&bob);
+    let info = alice.export_group_info(G).unwrap();
+    let (_, join) = phone.join_by_external_commit(&info).unwrap();
+    alice.process_incoming(&join).unwrap();
+
+    let mut reloaded = ChatClient::import_state(&phone.export_state().unwrap()).unwrap();
+    assert_eq!(reloaded.device_public_key(), phone.device_public_key());
+    assert_eq!(reloaded.signature_public_key(), bob.signature_public_key());
+    let blob = reloaded.send_message(G, "after a reload").unwrap();
+    assert_eq!(message_from(alice.process_incoming(&blob).unwrap()).0, "bob");
+    // And what it exports as its identity is the account's, not the device's.
+    let third = ChatClient::import_identity(&reloaded.export_identity().unwrap()).unwrap();
+    assert_eq!(third.signature_public_key(), bob.signature_public_key());
+}

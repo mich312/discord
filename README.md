@@ -132,8 +132,15 @@ only thing that makes the claim falsifiable.
   anywhere), or the wrap half of Argon2id(password) — the auth half is
   all the server ever checks. Invite-link joiners onboard in seconds and
   are nagged to secure the account afterwards. Signing in restores who
-  you are and (via the circles backup) what you knew — live group keys
-  still lived on the old device, so sending needs a re-add.
+  you are and, from the relay, your circles and their conversations; the
+  new device then asks each circle to let it in, and any member who is
+  online does so automatically (see *Devices* below).
+- **Devices** — an account can be signed in on several devices at once,
+  and each of them reads and sends. A device has its own key, which the
+  account's identity key certifies; that certificate is what lets a circle
+  admit a member's new device without anybody deciding anything, and what
+  stops anyone else joining under that member's name. One browser tab at a
+  time runs a device's session — a second tab offers to take it over.
 - **Channel settings** (admins, per channel) — a topic shown at the top
   of the room and auto-delete. Settings travel inside the encryption like
   channel names; changes are announced in the channel. There is no switch
@@ -167,9 +174,9 @@ only thing that makes the claim falsifiable.
   key derived from your identity bundle — the same bytes the account vault
   already round-trips, so any device that can sign in can open it and the
   relay never can. This is not a backup of a local copy; it is the copy.
-  Sign in somewhere new and your circles are simply there, read-only with
-  their conversations intact, until a re-add (or an invite link) hands that
-  device the MLS ratchets that let it send. Writes compare-and-swap on a
+  Sign in somewhere new and your circles are simply there with their
+  conversations intact — readable at once, and writable as soon as a member
+  who is online has let the new device in. Writes compare-and-swap on a
   version the relay keeps beside the blob, so a second signed-in device
   cannot silently overwrite a circle the first one just joined; a client
   that loses the swap re-reads, folds its own change over what it finds,
@@ -255,7 +262,7 @@ relay).
 | `STUN_URLS` | unset | comma-separated STUN URLs, merged into the served ICE list. An alternative to the public-STUN default when you run your own |
 | `RUST_LOG` | unset | standard `tracing` filter, e.g. `relay=debug`. The relay logs connect/disconnect at info and subscribe at debug |
 | `RP_ID` / `RP_ORIGIN` | `localhost` / `http://localhost:9601` | WebAuthn relying party — must match the origin users load the client from |
-| `RELAY_ADMINS` | unset | comma-separated handles treated as global admins: they can manage any group's ACL/roles and list all users/groups — metadata only, they cannot read messages |
+| `RELAY_ADMINS` | unset | comma-separated handles treated as global admins: they can manage any group's ACL/roles, list all users/groups, and delete any circle from the relay — including one nobody can open any more (command palette → "relay admin overview"). Metadata only, they cannot read messages. `docker-compose.yml` passes it through from `deploy/.env` |
 | `BLOB_TTL_DAYS` | unset | unset/`0` = attachments are kept forever (the default). Set to a whole number of days to delete attachment blobs older than that. Age-based by necessity: the blob id lives inside the encrypted message referring to it, so the relay cannot know which blobs are still wanted. **Set it above your longest kept-history retention**, or an attachment can 404 while its message is still readable |
 | `METRICS_TOKEN` | unset | unset = `/metrics` returns 404 and no metrics are served at all. Set it to enable a Prometheus scrape at `/metrics`, authenticated with `Authorization: Bearer <token>`. Treat it as a secret: the metrics are pure metadata — online counts, circle counts, message rates — which is exactly what the relay is otherwise the only party to see |
 
@@ -280,8 +287,12 @@ that auto-provisions Let's Encrypt certificates — see
 cargo test                                            # relay + crypto core, in-memory store
 TEST_DATABASE_URL=postgres://… cargo test             # + postgres contract tests
 cd client && npm test                                 # client unit tests
-cd client && npm run build && npm run e2e             # 18-step browser journey
+cd client && npm run build && npm run e2e             # the full browser journey
+cd client && npm run e2e:resilience                   # reloads at bad moments, two tabs, two devices
 ```
+
+Both browser suites run in CI and gate deploys. They need the wasm built
+(`crypto-core/build-wasm.sh`) and the relay binary (`cargo build -p relay`).
 
 The client e2e drives five real browser profiles through onboarding,
 E2EE chat, joiners reading a room's past, reload persistence, invite-link
@@ -332,14 +343,37 @@ joins, identity recovery, encrypted attachments, safety numbers, and
   Membership itself is cryptographically enforced and cannot be bypassed.
 - **Invite blobs go stale per epoch** — the link creator's client
   refreshes them; if they're offline long enough the link pauses.
-- **Devices share one identity, not one ratchet** — several devices can
-  hold the same identity (link one from a signed-in device, or enrol a
-  passkey per device; Settings lists them and revokes any one). What they
-  do *not* share is MLS state: each device is not its own leaf, so a
-  second device joins the group afresh and sees no scrollback, and
-  identity recovery restores the identity, never the group ratchets.
-  Revocation is forward-only — it stops that passkey unlocking the
-  identity again, and cannot erase what a device already holds.
+- **Every device is a full member; stale ones are not pruned** — each
+  device of an account has its own key, certified by the account's
+  identity key, and its own leaf in every circle. Signing in somewhere new
+  brings the circles from the relay, and the device then asks each circle
+  to let it in: any member who is online does so automatically, because
+  the certificate is checked against the identity key the circle already
+  holds for that member (nobody has to approve it, and nobody can add a
+  device its owner's identity did not certify). Until that happens the
+  device reads but cannot send. Removing a member removes all of their
+  devices. What is not built: dropping a single device's leaf. A browser
+  that was wiped, or a phone that is gone, keeps its place in the group
+  until its owner is removed and re-added — and since every device holds
+  the same identity bundle, losing one is losing the account, exactly as
+  before. Passkey revocation is forward-only: it stops that passkey
+  unlocking the identity again, and cannot erase what a device holds.
+- **One device per account in a call** — presence and call signaling are
+  not echoed between an account's own devices, so two of them joining the
+  same voice room is not supported.
+- **One tab at a time** — tabs of one browser profile share one ratchet,
+  which cannot be advanced from two places. A second tab says the app is
+  open elsewhere and offers to take the session; taking it stops the
+  first. Browsers without Web Locks (Safari before 15.4) are unguarded.
+- **A refused join can stall membership changes** — a commit that tries to
+  put a member's name under a different key is refused by every client
+  before it is merged, but the relay has already counted it as the
+  circle's next epoch, so later adds and removals are rejected as stale
+  until the circle is re-formed. It turns impersonation into a nuisance
+  only a link holder can cause; the relay cannot tell a valid commit from
+  an invalid one, so the fix belongs in how epochs are agreed.
+- **A line is on screen a moment before the relay has it** — closing the
+  tab in that instant loses it; there is no outbox yet.
 - **Password vaults can be brute-forced by the server** — only for weak
   passwords, and only offline against the encrypted bundle (Argon2id,
   19 MiB/t=2). Passkey vaults have no such surface. The sign-in params

@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { openDb } from './lib/db.js';
 import { createCrypto } from './lib/rpc.js';
+import { SessionLock } from './lib/session-lock.js';
 import { Controller } from './lib/controller.js';
 import { parseInviteUrl } from './lib/invite.js';
 import { parseLinkUrl, verifyCode } from './lib/link.js';
@@ -19,7 +20,7 @@ import CallBar from './components/CallBar.jsx';
 import PhoneTabs from './components/PhoneTabs.jsx';
 import CallStage from './components/CallStage.jsx';
 import GameStage from './components/GameStage.jsx';
-import { callChatChannel } from './lib/controller.js';
+import { callChatChannel, isCallChat } from './lib/controller.js';
 import Settings from './components/Settings.jsx';
 import NotificationsPrompt from './components/NotificationsPrompt.jsx';
 import {
@@ -102,7 +103,15 @@ function reducer(state, action) {
     }
     case 'servers': {
       let active = state.active;
-      if (!active.server && action.servers.length > 0) {
+      // No circle open, and not because the person went to the list of
+      // them: boot, before the circles had loaded. Land on the first.
+      //
+      // `atHome` is the second half of that sentence. Without it this fired
+      // for someone standing on circles home too, and a roster update
+      // arrives with every message in every circle — so the list of your
+      // circles threw you into the first one whenever anybody, anywhere,
+      // said anything.
+      if (!active.server && !state.atHome && action.servers.length > 0) {
         active = { server: action.servers[0].id, channel: null };
       } else if (active.server) {
         const srv = action.servers.find((s) => s.id === active.server);
@@ -114,7 +123,16 @@ function reducer(state, action) {
           active = first
             ? { server: first.id, channel: null }
             : { server: null, channel: null };
-        } else if (active.channel && !srv.channels.includes(active.channel)) {
+        } else if (
+          active.channel &&
+          // A call's thread is never in the room list — it belongs to the
+          // call's stage — so its absence is not a deletion. Treating it as
+          // one swapped the thread under an open call for the first text
+          // room on the next roster update: lines sent into the call went
+          // unseen there, and what the stage showed was another room.
+          !isCallChat(active.channel) &&
+          !srv.channels.includes(active.channel)
+        ) {
           // The active channel was renamed or deleted out from under us —
           // fall back to the first remaining channel so the view isn't stranded.
           active = { ...active, channel: srv.channels[0] };
@@ -128,6 +146,8 @@ function reducer(state, action) {
       return {
         ...state,
         active: { server: action.server, channel: action.channel },
+        // Circles home, chosen. See the `servers` case for why it is kept.
+        atHome: !action.server,
         // Switching rooms clears the pane: rendering the old room's
         // messages until the new load resolves invites cross-channel
         // flashes and races the live-append path below.
@@ -185,8 +205,12 @@ function reducer(state, action) {
 }
 
 
+/** Set just before a superseded tab reloads to take the session back. */
+const TAKE_SESSION_KEY = 'quorum-take-session';
+
 export default function App() {
   const [state, rawDispatch] = useReducer(reducer, initial);
+  const takeSessionRef = useRef(() => {});
   // The roster regroups (a member sliding into "in call" / "playing") on a
   // voice update, which is network-driven, not a click — so we can't wrap it
   // at a call site. Instead the dispatch itself runs a View Transition, but
@@ -294,20 +318,49 @@ export default function App() {
     const invite = parseInviteUrl(location);
     if (invite) controller.setPendingInvite(invite);
     controllerRef.current = controller;
-    openDb()
-      .then((db) => {
-        controller.db = db;
-        controller.boot().catch((e) => dispatch({ type: 'toast', text: e.message }));
-      })
-      // Private browsing and locked-down profiles reject openDb outright.
-      // This had no catch, so the rejection went unhandled and the app sat
-      // on the boot splash forever with nothing on screen to explain it.
-      .catch((e) =>
-        dispatch({
-          type: 'fatal',
-          text: `This browser won’t let quorum store data (${e.message}). Private browsing usually causes this, so try a normal window.`,
+    const start = () =>
+      openDb()
+        .then((db) => {
+          controller.db = db;
+          controller.boot().catch((e) => dispatch({ type: 'toast', text: e.message }));
         })
-      );
+        // Private browsing and locked-down profiles reject openDb outright.
+        // This had no catch, so the rejection went unhandled and the app sat
+        // on the boot splash forever with nothing on screen to explain it.
+        .catch((e) =>
+          dispatch({
+            type: 'fatal',
+            text: `This browser won’t let quorum store data (${e.message}). Private browsing usually causes this, so try a normal window.`,
+          })
+        );
+    // One tab at a time runs the session: two would share one ratchet, and
+    // a shared ratchet silently breaks both (see session-lock.js). Nothing
+    // that reads the ratchet — the database included — starts before this
+    // tab holds the lock.
+    const lock = new SessionLock({
+      onSuperseded: async () => {
+        await controller.shutdown();
+        dispatch({ type: 'phase', phase: 'superseded' });
+      },
+    });
+    takeSessionRef.current = () => {
+      dispatch({ type: 'phase', phase: 'loading' });
+      lock.takeOver().then(start);
+    };
+    // "Use it here" on a tab that was superseded reloads into a clean
+    // controller, and this flag carries the intent across the reload.
+    let wanted = false;
+    try {
+      wanted = sessionStorage.getItem(TAKE_SESSION_KEY) === '1';
+      sessionStorage.removeItem(TAKE_SESSION_KEY);
+    } catch {
+      /* storage blocked: the user is asked again, which is fine */
+    }
+    lock.tryAcquire().then((mine) => {
+      if (mine) start();
+      else if (wanted) takeSessionRef.current();
+      else dispatch({ type: 'phase', phase: 'elsewhere' });
+    });
   }, []);
 
   // Sending side of device-linking: a signed-in device opened with a link URL
@@ -606,6 +659,35 @@ export default function App() {
       </div>
     );
   }
+  // Open in another tab of this browser. Not an error and not a dead end:
+  // say where the session is, and offer it here.
+  if (state.phase === 'elsewhere' || state.phase === 'superseded') {
+    const moved = state.phase === 'superseded';
+    return (
+      <div className="boot-fatal" data-testid={moved ? 'session-superseded' : 'session-elsewhere'}>
+        <h1>{moved ? 'quorum moved to another tab' : 'quorum is open in another tab'}</h1>
+        <p>
+          One tab at a time: your encryption keys advance with every message, and two tabs
+          advancing them separately would break both. Switching keeps everything.
+        </p>
+        <button
+          className="button"
+          data-testid="session-take"
+          onClick={() => {
+            if (!moved) return takeSessionRef.current();
+            try {
+              sessionStorage.setItem(TAKE_SESSION_KEY, '1');
+            } catch {
+              /* asked again after the reload */
+            }
+            location.reload();
+          }}
+        >
+          Use it here
+        </button>
+      </div>
+    );
+  }
   if (state.phase === 'loading') {
     return <BootLoader />;
   }
@@ -718,12 +800,31 @@ export default function App() {
       const reply = await controllerRef.current.adminList();
       dispatch({
         type: 'modal',
-        modal: { type: 'admin', users: reply.users, groups: reply.groups },
+        modal: {
+          type: 'admin',
+          users: reply.users,
+          groups: reply.groups,
+          // The relay knows circles by id only. Where this account is in
+          // one, say which it is by the name this device knows it under.
+          names: Object.fromEntries(stateRef.current.servers.map((s) => [s.id, s.name])),
+        },
       });
     } catch (e) {
       dispatch({ type: 'toast', text: e.message });
     }
   };
+
+  // The list of every circle you are in — where a second circle is made,
+  // and where what is waiting on you across all of them is shown. Reachable
+  // from the fascia on every screen: it was wired only to the phone's tab
+  // bar, so on a wider screen there was no way back to it at all, and
+  // nobody already in one circle could start another.
+  const goCircles = () =>
+    withViewTransition(() => {
+      dispatch({ type: 'select', server: null, channel: null });
+      setStage(false);
+      setGame(null);
+    });
 
   const paletteActions = [
     ...(activeServer && canManage
@@ -783,6 +884,7 @@ export default function App() {
         theme={theme}
         canInvite={canManage}
         onInvite={openInvite}
+        onCircles={goCircles}
         onPalette={() => setPaletteOpen(true)}
         onTheme={toggleTheme}
         me={state.me}
@@ -1297,6 +1399,10 @@ export default function App() {
             onSetThreshold={(srv, n) => controllerRef.current.setThreshold(srv, n)}
             onLeaveServer={(srv) => controllerRef.current.leaveServer(srv)}
             onDeleteServer={(srv) => controllerRef.current.deleteServer(srv)}
+            onAdminDeleteGroup={async (group) => {
+              await controllerRef.current.adminDeleteGroup(group);
+              await openAdminOverview(); // the list, as the relay now has it
+            }}
             identityKey={controllerRef.current?.identityKeyString()}
           />
         )}
@@ -1322,13 +1428,7 @@ export default function App() {
         channel={channel}
         onStage={stage && !!state.voice.active}
         onGame={!!(liveGame && channel)}
-        onCircles={() =>
-          withViewTransition(() => {
-            dispatch({ type: 'select', server: null, channel: null });
-            setStage(false);
-            setGame(null);
-          })
-        }
+        onCircles={goCircles}
         onBoard={() =>
           withViewTransition(() => {
             dispatch({ type: 'select', server, channel: null });

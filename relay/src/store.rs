@@ -171,9 +171,29 @@ pub trait Store: Send + Sync {
     /// How many users are registered (0 = fresh relay: the next
     /// registration is the bootstrap user and bypasses the invite gate).
     async fn user_count(&self) -> Result<u64, StoreError>;
-    async fn publish_key_packages(&self, user: &str, payloads: Vec<Vec<u8>>) -> Result<(), StoreError>;
-    /// Consume (remove and return) one KeyPackage for `user`.
+    /// Park KeyPackages for one device of `user`. `device` is "" for a
+    /// client that does not name its device. `now` (unix seconds) stamps
+    /// them, which is what `take_device_key_packages` judges freshness by.
+    async fn publish_key_packages(
+        &self,
+        user: &str,
+        device: &str,
+        payloads: Vec<Vec<u8>>,
+        now: u64,
+    ) -> Result<(), StoreError>;
+    /// Consume (remove and return) one KeyPackage for `user`, from any
+    /// device — the oldest.
     async fn take_key_package(&self, user: &str) -> Result<Option<Vec<u8>>, StoreError>;
+    /// Consume one KeyPackage from each NAMED device of `user` — the oldest
+    /// of each — as (device, payload), ordered by device. Only devices that
+    /// published at or after `fresh_after`; with `device`, only that one.
+    /// Unnamed ("") packages are never returned here.
+    async fn take_device_key_packages(
+        &self,
+        user: &str,
+        device: Option<&str>,
+        fresh_after: u64,
+    ) -> Result<Vec<(String, Vec<u8>)>, StoreError>;
     /// Create the group; the creator becomes its first admin.
     async fn create_group(&self, group: &str, creator: &str) -> Result<(), StoreError>;
     /// Add `user` as a plain member; keeps the existing role if already in.
@@ -212,9 +232,12 @@ pub trait Store: Send + Sync {
         commit: bool,
     ) -> Result<u64, StoreError>;
     async fn messages_after(&self, group: &str, after: u64) -> Result<Vec<StoredMessage>, StoreError>;
-    async fn store_welcome(&self, to: &str, welcome: StoredWelcome) -> Result<(), StoreError>;
-    /// Remove and return all Welcomes queued for `to`.
-    async fn take_welcomes(&self, to: &str) -> Result<Vec<StoredWelcome>, StoreError>;
+    /// Queue a Welcome for `to`. `device` "" means any of their devices.
+    async fn store_welcome(&self, to: &str, device: &str, welcome: StoredWelcome) -> Result<(), StoreError>;
+    /// Remove and return the Welcomes queued for this device of `to`: those
+    /// addressed to it, and those addressed to no device in particular.
+    /// Welcomes addressed to the account's OTHER devices stay queued.
+    async fn take_welcomes(&self, to: &str, device: &str) -> Result<Vec<StoredWelcome>, StoreError>;
 
     // --- channel history logs ---
     /// Append to the history log `hid` of `group`; returns the assigned
@@ -370,9 +393,11 @@ pub trait Store: Send + Sync {
 #[derive(Default)]
 struct MemoryInner {
     users: HashMap<String, Vec<u8>>,
-    key_packages: HashMap<String, Vec<Vec<u8>>>,
+    /// user -> (device, published_at, payload), oldest first.
+    key_packages: HashMap<String, Vec<(String, u64, Vec<u8>)>>,
     groups: HashMap<String, GroupData>,
-    welcomes: HashMap<String, Vec<StoredWelcome>>,
+    /// recipient -> (device it is for, or "" for any; the Welcome)
+    welcomes: HashMap<String, Vec<(String, StoredWelcome)>>,
     invites: HashMap<String, InviteRecord>,
     /// (invite, user) pairs that have already counted a use, so the same
     /// joiner presenting the link twice spends it once.
@@ -438,17 +463,54 @@ impl Store for MemoryStore {
         Ok(inner.users.len() as u64)
     }
 
-    async fn publish_key_packages(&self, user: &str, payloads: Vec<Vec<u8>>) -> Result<(), StoreError> {
+    async fn publish_key_packages(
+        &self,
+        user: &str,
+        device: &str,
+        payloads: Vec<Vec<u8>>,
+        now: u64,
+    ) -> Result<(), StoreError> {
         let mut inner = self.inner.lock().unwrap();
-        inner.key_packages.entry(user.to_string()).or_default().extend(payloads);
+        inner
+            .key_packages
+            .entry(user.to_string())
+            .or_default()
+            .extend(payloads.into_iter().map(|p| (device.to_string(), now, p)));
         Ok(())
     }
 
     async fn take_key_package(&self, user: &str) -> Result<Option<Vec<u8>>, StoreError> {
         let mut inner = self.inner.lock().unwrap();
         Ok(inner.key_packages.get_mut(user).and_then(|v| {
-            if v.is_empty() { None } else { Some(v.remove(0)) }
+            if v.is_empty() { None } else { Some(v.remove(0).2) }
         }))
+    }
+
+    async fn take_device_key_packages(
+        &self,
+        user: &str,
+        device: Option<&str>,
+        fresh_after: u64,
+    ) -> Result<Vec<(String, Vec<u8>)>, StoreError> {
+        let mut inner = self.inner.lock().unwrap();
+        let Some(pool) = inner.key_packages.get_mut(user) else { return Ok(Vec::new()) };
+        // Which named devices are fresh: judged by their NEWEST package, so
+        // an old one at the front of a live device's queue is still served.
+        let mut devices: Vec<String> = pool
+            .iter()
+            .filter(|(d, at, _)| !d.is_empty() && *at >= fresh_after)
+            .map(|(d, _, _)| d.clone())
+            .filter(|d| device.is_none_or(|only| only == d))
+            .collect();
+        devices.sort();
+        devices.dedup();
+        let mut out = Vec::with_capacity(devices.len());
+        for d in devices {
+            if let Some(i) = pool.iter().position(|(dev, _, _)| *dev == d) {
+                out.push((d, pool.remove(i).2));
+            }
+        }
+        Ok(out)
     }
 
     async fn create_group(&self, group: &str, creator: &str) -> Result<(), StoreError> {
@@ -492,7 +554,7 @@ impl Store for MemoryStore {
         // Welcomes are keyed by recipient, not group; drop any that pointed
         // at this group so a queued invite can't resurrect a dead record.
         for queue in inner.welcomes.values_mut() {
-            queue.retain(|w| w.group != group);
+            queue.retain(|(_, w)| w.group != group);
         }
         inner.invites.retain(|_, rec| rec.group != group);
         Ok(())
@@ -812,15 +874,19 @@ impl Store for MemoryStore {
         Ok(data.log.iter().filter(|m| m.seq > after).cloned().collect())
     }
 
-    async fn store_welcome(&self, to: &str, welcome: StoredWelcome) -> Result<(), StoreError> {
+    async fn store_welcome(&self, to: &str, device: &str, welcome: StoredWelcome) -> Result<(), StoreError> {
         let mut inner = self.inner.lock().unwrap();
-        inner.welcomes.entry(to.to_string()).or_default().push(welcome);
+        inner.welcomes.entry(to.to_string()).or_default().push((device.to_string(), welcome));
         Ok(())
     }
 
-    async fn take_welcomes(&self, to: &str) -> Result<Vec<StoredWelcome>, StoreError> {
+    async fn take_welcomes(&self, to: &str, device: &str) -> Result<Vec<StoredWelcome>, StoreError> {
         let mut inner = self.inner.lock().unwrap();
-        Ok(inner.welcomes.remove(to).unwrap_or_default())
+        let Some(queue) = inner.welcomes.get_mut(to) else { return Ok(Vec::new()) };
+        let (mine, others): (Vec<_>, Vec<_>) =
+            queue.drain(..).partition(|(d, _)| d.is_empty() || d == device);
+        *queue = others;
+        Ok(mine.into_iter().map(|(_, w)| w).collect())
     }
 
     async fn create_invite(&self, invite: &str, record: InviteRecord) -> Result<(), StoreError> {

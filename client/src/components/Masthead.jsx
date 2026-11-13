@@ -30,6 +30,7 @@ export default function Masthead({
   call,
   now,
   onOpenCircle,
+  onCircles,
   connection,
   theme,
   canInvite,
@@ -49,12 +50,22 @@ export default function Masthead({
       {/* The brand mark never leaves the fascia (§9.5) — but inside a circle
           the wordmark yields its width to the answer people actually need
           from this bar, which is which circle and which room. */}
-      <div className={cx('masthead-brand', server && 'compact')}>
+      {/* And it is the way home: the list of your circles. A button, with
+          a name that says where it goes — the glyph alone says "quorum". */}
+      <button
+        type="button"
+        className={cx('masthead-brand', server && 'compact')}
+        data-testid="masthead-home"
+        aria-label="All your circles"
+        title="All your circles"
+        aria-current={server ? undefined : 'page'}
+        onClick={onCircles}
+      >
         <span className="brand-glyph">
           <QuorumGlyph />
         </span>
         <span className="wordmark">quorum</span>
-      </div>
+      </button>
       {server && (
         <CircleMarker
           server={server}

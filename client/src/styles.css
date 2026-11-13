@@ -607,6 +607,15 @@ kbd {
   gap: 10px;
   width: 228px;
   flex-shrink: 0;
+  /* It is a button — the way back to the list of circles — and should not
+     look like one: the brand mark keeps its place and its face. */
+  padding: 0;
+  border: 0;
+  background: none;
+  color: inherit;
+  font: inherit;
+  text-align: left;
+  cursor: pointer;
 }
 /* Inside a circle the marker is the more useful thing to give the width to.
    The glyph stays — the brand mark is never removed, only narrowed. */

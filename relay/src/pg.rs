@@ -70,6 +70,15 @@ impl PgStore {
                 user_id text NOT NULL REFERENCES users(user_id),
                 payload bytea NOT NULL
             );
+            -- Each device of an account is its own MLS leaf, so its
+            -- KeyPackages are kept apart from its siblings': adding a person
+            -- takes one from each device. `published_at` (unix seconds) is
+            -- what lets a device that has stopped publishing — a reinstalled
+            -- browser, a lost phone — age out of that. Both additive with
+            -- defaults, so SCHEMA_VERSION does not move: rows from before
+            -- carry '' and 0, which is exactly "unnamed, and not fresh".
+            ALTER TABLE key_packages ADD COLUMN IF NOT EXISTS device text NOT NULL DEFAULT '';
+            ALTER TABLE key_packages ADD COLUMN IF NOT EXISTS published_at bigint NOT NULL DEFAULT 0;
             CREATE TABLE IF NOT EXISTS groups (
                 group_id text PRIMARY KEY,
                 created_by text NOT NULL,
@@ -119,6 +128,9 @@ impl PgStore {
                 after_seq bigint NOT NULL,
                 payload bytea NOT NULL
             );
+            -- Which device a queued Welcome is for; '' = any. Additive with
+            -- a default, as above.
+            ALTER TABLE welcomes ADD COLUMN IF NOT EXISTS to_device text NOT NULL DEFAULT '';
             CREATE TABLE IF NOT EXISTS vaults (
                 user_id text PRIMARY KEY REFERENCES users(user_id),
                 kind text NOT NULL,
@@ -309,16 +321,62 @@ impl Store for PgStore {
         Ok(row.get::<i64, _>("n") as u64)
     }
 
-    async fn publish_key_packages(&self, user: &str, payloads: Vec<Vec<u8>>) -> Result<(), StoreError> {
+    async fn publish_key_packages(
+        &self,
+        user: &str,
+        device: &str,
+        payloads: Vec<Vec<u8>>,
+        now: u64,
+    ) -> Result<(), StoreError> {
         for payload in payloads {
-            sqlx::query("INSERT INTO key_packages (user_id, payload) VALUES ($1, $2)")
-                .bind(user)
-                .bind(payload)
-                .execute(&self.pool)
-                .await
-                .map_err(backend)?;
+            sqlx::query(
+                "INSERT INTO key_packages (user_id, device, published_at, payload)
+                 VALUES ($1, $2, $3, $4)",
+            )
+            .bind(user)
+            .bind(device)
+            .bind(now as i64)
+            .bind(payload)
+            .execute(&self.pool)
+            .await
+            .map_err(backend)?;
         }
         Ok(())
+    }
+
+    async fn take_device_key_packages(
+        &self,
+        user: &str,
+        device: Option<&str>,
+        fresh_after: u64,
+    ) -> Result<Vec<(String, Vec<u8>)>, StoreError> {
+        // The oldest package of each named, fresh device. Freshness is the
+        // device's NEWEST package, so an old one at the head of a live
+        // device's queue is still served. Two callers racing for the same
+        // row is harmless: a row is deleted once, so one of them simply gets
+        // nothing for that device.
+        let rows = sqlx::query(
+            "DELETE FROM key_packages WHERE id IN (
+                 SELECT DISTINCT ON (device) id FROM key_packages
+                 WHERE user_id = $1 AND device <> ''
+                   AND ($2 = '' OR device = $2)
+                   AND device IN (
+                       SELECT device FROM key_packages WHERE user_id = $1
+                       GROUP BY device HAVING max(published_at) >= $3
+                   )
+                 ORDER BY device, id
+             ) RETURNING device, payload",
+        )
+        .bind(user)
+        .bind(device.unwrap_or(""))
+        .bind(fresh_after as i64)
+        .fetch_all(&self.pool)
+        .await
+        .map_err(backend)?;
+        let mut out: Vec<(String, Vec<u8>)> =
+            rows.into_iter().map(|r| (r.get("device"), r.get("payload"))).collect();
+        out.sort_by(|a, b| a.0.cmp(&b.0));
+        Ok(out)
     }
 
     async fn take_key_package(&self, user: &str) -> Result<Option<Vec<u8>>, StoreError> {
@@ -998,12 +1056,13 @@ impl Store for PgStore {
             .collect())
     }
 
-    async fn store_welcome(&self, to: &str, welcome: StoredWelcome) -> Result<(), StoreError> {
+    async fn store_welcome(&self, to: &str, device: &str, welcome: StoredWelcome) -> Result<(), StoreError> {
         sqlx::query(
-            "INSERT INTO welcomes (to_user, from_user, group_id, after_seq, payload)
-             VALUES ($1, $2, $3, $4, $5)",
+            "INSERT INTO welcomes (to_user, to_device, from_user, group_id, after_seq, payload)
+             VALUES ($1, $2, $3, $4, $5, $6)",
         )
         .bind(to)
+        .bind(device)
         .bind(&welcome.from)
         .bind(&welcome.group)
         .bind(welcome.after as i64)
@@ -1014,15 +1073,19 @@ impl Store for PgStore {
         Ok(())
     }
 
-    async fn take_welcomes(&self, to: &str) -> Result<Vec<StoredWelcome>, StoreError> {
-        let rows = sqlx::query(
-            "DELETE FROM welcomes WHERE to_user = $1
-             RETURNING from_user, group_id, after_seq, payload",
+    async fn take_welcomes(&self, to: &str, device: &str) -> Result<Vec<StoredWelcome>, StoreError> {
+        // In id order: RETURNING makes no promise about it, and a device
+        // re-added twice must open the older Welcome first.
+        let mut rows = sqlx::query(
+            "DELETE FROM welcomes WHERE to_user = $1 AND (to_device = '' OR to_device = $2)
+             RETURNING id, from_user, group_id, after_seq, payload",
         )
         .bind(to)
+        .bind(device)
         .fetch_all(&self.pool)
         .await
         .map_err(backend)?;
+        rows.sort_by_key(|r| r.get::<i64, _>("id"));
         Ok(rows
             .into_iter()
             .map(|r| StoredWelcome {

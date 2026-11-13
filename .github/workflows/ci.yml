@@ -17,8 +17,18 @@ on:
   workflow_call:
   workflow_dispatch:
 
+# Keyed by the workflow that is running, not just the ref.
+#
+# deploy.yml calls this file as its test gate, and a called workflow keeps
+# this concurrency block. A merge to main starts two runs of it at once — the
+# `ci` push run and the copy inside `deploy` — and with one shared group they
+# cancelled each other. Which one lost was a race: when it was `ci`, nobody
+# noticed; when it was the copy inside `deploy`, the deploy was cancelled two
+# seconds in and main sat merged and undeployed with no failure to look at.
+# `github.workflow` is the CALLER's name inside a called workflow, so the two
+# runs now land in different groups and neither can cancel the other.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 env:
@@ -321,6 +331,66 @@ jobs:
 
       - name: node --test
         run: npm test
+        working-directory: client
+
+  # The browser journeys: real relay, real wasm, real browsers.
+  #
+  # These existed and were not run here, and the gap was the whole story of
+  # how the product broke. Every job above stayed green while a member could
+  # not read a room after reloading, two tabs silently corrupted each other,
+  # and the main journey itself stopped at step 6 — with a "known failure"
+  # note at step 7 and nothing below it exercised for months. Unit suites
+  # test the rules; only this tests that the pieces still meet.
+  #
+  # `deploy.yml` calls this workflow as its gate, so adding the job here is
+  # what makes a deploy wait for it.
+  e2e:
+    name: browser journeys
+    runs-on: ubuntu-latest
+    timeout-minutes: 40
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          targets: wasm32-unknown-unknown
+
+      - uses: Swatinem/rust-cache@v2
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: client/package-lock.json
+
+      - name: install wasm-pack
+        run: curl -sSf https://rustwasm.github.io/wasm-pack/installer/init.sh | sh
+
+      # Unoptimized on purpose: this job is about behaviour, not the bytes
+      # that ship. The `build` job is the one that pins the optimizer.
+      - name: build wasm
+        run: ./crypto-core/build-wasm.sh
+
+      - run: npm ci
+        working-directory: client
+
+      - name: build the client
+        run: npm run build
+        working-directory: client
+
+      - name: build the relay
+        run: cargo build -p relay
+
+      - name: install the browser
+        run: npx playwright install --with-deps chromium
+        working-directory: client
+
+      - name: the full journey
+        run: npm run e2e
+        working-directory: client
+
+      - name: reloads, two tabs, two devices
+        run: npm run e2e:resilience
         working-directory: client
 
   build:
