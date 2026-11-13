@@ -10,6 +10,7 @@ import {
   activitySrc,
   freshPresence,
   gameHost,
+  gameHostNote,
   normalizeGame,
   normalizeGames,
   normalizePresence,
@@ -78,7 +79,9 @@ test('games ride inside the overview payload', () => {
 
 test('gameHost names where the game actually lives', () => {
   assert.equal(gameHost({ kind: 'activity', url: 'https://play.example:8443/r/1' }), 'play.example:8443');
-  assert.equal(gameHost({ kind: 'activity', url: '/games/hexgambit.html' }), 'bundled with this app');
+  // A bundled game has no third-party host, and says so as null rather than
+  // as a phrase a caller will drop into a sentence built for a hostname.
+  assert.equal(gameHost({ kind: 'activity', url: '/games/hexgambit.html' }), null);
   assert.equal(gameHost({ kind: 'server', url: 'mc.example.net:25565' }), 'mc.example.net:25565');
 });
 
@@ -189,4 +192,13 @@ test('a genuinely third-party game is cross-origin', () => {
 
 test('a port or scheme difference still counts as cross-origin', () => {
   assert.equal(isSameOriginSrc('https://quorum.example:8443/x', 'https://quorum.example'), false);
+});
+
+test('gameHostNote is a sentence for both kinds of host', () => {
+  assert.equal(
+    gameHostNote({ kind: 'activity', url: 'https://tanks.example/r/1' }),
+    'Hosted by tanks.example, which can see your connection but not your chat.'
+  );
+  assert.match(gameHostNote({ kind: 'activity', url: '/games/hexgambit.html' }), /^Runs inside quorum\./);
+  assert.doesNotMatch(gameHostNote({ kind: 'activity', url: '/games/hexgambit.html' }), /bundled/);
 });

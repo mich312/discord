@@ -1,11 +1,11 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
 import Seal from './Seal.jsx';
+import EncryptionNote, { uncheckedMembers } from './EncryptionNote.jsx';
 import { describeRetention, freshTyping } from '../lib/controller.js';
 import { circlePresence } from '../lib/presence.js';
 import { meshFull, meshFullMessage } from '../lib/voice.js';
-import { nameHue } from '../lib/avatar.js';
 import { fold, dayLabel } from '../lib/fold.js';
-import { AlertTriangle, Lock, Hash, Paperclip, Clock, Archive, Wave, Gamepad, Check, Plus, Reply, Pencil, Trash, X } from './icons.jsx';
+import { AlertTriangle, Lock, Hash, Paperclip, Clock, Archive, Wave, Gamepad, Check, Plus, Reply, Pencil, Trash, X, ArrowUp } from './icons.jsx';
 import { cx } from '../lib/cx.js';
 
 // The reaction palette: small on purpose. Reactions ride MLS like any
@@ -26,6 +26,8 @@ function ReactionPills({ message, me, onReact }) {
           key={emo}
           className={cx('react', who.includes(me) && 'on')}
           title={who.join(', ')}
+          aria-label={`${emo} ${who.length}${who.includes(me) ? ', including you' : ''}`}
+          aria-pressed={who.includes(me)}
           data-testid={`react-${emo}`}
           onClick={() => onReact?.(target, emo)}
         >
@@ -60,11 +62,12 @@ function MessageActions({ message, me, onReact, onReply, onEdit, onDelete }) {
         <span className="react-add-wrap">
           <button
             className="msg-act"
-            title="add reaction"
+            title="Add reaction"
+            aria-label="Add reaction"
             data-testid="react-add"
             onClick={() => setPicking((v) => !v)}
           >
-            <Plus size={13} />
+            <Plus size={14} />
           </button>
           {picking && (
             <span className="react-picker" data-testid="react-picker">
@@ -85,36 +88,37 @@ function MessageActions({ message, me, onReact, onReply, onEdit, onDelete }) {
         </span>
       )}
       {canReply && (
-        <button className="msg-act" title="reply" data-testid="msg-reply" onClick={() => onReply(message)}>
-          <Reply size={13} />
+        <button className="msg-act" title="Reply" aria-label="Reply" data-testid="msg-reply" onClick={() => onReply(message)}>
+          <Reply size={14} />
         </button>
       )}
       {canEdit && (
-        <button className="msg-act" title="edit" data-testid="msg-edit" onClick={() => onEdit(message)}>
-          <Pencil size={13} />
+        <button className="msg-act" title="Edit" aria-label="Edit" data-testid="msg-edit" onClick={() => onEdit(message)}>
+          <Pencil size={14} />
         </button>
       )}
       {canDelete &&
         (confirmDel ? (
           <button
             className="msg-act danger"
-            title="click again to delete for everyone — the entry is removed from the relay, but not from devices that already read it"
+            title="Click again to delete for everyone. It leaves the server, but not devices that already loaded it."
             data-testid="msg-del-confirm"
             onClick={() => {
               setConfirmDel(false);
               onDelete(message);
             }}
           >
-            delete?
+            Delete?
           </button>
         ) : (
           <button
             className="msg-act"
-            title="delete"
+            title="Delete"
+            aria-label="Delete"
             data-testid="msg-del"
             onClick={() => setConfirmDel(true)}
           >
-            <Trash size={13} />
+            <Trash size={14} />
           </button>
         ))}
     </span>
@@ -182,9 +186,9 @@ function QuotedReply({ reply, me, onJump }) {
       data-testid="reply-quote"
       onClick={onJump ?? undefined}
       disabled={!onJump}
-      title={onJump ? 'jump to the quoted message' : 'the quoted message isn’t on this device'}
+      title={onJump ? 'Jump to the quoted message' : 'The quoted message isn’t on this device'}
     >
-      <Reply size={11} />
+      <Reply size={14} />
       <span className="rq-who">{reply.sender === me ? 'you' : reply.sender}</span>
       <span className="rq-text">{preview}</span>
     </button>
@@ -262,15 +266,15 @@ function Attachment({ file, fetchFile }) {
   }, [file.blob]);
 
   if (isImage) {
-    if (error) return <span className="muted">attachment: {error}</span>;
+    if (error) return <span className="muted">Couldn’t open {file.name}: {error}</span>;
     if (!url)
       return (
         <span
           className="attachment-skeleton"
           data-testid="attachment-skeleton"
           role="img"
-          aria-label={`decrypting ${file.name}`}
-          title={`decrypting ${file.name}…`}
+          aria-label={`Decrypting ${file.name}`}
+          title={`Decrypting ${file.name}…`}
         />
       );
     return <img className="attachment-img" src={url} alt={file.name} data-testid="attachment-img" />;
@@ -279,7 +283,7 @@ function Attachment({ file, fetchFile }) {
     <button
       className="attachment-file"
       data-testid="attachment-file"
-      title={`${file.name} — decrypt & download`}
+      title={`Download ${file.name}`}
       onClick={async () => {
         try {
           const bytes = await fetchFile(file);
@@ -295,59 +299,62 @@ function Attachment({ file, fetchFile }) {
       }}
     >
       <Paperclip size={14} />
-      {file.name}
-      <span className="size">{Math.max(1, Math.round(file.size / 1024))} KB{error ? ` — ${error}` : ''}</span>
+      <span className="attachment-name">{file.name}</span>
+      <span className="size">{Math.max(1, Math.round(file.size / 1024))} KB</span>
+      {error && <span className="attachment-error">Couldn’t download: {error}</span>}
     </button>
   );
 }
 
-// "bob opened Hex Gambit" as a first-class message. The Join button
+// "bob started Hex Gambit" as a first-class message. The Join button
 // resolves the reference against the circle's shelf — if the game was
-// taken off (or never existed), the card stays but the button dims.
-function GameInvite({ game, sender, me, shelf, onLaunchGame }) {
+// taken off (or never existed), the card stays and says so.
+//
+// The art is a flat tile, not a hue gradient: the gradient was decoration
+// standing in for a cover the game never supplied. Who is playing is the
+// reason to join, so that is the line under the name when anyone is.
+function GameInvite({ game, sender, me, shelf, players = [], onLaunchGame }) {
   const resolved = shelf.find((g) => g.id === game.id) ?? null;
-  const hue = nameHue(game.name);
+  const native = resolved?.kind === 'server';
+  const who = players.map((p) => (p === me ? 'you' : p));
+  const playing =
+    who.length === 0
+      ? null
+      : who.length === 1
+        ? `${who[0]} ${who[0] === 'you' ? 'are' : 'is'} playing`
+        : `${who.slice(0, -1).join(', ')} and ${who[who.length - 1]} are playing`;
   return (
     <div className="game-invite" data-testid="game-invite">
-      <div
-        className="gi-art"
-        style={{
-          background: `linear-gradient(135deg, hsl(${hue} 45% 22%), hsl(${(hue + 40) % 360} 60% 40%))`,
-        }}
-      >
-        <Gamepad size={22} />
+      <div className="gi-art" aria-hidden="true">
+        <Gamepad size={24} />
       </div>
       <div className="gi-body">
-        <span className="gi-title">
-          {sender === me ? 'you' : sender} opened {game.name}
-        </span>
-        <span className="gi-sub mono">
-          {resolved
-            ? resolved.kind === 'server'
+        <span className="gi-title">{game.name}</span>
+        <span className={cx('gi-sub', native && 'mono')}>
+          {!resolved
+            ? 'No longer on the shelf'
+            : resolved.kind === 'server'
               ? resolved.url
-              : 'on the shelf — plays right here'
-            : 'no longer on the shelf'}
-        </span>
-        <span className="gi-actions">
-          {resolved && resolved.kind === 'activity' ? (
-            <button
-              className="button live"
-              data-testid="game-invite-join"
-              onClick={() => onLaunchGame(resolved)}
-            >
-              join game
-            </button>
-          ) : resolved ? (
-            <button
-              className="button"
-              data-testid="game-invite-copy"
-              onClick={() => navigator.clipboard?.writeText(resolved.url).catch(() => {})}
-            >
-              copy address
-            </button>
-          ) : null}
+              : playing ?? `${sender === me ? 'You' : sender} started it`}
         </span>
       </div>
+      {resolved && resolved.kind === 'activity' ? (
+        <button
+          className="button"
+          data-testid="game-invite-join"
+          onClick={() => onLaunchGame(resolved)}
+        >
+          Join
+        </button>
+      ) : resolved ? (
+        <button
+          className="button"
+          data-testid="game-invite-copy"
+          onClick={() => navigator.clipboard?.writeText(resolved.url).catch(() => {})}
+        >
+          Copy address
+        </button>
+      ) : null}
     </div>
   );
 }
@@ -374,8 +381,14 @@ export default function Messages({
   hasOlder = false,
   loadingOlder = false,
   onLoadOlder,
+  // The room's settings, for the people who can change its retention —
+  // which is what resolves the kept-history warning (§10.5).
+  onRoomSettings,
 }) {
   const [draft, setDraft] = useState('');
+  // The kept-history note opens into its explanation rather than living in a
+  // tooltip (§11.11), and offers the setting that bounds it where it can.
+  const [historyOpen, setHistoryOpen] = useState(false);
   const [replyTo, setReplyTo] = useState(null);
   // The line being edited (a message), or null. Editing takes over the
   // composer, so it and a pending reply are mutually exclusive.
@@ -432,7 +445,6 @@ export default function Messages({
   const pinned = useRef(true);
   const folded = useMemo(() => fold(messages), [messages]);
   const hasLines = useMemo(() => messages.some((m) => !m.system), [messages]);
-  const members = server.members.length;
   const meta = server.chanMeta?.[channel] ?? {};
   const shelf = server.overview?.games ?? [];
   // The header's call affordance: join the busiest voice room (or the
@@ -447,10 +459,14 @@ export default function Messages({
   // Who is here, and whose key nobody has checked — the two facts the roster
   // column carried that a room genuinely needs on screen. Same definitions as
   // the roster itself, so the header and the board cannot disagree.
-  const liveHere = circlePresence(server, voice).live;
-  const unchecked = server.members.filter(
-    (m) => m !== me && !(server.verified ?? []).includes(m) && !server.mismatched?.[m]
-  ).length;
+  const presence = circlePresence(server, voice);
+  const liveHere = presence.live;
+  // Who is in a given shelf game right now, for the join card's second line.
+  const gamePlayers = (id) =>
+    Object.entries(presence.playing)
+      .filter(([, p]) => p.game?.id === id)
+      .map(([who]) => who);
+  const unchecked = uncheckedMembers(server, me).length;
 
   // Switching room or circle resets the watermark, so the backlog that
   // renders next is not "new" and must not be read out.
@@ -501,7 +517,7 @@ export default function Messages({
             is what the marker and the strip use it for too. */}
         <h2 className="room-name">
           <span className="glyph">
-            <Hash size={13} />
+            <Hash size={14} />
           </span>
           {channel}
         </h2>
@@ -529,43 +545,46 @@ export default function Messages({
           <button
             className="room-unchecked"
             data-testid="room-unchecked"
-            title="nobody on this device has compared these keys yet"
             onClick={onOpenBoard}
           >
-            <AlertTriangle size={13} />
-            {unchecked} unchecked
+            <AlertTriangle size={14} />
+            {unchecked} not verified
           </button>
         )}
         {/* The forward-secrecy trade, stated wherever it applies rather than
-            once in a system chip that scrolls out of view. Every room keeps
-            its history now, so this is not a per-room exception any more —
-            but it is still the cost, and it is only clearly labeled if it is
-            on screen where the messages are. */}
+            once in a system chip that scrolls out of view. It used to be a
+            line of tracked capitals floating at the right edge, which is the
+            type the product uses for "ignore me" (§4.4), with the reason in
+            a tooltip (§11.11). Now it is the control that explains it and,
+            for whoever can, offers the setting that bounds it (§10.5). */}
         <span className="sealed-note">
-          <span
+          <button
             className="kept-note"
             data-testid="kept-history-note"
-            title="This room's messages are stored on the relay, encrypted under a key everyone in the circle holds. Anyone added later can read its past, so messages here are not forward-secret."
+            aria-expanded={historyOpen}
+            aria-controls="kept-history-detail"
+            onClick={() => setHistoryOpen((v) => !v)}
           >
-            <Archive size={11} /> kept for the circle — anyone added later can read back
-          </span>
+            <Archive size={14} />
+            {/* §9.5 allows abbreviating on a phone, not removing: the short
+                label shows there, the full one stays the accessible name. */}
+            <span className="kept-long">New members can read history</span>
+            <span className="kept-short" aria-hidden="true">
+              History visible
+            </span>
+          </button>
           {meta.retention ? (
-            <>
-              <span className="note-sep">·</span>
-              <span className="retention-note" title="auto-delete is on for this room">
-                <Clock size={11} /> auto-deletes {describeRetention(meta.retention)} after sending
-              </span>
-            </>
+            <span className="retention-note">
+              <Clock size={14} /> Deletes after {describeRetention(meta.retention)}
+            </span>
           ) : null}
         </span>
-        {inCallHere && onOpenStage ? (
-          <button className="button pane-call live" data-testid="pane-open-call" onClick={onOpenStage}>
-            <Wave size={13} />
-            open call
-          </button>
-        ) : liveRoom && onVoiceJoin ? (
+        {/* An open call already says so twice — the call bar, and the room
+            in the strip — so the header no longer adds an "open call" of its
+            own. Joining one is still offered here when you are not in it. */}
+        {inCallHere ? null : liveRoom && onVoiceJoin ? (
           <button
-            className={cx('button pane-call', liveRoom.n && 'live')}
+            className="button pane-call"
             data-testid="pane-join-voice"
             // Say "full" before the click rather than after. The join is
             // refused either way, but a disabled button with a reason is not
@@ -580,15 +599,34 @@ export default function Messages({
             }
             onClick={() => onVoiceJoin(liveRoom.r)}
           >
-            <Wave size={13} />
+            <Wave size={14} />
             {meshFull(liveRoom.n)
               ? `${liveRoom.r} is full · ${liveRoom.n}`
               : liveRoom.n
-                ? `join ${liveRoom.r} · ${liveRoom.n}`
-                : `join ${liveRoom.r}`}
+                ? `Join ${liveRoom.r} · ${liveRoom.n}`
+                : `Join ${liveRoom.r}`}
           </button>
         ) : null}
       </header>
+      {historyOpen && (
+        <div className="kept-detail" id="kept-history-detail" role="region" aria-label="Room history">
+          <p>
+            Messages in <strong>#{channel}</strong> are stored on the server, encrypted with a key
+            everyone in {server.name} holds. Anyone added to the circle later can read them, and one
+            leaked key would open them all.
+          </p>
+          <p>
+            {meta.retention
+              ? `This room asks the server to delete messages ${describeRetention(meta.retention)} after they are sent.`
+              : 'This room keeps everything. Asking the server to delete old messages limits what a new member or a leaked key can reach.'}
+          </p>
+          {onRoomSettings && (
+            <button className="button" data-testid="kept-history-settings" onClick={() => onRoomSettings(channel)}>
+              {meta.retention ? 'Change auto-delete' : 'Set auto-delete'}
+            </button>
+          )}
+        </div>
+      )}
       <div
         className="scroll"
         ref={scroller}
@@ -610,12 +648,11 @@ export default function Messages({
             disabled={loadingOlder}
             onClick={onLoadOlder}
           >
-            {loadingOlder ? 'reading…' : `read further back in #${channel}`}
+            {loadingOlder ? 'Loading…' : 'Load earlier messages'}
           </button>
         ) : (
           <div className="watermark" data-testid="watermark">
-            <span className="wm-tag">start of record — #{channel}</span>
-            Beginning of <strong>#{channel}</strong>.
+            This is the beginning of <strong>#{channel}</strong>.
           </div>
         )}
         {folded.map((item) => {
@@ -650,23 +687,16 @@ export default function Messages({
                     key's safety number myself". A line we cannot attribute
                     says so rather than borrowing either. */}
                 {item.auth && item.auth !== 'signed' ? (
-                  <span
-                    className="sender-history"
-                    role="img"
-                    aria-label="sealed with the room key but not signed by its sender — authorship unverified"
-                    title="sealed with the room key but not signed by its sender — authorship unverified"
-                  >
-                    <Archive size={10} />
+                  // §10.2 — weaker authentication never borrows the stronger
+                  // signal. This was a 10px amber glyph with its meaning in a
+                  // tooltip; it is now a word, because touch has no hover.
+                  <span className="sender-history" data-testid="sender-unconfirmed">
+                    Sender not confirmed
                   </span>
                 ) : (
                   (server.verified ?? []).includes(item.sender) && (
-                    <span
-                      className="sender-check"
-                      role="img"
-                      aria-label="safety number checked on this device"
-                      title="safety number checked on this device"
-                    >
-                      <Check size={10} />
+                    <span className="sender-check" role="img" aria-label="Verified on this device">
+                      <Check size={14} />
                     </span>
                   )
                 )}
@@ -691,7 +721,7 @@ export default function Messages({
                 >
                   {m.deleted ? (
                     <span className="text deleted" data-testid="msg-deleted">
-                      <Trash size={11} /> message deleted
+                      <Trash size={14} /> Message deleted
                     </span>
                   ) : (
                     <>
@@ -714,15 +744,14 @@ export default function Messages({
                           sender={m.sender}
                           me={me}
                           shelf={shelf}
+                          players={gamePlayers(m.game.id)}
                           onLaunchGame={onLaunchGame ?? (() => {})}
                         />
                       ) : (
                         <>
                           <MessageText text={m.text ?? ''} members={server.members} me={me} />
                           {m.edited && (
-                            <span className="edited-tag" title="edited — the original entry stays in the log beneath it">
-                              (edited)
-                            </span>
+                            <span className="edited-tag">edited</span>
                           )}
                         </>
                       )}
@@ -731,10 +760,9 @@ export default function Messages({
                         <button
                           className="button msg-retry"
                           data-testid="msg-retry"
-                          title="this message never reached the relay"
                           onClick={() => onRetry(m)}
                         >
-                          failed — retry
+                          Not sent. Retry
                         </button>
                       ) : null}
                       {!server.restored && !m.pending && !m.failed ? (
@@ -765,8 +793,8 @@ export default function Messages({
             </p>
             <p className="ce-sub muted">
               {server.restored
-                ? 'This room is empty — you can read it, but sending needs a re-add.'
-                : 'Say something — it’s end-to-end encrypted before it leaves this device.'}
+                ? 'This room is empty. You can read it, but sending needs a re-add.'
+                : 'Messages are encrypted before they leave this device.'}
             </p>
           </div>
         )}
@@ -774,17 +802,17 @@ export default function Messages({
       <div className="composer-dock">
         {server.restored ? (
           <div className="composer-note restored-note" data-testid="restored-note">
-            <Lock size={11} />
-            read-only: loaded from your circles on the relay — ask a member to re-add{' '}
-            <strong>{me}</strong> (or use an invite link) to send again
+            <Lock size={14} />
+            Read-only on this device. To send again, ask a member to re-add <strong>{me}</strong> or
+            open a fresh invite link.
           </div>
         ) : (
         <>
         {server.outOfSync && (
           <div className="composer-note fork-note" role="status" data-testid="fork-note">
-            <AlertTriangle size={13} />
+            <AlertTriangle size={14} />
             <span>
-              this device is out of sync with <strong>{server.name}</strong> and cannot read new
+              This device is out of sync with <strong>{server.name}</strong> and can&rsquo;t read new
               messages. Ask a member for a fresh invite link and open it to rejoin.
             </span>
           </div>
@@ -792,34 +820,34 @@ export default function Messages({
         {!editing && <TypingLine typing={server.typing} channel={channel} me={me} />}
         {editing ? (
           <div className="reply-bar editing" data-testid="edit-bar">
-            <Pencil size={12} />
-            <span className="rb-label">editing your message</span>
-            <span className="rb-hint mono">Esc to cancel</span>
+            <Pencil size={14} />
+            <span className="rb-label">Editing your message</span>
+            <span className="rb-hint">Esc to cancel</span>
             <button
               type="button"
               className="rb-cancel"
               data-testid="edit-cancel"
-              title="cancel edit"
+              aria-label="Cancel edit"
               onClick={cancelEdit}
             >
-              <X size={12} />
+              <X size={14} />
             </button>
           </div>
         ) : replyTo ? (
           <div className="reply-bar" data-testid="reply-bar">
-            <Reply size={12} />
+            <Reply size={14} />
             <span className="rb-label">
-              replying to <strong>{replyTo.sender === me ? 'you' : replyTo.sender}</strong>
+              Replying to <strong>{replyTo.sender === me ? 'you' : replyTo.sender}</strong>
             </span>
             <span className="rb-text">{replyTo.text?.trim() || 'attachment'}</span>
             <button
               type="button"
               className="rb-cancel"
               data-testid="reply-cancel"
-              title="cancel reply"
+              aria-label="Cancel reply"
               onClick={() => setReplyTo(null)}
             >
-              <X size={12} />
+              <X size={14} />
             </button>
           </div>
         ) : null}
@@ -855,12 +883,11 @@ export default function Messages({
           <button
             type="button"
             className="attach"
-            aria-label="attach a file"
-            title="attach a file (encrypted before it leaves this device)"
+            aria-label="Attach a file"
             data-testid="attach"
             onClick={() => attachRef.current?.click()}
           >
-            <Paperclip />
+            <Paperclip size={18} />
           </button>
           <input
             ref={attachRef}
@@ -890,12 +917,15 @@ export default function Messages({
             aria-label={editing ? 'Edit your message' : `Message #${channel}`}
             data-testid="composer"
           />
-          <span className="send-hint mono" aria-hidden="true">{editing ? '↩ save' : '↩ send'}</span>
+          {/* §11.9 — no Enter-only submits. Enter still sends; this is the
+              control that says so, and the one a phone keyboard without a
+              send key needs. */}
+          <button type="submit" className="button primary send" data-testid="send" disabled={!draft.trim()}>
+            <ArrowUp size={14} />
+            {editing ? 'Save' : 'Send'}
+          </button>
         </form>
-        <div className="composer-note">
-          <Lock size={11} />
-          End-to-end encrypted · {members} member{members === 1 ? '' : 's'}
-        </div>
+        <EncryptionNote server={server} me={me} onVerify={onOpenBoard} />
         </>
         )}
       </div>

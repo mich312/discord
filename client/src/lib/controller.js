@@ -804,7 +804,7 @@ export class Controller {
           record.linkJoined = [...new Set([...(record.linkJoined ?? []), event.sender])];
           await this.addSystemMessage(
             record.id,
-            `${event.sender} joined via invite link — unverified until someone checks their safety number`
+            `${event.sender} joined via invite link. They show as not verified until someone checks their safety number.`
           );
           // Link joiners have no scrollback; whoever owns invites for this
           // group rebroadcasts the metadata they missed (including channel
@@ -2082,7 +2082,7 @@ export class Controller {
       // §11.5 names this exact string as the reason the rule exists. What
       // the organiser needs is the handle they typed and the one thing that
       // would fix it, not the name of the artefact that was missing.
-      throw new Error(`no account called ${user} on this relay — check the spelling, or ask them to sign up`);
+      throw new Error(`No account called ${user} on this server. Check the spelling, or ask them to sign up.`);
     }
     // The relay serves both halves, so make it commit to a consistent story:
     // the KeyPackage's credential must name `user` and carry the signature
@@ -2115,7 +2115,7 @@ export class Controller {
     });
     record.members = members;
     record.epoch = epoch;
-    await this.addSystemMessage(serverId, `${user} added — unverified until you check their safety number`);
+    await this.addSystemMessage(serverId, `${user} was added. They show as not verified until you check their safety number.`);
     // Joiners have no scrollback: rebroadcast name + channels (and channel
     // settings, incl. history keys) so their placeholder record fills in.
     await this.sendContent(serverId, this.metaContent(record));
@@ -2649,7 +2649,7 @@ export class Controller {
     // writing over it would destroy whatever it knows that this does not.
     if (backup.v > BACKUP_VERSION) {
       throw new Error(
-        `these circles were parked by a newer version of the app — reload before changing anything`
+        `These circles were saved by a newer version of quorum. Reload before changing anything.`
       );
     }
     return { servers: backup.servers ?? [], version };
@@ -2688,7 +2688,7 @@ export class Controller {
         if (record.restored) {
           this.addSystemMessage(
             record.id,
-            `loaded from your circles on the relay — the messages are readable, but ask to be re-added before you can send`
+            `Loaded from your circles on the server. You can read the messages; ask to be re-added before you can send.`
           );
         }
       }
@@ -2917,7 +2917,7 @@ export class Controller {
       record.verified = [];
       await this.addSystemMessage(
         record.id,
-        'verification badges were reset — safety numbers are now checked against the key that was verified. Please re-check the members you trust.'
+        'Verification badges were reset. Safety numbers are now checked against the key that was verified, so re-check the members you trust.'
       );
       return true;
     }
@@ -3138,7 +3138,7 @@ export class Controller {
     await this.persistCircle(record);
     await this.addSystemMessage(
       group,
-      `you joined via invite link — only channels that keep history have a past here`
+      `You joined with an invite link, so you can read each room’s history. You show as not verified until someone checks your safety number.`
     );
     this.dispatch({ type: 'servers', servers: this.snapshotServers() });
     await this.relay.request({ t: 'subscribe', group, after: sent.seq });

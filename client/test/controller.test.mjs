@@ -943,7 +943,7 @@ test('legacy handle-only verifications are reset rather than trusted', async () 
   assert.equal(changed, true);
   assert.deepEqual(r.verified, [], 'the unbound badge is dropped');
   assert.ok(
-    msgs(c).some((m) => m.system && m.text.includes('verification badges were reset')),
+    msgs(c).some((m) => m.system && m.text.includes('Verification badges were reset')),
     'and the reset is explained'
   );
   clearTimeout(c.backupTimer);

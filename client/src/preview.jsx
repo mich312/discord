@@ -25,7 +25,7 @@ import CallBar from './components/CallBar.jsx';
 import PhoneTabs from './components/PhoneTabs.jsx';
 import GameStage from './components/GameStage.jsx';
 import BootLoader from './components/BootLoader.jsx';
-import { Key } from './components/icons.jsx';
+import { Key, LinkGlyph } from './components/icons.jsx';
 
 const params = new URLSearchParams(location.search);
 const view = params.get('view') ?? 'app';
@@ -212,6 +212,8 @@ const stageVoice = (sharing) => ({
   ...voice,
   connections: { bob: 'connected', dana: 'connected' },
   speaking: ['dana'],
+  // Somebody muted, so the stage's per-person mic state is on screen.
+  mutedPeers: ['bob'],
   sharing,
   screens: sharing.filter((n) => n !== 'alice'),
 });
@@ -309,7 +311,7 @@ function PreviewShell({ empty = false, circles = false, banner = false, modal = 
   return (
     <div className="app-shell">
       <a className="skip-link" href="#messages-pane">
-        skip to conversation
+        Skip to conversation
       </a>
       <Masthead
         server={activeServer}
@@ -329,15 +331,18 @@ function PreviewShell({ empty = false, circles = false, banner = false, modal = 
           document.documentElement.dataset.theme =
             document.documentElement.dataset.theme === 'paper' ? 'carbon' : 'paper';
         }}
+        callPill={vc.active && !stage && !(liveGame && active.channel) ? vc.active : null}
+        muted={!!vc.muted}
+        onOpenCall={noop}
       />
       {banner && (
         <div className="secure-banner" data-testid="secure-banner">
           <Key size={14} />
           <span>
-            <strong>{me}</strong> lives only in this browser. Park an encrypted copy on the
-            relay and you can sign in on another device.
+            Your key exists only in this browser. Save an encrypted backup to the server so you
+            can sign in on another device.
           </span>
-          <button className="button">secure account</button>
+          <button className="button">Secure account</button>
         </div>
       )}
       {vc.active && !stage && !(liveGame && active.channel) && (
@@ -388,6 +393,9 @@ function PreviewShell({ empty = false, circles = false, banner = false, modal = 
             voice={stage}
             manager={mockVoiceManager}
             me={me}
+            server={activeServer}
+            backLabel={active.channel ? `#${active.channel}` : 'Board'}
+            onVerify={noop}
             messages={callMessages}
             canSend
             onSend={noop}
@@ -526,7 +534,7 @@ function PreviewShell({ empty = false, circles = false, banner = false, modal = 
           <CommandPalette
             servers={list}
             active={active.server}
-            actions={[{ id: 'a', label: 'create invite link', hint: 'action', glyph: <Key size={14} />, run: noop }]}
+            actions={[{ id: 'a', label: 'Create invite link', hint: 'Action', glyph: <LinkGlyph size={14} />, run: noop }]}
             onNavigate={(srv, ch) => setActive({ server: srv, channel: ch })}
             onClose={() => setPaletteOpen(false)}
           />

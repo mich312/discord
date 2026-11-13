@@ -305,7 +305,7 @@ export default function App() {
       .catch((e) =>
         dispatch({
           type: 'fatal',
-          text: `this browser will not let quorum store data (${e.message}). Private browsing usually causes this — try a normal window.`,
+          text: `This browser won’t let quorum store data (${e.message}). Private browsing usually causes this, so try a normal window.`,
         })
       );
   }, []);
@@ -400,7 +400,7 @@ export default function App() {
     setLoadingOlder(true);
     controllerRef.current
       ?.loadOlderMessages(server, channel)
-      .catch((e) => dispatch({ type: 'toast', text: `could not read further back: ${e.message}` }))
+      .catch((e) => dispatch({ type: 'toast', text: `Couldn’t load earlier messages: ${e.message}` }))
       .finally(() => setLoadingOlder(false));
   }, [server, channel]);
 
@@ -493,7 +493,7 @@ export default function App() {
   useEffect(() => {
     if (game && !liveGame) {
       setGame(null);
-      dispatch({ type: 'toast', text: `"${game.name}" was removed from the shelf` });
+      dispatch({ type: 'toast', text: `${game.name} was removed from the shelf` });
     }
   }, [game, liveGame]);
 
@@ -656,7 +656,7 @@ export default function App() {
         controllerRef.current.voice
           .callUser(server, peer)
           .then(() => openStage())
-          .catch((e) => dispatch({ type: 'toast', text: `call: ${e.message}` }));
+          .catch((e) => dispatch({ type: 'toast', text: `Couldn’t start the call: ${e.message}` }));
       }}
       onPropose={(user) =>
         controllerRef.current
@@ -671,7 +671,7 @@ export default function App() {
       onRemoveMember={(user) =>
         controllerRef.current
           .removeMember(server, user)
-          .catch((e) => dispatch({ type: 'toast', text: `remove: ${e.message}` }))
+          .catch((e) => dispatch({ type: 'toast', text: `Couldn’t remove them: ${e.message}` }))
       }
       onMember={(peer) => openSafety(server, peer)}
     />
@@ -727,29 +727,29 @@ export default function App() {
 
   const paletteActions = [
     ...(activeServer && canManage
-      ? [{ id: 'act:invite', label: 'create invite link', hint: 'action', glyph: <LinkGlyph />, run: openInvite }]
+      ? [{ id: 'act:invite', label: 'Create invite link', hint: 'Action', glyph: <LinkGlyph />, run: openInvite }]
       : []),
     ...(state.globalAdmin
-      ? [{ id: 'act:admin', label: 'relay admin overview', hint: 'action', glyph: <ShieldCheck />, run: openAdminOverview }]
+      ? [{ id: 'act:admin', label: 'Server admin overview', hint: 'Action', glyph: <ShieldCheck />, run: openAdminOverview }]
       : []),
     ...(activeServer
       ? [
           {
             id: 'act:circle',
-            label: `${activeServer.name} — circle settings`,
-            hint: 'action',
+            label: `${activeServer.name} settings`,
+            hint: 'Action',
             glyph: <Gear />,
             run: openCircleSettings,
           },
         ]
       : []),
-    { id: 'act:settings', label: 'open settings', hint: 'action', glyph: <Gear />, run: openSettings },
-    { id: 'act:identity', label: 'show identity key', hint: 'action', glyph: <Key />, run: openIdentity },
-    { id: 'act:secure', label: 'secure this account', hint: 'action', glyph: <ShieldCheck />, run: openSecure },
+    { id: 'act:settings', label: 'Settings', hint: 'Action', glyph: <Gear />, run: openSettings },
+    { id: 'act:identity', label: 'Show identity key', hint: 'Action', glyph: <Key />, run: openIdentity },
+    { id: 'act:secure', label: 'Secure this account', hint: 'Action', glyph: <ShieldCheck />, run: openSecure },
     {
       id: 'act:theme',
-      label: theme === 'paper' ? 'switch to carbon (dark)' : 'switch to paper (light)',
-      hint: 'action',
+      label: theme === 'paper' ? 'Switch to dark theme' : 'Switch to light theme',
+      hint: 'Action',
       glyph: <Sun />,
       run: toggleTheme,
     },
@@ -760,7 +760,7 @@ export default function App() {
       {/* Reaching the conversation meant tabbing the rail, the whole channel
           sidebar and the voice list, on every load. Hidden until focused. */}
       <a className="skip-link" href="#messages-pane">
-        skip to conversation
+        Skip to conversation
       </a>
       <Masthead
         server={activeServer}
@@ -787,6 +787,9 @@ export default function App() {
         onTheme={toggleTheme}
         me={state.me}
         onSettings={openSettings}
+        callPill={state.voice.active && !stage && !(liveGame && channel) ? state.voice.active : null}
+        muted={!!state.voice.muted}
+        onOpenCall={openStage}
       />
       {unsecured && (
         <div className="secure-banner" data-testid="secure-banner">
@@ -797,11 +800,11 @@ export default function App() {
               is the first version of it anyone will read. §11.2: what is true,
               what it means for you, what to do about it. */}
           <span>
-            <strong>{state.me}</strong> lives only in this browser. Park an encrypted copy on
-            the relay and you can sign in on another device.
+            Your key for <strong>{state.me}</strong> exists only in this browser. Save an
+            encrypted backup to the server so you can sign in on another device.
           </span>
           <button className="button" data-testid="secure-now" onClick={openSecure}>
-            secure account
+            Secure account
           </button>
         </div>
       )}
@@ -813,9 +816,8 @@ export default function App() {
         <div className="secure-banner" data-testid="storage-banner">
           <Key size={14} />
           <span>
-            this browser may delete quorum's data after 7 days without use —{' '}
-            <strong>add it to your home screen</strong> so you don't have to sign in and be
-            re-added to every circle
+            This browser may delete quorum&rsquo;s data after 7 days without use.{' '}
+            <strong>Add it to your home screen</strong> so you don&rsquo;t have to sign in again.
           </span>
         </div>
       )}
@@ -880,7 +882,7 @@ export default function App() {
             controllerRef.current.voice
               .join(server, ch)
               .then(() => openStage())
-              .catch((e) => dispatch({ type: 'toast', text: `voice: ${e.message}` }))
+              .catch((e) => dispatch({ type: 'toast', text: `Couldn’t join the call: ${e.message}` }))
           }
           onOpenStage={openStage}
         />
@@ -903,7 +905,7 @@ export default function App() {
             onVoiceJoin={(ch) =>
               controllerRef.current.voice
                 .join(server, ch)
-                .catch((e) => dispatch({ type: 'toast', text: `voice: ${e.message}` }))
+                .catch((e) => dispatch({ type: 'toast', text: `Couldn’t join the call: ${e.message}` }))
             }
             onVoiceLeave={() => controllerRef.current.voice.leave()}
             onToggleMute={() => controllerRef.current.voice.setMuted(!state.voice.muted)}
@@ -917,6 +919,15 @@ export default function App() {
             voice={state.voice}
             manager={controllerRef.current.voice}
             me={state.me}
+            server={activeServer}
+            backLabel={channel ? `#${channel}` : 'Board'}
+            onVerify={() =>
+              withViewTransition(() => {
+                dispatch({ type: 'select', server, channel: null });
+                setStage(false);
+                setGame(null);
+              })
+            }
             messages={state.messages}
             canSend={!activeServer.restored}
             onSend={(text) =>
@@ -927,13 +938,13 @@ export default function App() {
             onShare={() =>
               controllerRef.current.voice
                 .startShare()
-                .catch((e) => dispatch({ type: 'toast', text: `screen share: ${e.message}` }))
+                .catch((e) => dispatch({ type: 'toast', text: `Couldn’t share your screen: ${e.message}` }))
             }
             onStopShare={() => controllerRef.current.voice.stopShare()}
             onCamera={() =>
               controllerRef.current.voice
                 .startCamera()
-                .catch((e) => dispatch({ type: 'toast', text: `camera: ${e.message}` }))
+                .catch((e) => dispatch({ type: 'toast', text: `Couldn’t start the camera: ${e.message}` }))
             }
             onStopCamera={() => controllerRef.current.voice.stopCamera()}
             onToggleMute={() => controllerRef.current.voice.setMuted(!state.voice.muted)}
@@ -969,7 +980,7 @@ export default function App() {
                   controllerRef.current.voice
                     .join(server, ch)
                     .then(() => openStage())
-                    .catch((e) => dispatch({ type: 'toast', text: `voice: ${e.message}` }))
+                    .catch((e) => dispatch({ type: 'toast', text: `Couldn’t join the call: ${e.message}` }))
                 }
                 onOpenStage={openStage}
                 onOpenBoard={() =>
@@ -980,6 +991,20 @@ export default function App() {
                   })
                 }
                 onLaunchGame={(g) => launchGame(g, { announce: false })}
+                onRoomSettings={
+                  canManage && !activeServer.restored
+                    ? (ch) =>
+                        dispatch({
+                          type: 'modal',
+                          modal: {
+                            type: 'channel',
+                            server,
+                            channel: ch,
+                            meta: activeServer.chanMeta?.[ch] ?? {},
+                          },
+                        })
+                    : undefined
+                }
                 onReact={(target, emo) =>
                   controllerRef.current
                     .react(server, channel, target, emo)
@@ -1017,7 +1042,7 @@ export default function App() {
                   controllerRef.current.voice
                     .join(server, ch)
                     .then(() => openStage())
-                    .catch((e) => dispatch({ type: 'toast', text: `voice: ${e.message}` }))
+                    .catch((e) => dispatch({ type: 'toast', text: `Couldn’t join the call: ${e.message}` }))
                 }
                 onLaunchGame={launchGame}
                 onRally={(g) =>
@@ -1101,7 +1126,7 @@ export default function App() {
             controllerRef.current.voice
               .acceptRing()
               .then(() => openStage())
-              .catch((e) => dispatch({ type: 'toast', text: `call: ${e.message}` }))
+              .catch((e) => dispatch({ type: 'toast', text: `Couldn’t start the call: ${e.message}` }))
           }
           onDecline={() => controllerRef.current.voice.declineRing()}
           onCancel={() => controllerRef.current.voice.cancelCall()}
@@ -1150,7 +1175,7 @@ export default function App() {
           <NotificationsPrompt
             onEnable={async () => {
               await controllerRef.current.enableNotifications();
-              dispatch({ type: 'toast', text: 'notifications enabled for this device' });
+              dispatch({ type: 'toast', text: 'Notifications are on for this device' });
             }}
             onClose={dismissNotifPrompt}
           />
@@ -1208,12 +1233,12 @@ export default function App() {
                 deviceLabel(navigator.userAgent)
               );
               dispatch({ type: 'modal', modal: null });
-              dispatch({ type: 'toast', text: 'this device can now sign in with one tap' });
+              dispatch({ type: 'toast', text: 'This device can now sign in with one tap' });
             }}
             onListDevices={listDevices}
             onRevokeDevice={async (credId) => {
               await controllerRef.current.revokeDevice(credId);
-              dispatch({ type: 'toast', text: 'device revoked — it can no longer sign in' });
+              dispatch({ type: 'toast', text: 'Device revoked. It can no longer sign in.' });
             }}
             onVerify={async (srv, peer) => {
               await controllerRef.current.markVerified(srv, peer);
@@ -1233,16 +1258,16 @@ export default function App() {
             onSecurePasskey={async () => {
               await controllerRef.current.secureWithPasskey();
               dispatch({ type: 'modal', modal: null });
-              dispatch({ type: 'toast', text: 'account secured with a passkey' });
+              dispatch({ type: 'toast', text: 'Account secured with a passkey' });
             }}
             onSecurePassword={async (password) => {
               await controllerRef.current.secureWithPassword(password);
               dispatch({ type: 'modal', modal: null });
-              dispatch({ type: 'toast', text: 'account secured with a password' });
+              dispatch({ type: 'toast', text: 'Account secured with a password' });
             }}
             onSecureFile={async () => {
               await controllerRef.current.markSecuredLocal();
-              dispatch({ type: 'toast', text: 'key file downloaded — store it safely' });
+              dispatch({ type: 'toast', text: 'Key file downloaded. Keep it somewhere safe.' });
             }}
             onChannelSettings={(srv, ch, settings) =>
               controllerRef.current.setChannelSettings(srv, ch, settings)

@@ -193,7 +193,7 @@ test('a wrong password reports corruption rather than leaking which half failed'
       'POST /account/bob/login': json({ wrapped: b64.enc(wrapped) }),
     },
   });
-  await assert.rejects(() => svc.unlockWithPassword('bob', 'wrong-password'), /corrupt data/);
+  await assert.rejects(() => svc.unlockWithPassword('bob', 'wrong-password'), /may be damaged/);
 });
 
 test('a password sign-in against a passkey account is refused up front', async () => {

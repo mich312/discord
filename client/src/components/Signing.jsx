@@ -34,21 +34,21 @@ function Ledger({ proposal, members, me }) {
         const state = obj ? 'ledger-objected' : sig ? 'ledger-signed' : 'ledger-waiting';
         return (
           <li key={m} className={`ledger-row ${state}`} data-testid={`ledger-${m}`}>
-            <Seal name={m} size={26} title={m === me ? 'you' : m} />
+            <Seal name={m} size={26} title={m} />
             <span className="ledger-who">
               {m}
-              {m === me && <span className="ledger-you"> · you</span>}
+              {m === me && <span className="ledger-you"> (you)</span>}
             </span>
             {/* §1.6 — every one of these states says its own name, so the
                 ledger survives being read in greyscale. */}
-            <span className="ledger-state mono">
+            <span className="ledger-state">
               {obj
-                ? 'objected'
+                ? 'Objected'
                 : m === proposal.by
-                  ? `proposed · ${describeAgo(proposal.at, now)}`
+                  ? `Proposed ${describeAgo(proposal.at, now)}`
                   : sig
-                    ? `signed · ${describeAgo(sig.at, now)}`
-                    : 'not yet'}
+                    ? `Signed ${describeAgo(sig.at, now)}`
+                    : 'Not yet'}
             </span>
           </li>
         );
@@ -86,19 +86,19 @@ export default function Signing({
         </h2>
         <p className="muted">
           {proposal.by === me ? 'You' : proposal.by} put them forward{' '}
-          {describeAgo(proposal.at, Date.now())}. The circle set its threshold at{' '}
-          {threshold} {threshold === 1 ? 'signature' : 'signatures'} — change that the same way
-          you change anything else here.
+          {describeAgo(proposal.at, Date.now())}. The circle asks for {threshold}{' '}
+          {threshold === 1 ? 'signature' : 'signatures'}; that number is in the circle&rsquo;s
+          settings.
         </p>
         {proposal.why && <p className="signing-why">“{proposal.why}” — {proposal.by}</p>}
       </header>
 
       <section className="signing-section">
         <h3 className="overline">
-          signatures
-          <span className="signing-count mono" data-testid="signing-count">
+          Signatures
+          <span className="signing-count" data-testid="signing-count">
             {signatures} of {threshold}
-            {togo > 0 ? ` · ${togo} to go` : ' · carried'}
+            {togo > 0 ? ` · ${togo} to go` : ' · enough to add them'}
           </span>
         </h3>
         <Ledger proposal={proposal} members={members} me={me} />
@@ -106,7 +106,7 @@ export default function Signing({
 
       {proposal.objections.length > 0 && (
         <section className="signing-section">
-          <h3 className="overline">objections</h3>
+          <h3 className="overline">Objections</h3>
           <ul className="objections">
             {proposal.objections.map((o) => (
               <li key={o.who} data-testid={`objection-${o.who}`}>
@@ -140,12 +140,12 @@ export default function Signing({
               screen says before you take their word for it.
             </span>
           </span>
-          <span className="signing-compare-go">compare</span>
+          <span className="signing-compare-go">Compare</span>
         </button>
       )}
 
       <section className="signing-section">
-        <h3 className="overline">what your signature does</h3>
+        <h3 className="overline">What your signature does</h3>
         {/* Plainly, and before the button rather than after it. §11.2: what
             is true, what it means for you, what to do about it. */}
         <ul className="signing-consequences">
@@ -160,7 +160,7 @@ export default function Signing({
           </li>
           {clearing.length > 0 && (
             <li>
-              #{clearing[0]} clears itself, so they will see very little of it.
+              #{clearing[0]} deletes old messages, so they will see little of it.
             </li>
           )}
         </ul>
@@ -179,7 +179,7 @@ export default function Signing({
           }}
         >
           <label className="field">
-            <span>why not?</span>
+            <span>Why not?</span>
             <input
               autoFocus
               value={why}
@@ -193,10 +193,10 @@ export default function Signing({
           </p>
           <div className="row">
             <button className="button danger" disabled={!why.trim()} data-testid="signing-object-post">
-              object
+              Object
             </button>
             <button type="button" className="button" onClick={() => setObjecting(false)}>
-              cancel
+              Cancel
             </button>
           </div>
         </form>
@@ -218,7 +218,7 @@ export default function Signing({
             onClick={onSign}
           >
             <Check size={14} />
-            {mine ? 'you have answered' : `sign for ${proposal.handle}`}
+            {mine ? 'You’ve answered' : `Sign for ${proposal.handle}`}
           </button>
           <button
             className="button signing-answer"
@@ -227,7 +227,7 @@ export default function Signing({
             onClick={() => setObjecting(true)}
           >
             <X size={14} />
-            object, and say why
+            Object, and say why
           </button>
         </div>
       )}
@@ -240,8 +240,8 @@ export default function Signing({
           {/* §10.7's shape: say what is enforcing this, and by what. */}
           <span className="fineprint muted">
             Every signature here is signed by its author and every member sees the same
-            ledger. The relay still asks an admin to run the change itself — so this is what
-            the circle agreed, not something the mathematics refuses to do otherwise.
+            ledger. The server still needs an admin to make the change, so this records what the
+            circle agreed; the encryption doesn&rsquo;t enforce it.
           </span>
         </span>
       </p>
@@ -250,12 +250,12 @@ export default function Signing({
           clear of the two answers above rather than beside them. */}
       {canWithdraw(proposal, me, server.roles?.[me] === 'admin') && (
         <button className="signing-withdraw" data-testid="signing-withdraw" onClick={onWithdraw}>
-          withdraw this proposal
+          Withdraw this proposal
         </button>
       )}
       {onClose && (
         <button className="button signing-close" data-testid="signing-close" onClick={onClose}>
-          back
+          Back
         </button>
       )}
     </div>

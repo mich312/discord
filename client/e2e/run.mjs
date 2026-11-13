@@ -305,7 +305,7 @@ try {
   // It reaches bob over MLS, and it reaches him as *his* decision.
   await bob.waitForSelector('[data-testid^=overview-proposal-open-]', { timeout: 15000 });
   const bobCall = await bob.textContent('[data-testid^=overview-proposal-open-]');
-  if (bobCall.trim() !== 'your call') {
+  if (bobCall.trim() !== 'Review') {
     throw new Error(`bob has not answered, so the button should say so: ${bobCall}`);
   }
   await bob.click('[data-testid^=overview-proposal-open-]');

@@ -26,7 +26,7 @@ export default function CommandPalette({ servers, active, actions, onSearch, onN
   const listRef = useRef(null);
   // Focus in on open, Tab trapped, Escape on the dialog element, focus back
   // to the opener on close — the same contract every other overlay uses.
-  const { ref: dialogRef, props: dialogAria } = useDialog(onClose, { label: 'command palette' });
+  const { ref: dialogRef, props: dialogAria } = useDialog(onClose, { label: 'Search or jump to' });
 
   // Debounced, and every in-flight scan is fenced by the query it was for:
   // a slow scan resolving after a faster later one must not overwrite it.
@@ -64,7 +64,7 @@ export default function CommandPalette({ servers, active, actions, onSearch, onN
     const circles = servers.map((s) => ({
       id: `circle:${s.id}`,
       label: s.name,
-      hint: s.id === active ? 'current circle' : 'circle',
+      hint: s.id === active ? 'Current circle' : 'Circle',
       glyph: <CircleGlyph />,
       run: () => onNavigate(s.id, null), // land on the circle's home base
     }));
@@ -149,7 +149,7 @@ export default function CommandPalette({ servers, active, actions, onSearch, onN
           ref={inputRef}
           className="palette-input"
           placeholder="Jump to a room, or search your messages…"
-          aria-label="jump to a room, or search your messages"
+          aria-label="Jump to a room, or search your messages"
           role="combobox"
           aria-expanded={items.length > 0}
           aria-controls="palette-results"
@@ -160,12 +160,12 @@ export default function CommandPalette({ servers, active, actions, onSearch, onN
         />
         <span className="sr-only" role="status" aria-live="polite">
           {items.length === 0
-            ? `nothing matches ${query}`
+            ? `Nothing matches ${query}`
             : `${items.length} result${items.length === 1 ? '' : 's'}`}
         </span>
         {items.length === 0 ? (
           <div className="palette-empty">
-            {searching ? `searching your messages for “${query}”…` : `nothing matches “${query}”`}
+            {searching ? `Searching your messages for “${query}”…` : `Nothing matches “${query}”`}
           </div>
         ) : (
           <ul className="palette-results" id="palette-results" role="listbox" ref={listRef}>
@@ -202,20 +202,20 @@ export default function CommandPalette({ servers, active, actions, onSearch, onN
         )}
         {found.truncated && found.for === query.trim() && (
           <div className="palette-note">
-            showing the most recent matches only — narrow the search to see older ones
+            Showing the most recent matches only. Narrow the search to see older ones.
           </div>
         )}
         <div className="palette-foot">
-          <span><kbd>↑</kbd> <kbd>↓</kbd> navigate</span>
-          <span><kbd>↵</kbd> open</span>
-          <span><kbd>esc</kbd> dismiss</span>
+          <span><kbd>↑</kbd> <kbd>↓</kbd> Move</span>
+          <span><kbd>↵</kbd> Open</span>
+          <span><kbd>esc</kbd> Close</span>
           {/* The honest limit, stated where it matters rather than in a
               README nobody opens. The relay holds ciphertext and cannot
               index it, so searching means searching what has been decrypted
               here — which, now that rooms are read back a page at a time, is
               what you have actually opened this session rather than
               everything the device ever kept. */}
-          <span className="palette-scope">search covers what you have opened this session</span>
+          <span className="palette-scope">Search covers what you&rsquo;ve opened this session</span>
         </div>
       </div>
     </div>

@@ -42,11 +42,11 @@ export default function CallBar({ voice, me, now, onOpen, onToggleMute }) {
       <span className="call-bar-who">
         <span className="call-bar-orbs">
           {inCall.slice(0, 4).map((p) => (
-            <Seal key={p} name={p} size={20} title={p === me ? 'you' : p} />
+            <Seal key={p} name={p} size={20} title={p} />
           ))}
         </span>
         <span className="call-bar-meta">
-          {describeCallLength(call.since, now)} · {inCall.length} in
+          {inCall.length} {inCall.length === 1 ? 'person' : 'people'} · {describeCallLength(call.since, now)}
         </span>
       </span>
 
@@ -57,14 +57,13 @@ export default function CallBar({ voice, me, now, onOpen, onToggleMute }) {
           // §1.6 again — "mic on" is not conveyed by the glyph alone, and
           // §7.9: this is a toggle, so it says which way it is set.
           aria-pressed={muted}
-          title={muted ? 'unmute your mic' : 'mute your mic'}
           onClick={onToggleMute}
         >
           {muted ? <MicOff size={14} /> : <Mic size={14} />}
-          {muted ? 'mic off' : 'mic on'}
+          {muted ? 'Mic off' : 'Mic on'}
         </button>
         <button className="call-bar-back" data-testid="call-bar-open" onClick={onOpen}>
-          back to the call
+          Open call
           <ArrowRight size={14} />
         </button>
       </div>

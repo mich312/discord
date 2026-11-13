@@ -50,9 +50,9 @@ export default function NotificationsPrompt({ onEnable, onClose }) {
           <h1>Turn on notifications?</h1>
         </div>
         <p className="muted lede">
-          Get a nudge when a message arrives while quorum is closed. Only the fact
-          that something happened is pushed — never who, where, or what. Like
-          everything else, the contents stay sealed on your device.
+          Get a nudge when a message arrives while quorum is closed. The notification says
+          only that something happened, never who, where or what; the message itself stays
+          encrypted until you open it.
         </p>
         <button
           className="button primary wide"
@@ -61,7 +61,7 @@ export default function NotificationsPrompt({ onEnable, onClose }) {
           onClick={enable}
         >
           <Bell size={14} />
-          {busy ? 'enabling…' : 'enable notifications'}
+          {busy ? 'Turning on…' : 'Turn on notifications'}
         </button>
         <button
           className="button wide"
@@ -69,7 +69,7 @@ export default function NotificationsPrompt({ onEnable, onClose }) {
           data-testid="notif-prompt-dismiss"
           onClick={onClose}
         >
-          not now
+          Not now
         </button>
         {error ? (
           <p className="fineprint warn" data-testid="notif-prompt-error">{error}</p>
@@ -78,7 +78,7 @@ export default function NotificationsPrompt({ onEnable, onClose }) {
             You can change this anytime in Settings.
           </p>
         )}
-        <button className="ghost close" onClick={onClose} data-testid="notif-prompt-close" title="close">
+        <button className="ghost close" onClick={onClose} data-testid="notif-prompt-close" aria-label="Close" title="Close">
           <X size={14} />
         </button>
       </div>

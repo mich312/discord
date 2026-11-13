@@ -1,7 +1,7 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { generateCode, wrapIdentity, unwrapIdentity } from '../lib/recovery.js';
 import { createLinkOffer, openSealed } from '../lib/link.js';
-import { QuorumGlyph, Key, Download, LinkGlyph, Copy, Check } from './icons.jsx';
+import { QuorumGlyph, Key, Download, LinkGlyph, Copy, Check, Lock, Archive } from './icons.jsx';
 import Qr from './Qr.jsx';
 import { cx } from '../lib/cx.js';
 
@@ -22,33 +22,48 @@ function Gate({ children }) {
           <QuorumGlyph size={34} />
           <span className="wordmark">quorum</span>
         </div>
-        <p className="gate-tagline">
-          Rooms that keep <em>their own counsel.</em>
-        </p>
+        {/* Says what the product is before the form asks for anything
+            (§11.1), in one colour. The third point used to read "New members
+            see nothing from before they joined", which stopped being true
+            when history moved to the relay: a joiner reads it back, and the
+            room header says so. The onboarding claim is the one a person
+            reads before deciding, so it is the one that has to be right. */}
+        <p className="gate-tagline">Encrypted group chat for small circles.</p>
         <p className="gate-sub">
-          Small, invite-only circles, end-to-end encrypted. The server passes along
-          messages it can&rsquo;t read — and the interface never pretends otherwise.
+          Small, invite-only groups. The server stores your messages but can&rsquo;t read them.
         </p>
         <ul className="principles">
           <li>
-            <span className="p-glyph">01</span>
+            <span className="p-glyph">
+              <Lock size={18} />
+            </span>
             <div>
-              <strong>Sealed by default</strong>
-              <span>Messages, room names, membership — all of it travels inside the encryption.</span>
+              <strong>Encrypted on your device</strong>
+              <span>Messages, room names and member lists are encrypted before they leave it.</span>
             </div>
           </li>
           <li>
-            <span className="p-glyph">02</span>
+            <span className="p-glyph">
+              <Key size={18} />
+            </span>
             <div>
-              <strong>Your identity is a key, not an email</strong>
-              <span>A keypair born in this browser. Recovery is a file you hold, not a reset button we own.</span>
+              <strong>No email, no phone number</strong>
+              <span>
+                Your account is a key made in this browser. There&rsquo;s no reset link, so you
+                back it up with a passkey, a password or a key file.
+              </span>
             </div>
           </li>
           <li>
-            <span className="p-glyph">03</span>
+            <span className="p-glyph">
+              <Archive size={18} />
+            </span>
             <div>
-              <strong>The roster is the boundary</strong>
-              <span>New members see nothing from before they joined.</span>
+              <strong>People who join later can read back</strong>
+              <span>
+                A room&rsquo;s history is open to everyone in the circle, including new members. A
+                room can ask the server to delete old messages on a schedule.
+              </span>
             </div>
           </li>
         </ul>
@@ -89,6 +104,7 @@ export default function Onboarding({ controller }) {
   const [linkHandle, setLinkHandle] = useState(null);
   const [copied, setCopied] = useState(false);
 
+  const HANDLE_RULE = 'Handles are 2–32 characters: a–z, 0–9, and _ . -';
   const validHandle = (h) => /^[a-z0-9_.-]{2,32}$/.test(h);
 
   useEffect(() => {
@@ -180,8 +196,8 @@ export default function Onboarding({ controller }) {
   async function joinFast(e) {
     e.preventDefault();
     const handle = name.trim().toLowerCase();
-    if (!validHandle(handle)) return setError('handle: 2–32 chars, a-z 0-9 _ . -');
-    await run('creating keys…', async () => {
+    if (!validHandle(handle)) return setError(HANDLE_RULE);
+    await run('Creating your key…', async () => {
       await controller.createIdentity(handle);
       // Deferred securing: the banner inside nags until a vault exists.
       await controller.completeOnboarding(false);
@@ -191,8 +207,8 @@ export default function Onboarding({ controller }) {
   async function createIdentity(e) {
     e.preventDefault();
     const handle = name.trim().toLowerCase();
-    if (!validHandle(handle)) return setError('handle: 2–32 chars, a-z 0-9 _ . -');
-    await run('generating keys…', async () => {
+    if (!validHandle(handle)) return setError(HANDLE_RULE);
+    await run('Creating your key…', async () => {
       const identity = await controller.createIdentity(handle);
       const code = generateCode();
       const fileBytes = await wrapIdentity(identity, code);
@@ -209,8 +225,8 @@ export default function Onboarding({ controller }) {
   async function lookUpAccount(e) {
     e.preventDefault();
     const handle = name.trim().toLowerCase();
-    if (!validHandle(handle)) return setError('enter your handle first');
-    await run('looking up your account…', async () => {
+    if (!validHandle(handle)) return setError('Enter your handle first.');
+    await run('Looking up your account…', async () => {
       const kind = await controller.accountKind(handle);
       setSigninKind(kind ?? 'none');
       setBusy(false);
@@ -227,16 +243,16 @@ export default function Onboarding({ controller }) {
   async function signInPassword(e) {
     e.preventDefault();
     const handle = name.trim().toLowerCase();
-    if (!password) return setError('enter your password');
-    await run('deriving keys… (a second or two)', () =>
+    if (!password) return setError('Enter your password.');
+    await run('Unlocking… (a second or two)', () =>
       controller.signInWithPassword(handle, password)
     );
   }
 
   async function signInPasskey() {
     const handle = name.trim().toLowerCase();
-    if (!validHandle(handle)) return setError('enter your handle first');
-    await run('waiting for your passkey…', () => controller.signInWithPasskey(handle));
+    if (!validHandle(handle)) return setError('Enter your handle first.');
+    await run('Waiting for your passkey…', () => controller.signInWithPasskey(handle));
   }
 
   // No handle at all: let the authenticator offer its resident passkeys.
@@ -245,7 +261,7 @@ export default function Onboarding({ controller }) {
     conditionalAbort.current?.abort();
     conditionalAbort.current = null;
     setBusy(true);
-    setBusyText('waiting for your passkey…');
+    setBusyText('Waiting for your passkey…');
     setError(null);
     try {
       await controller.signInWithDiscoverablePasskey();
@@ -271,7 +287,7 @@ export default function Onboarding({ controller }) {
   }
 
   async function confirmLink() {
-    await run('entering…', () => controller.completeOnboarding(true));
+    await run('Signing in…', () => controller.completeOnboarding(true));
   }
 
   async function rejectLink() {
@@ -294,23 +310,23 @@ export default function Onboarding({ controller }) {
   async function restoreIdentity(e) {
     e.preventDefault();
     if (pastedKey.trim()) {
-      return run('restoring…', async () => {
+      return run('Restoring…', async () => {
         const identity = Uint8Array.from(atob(pastedKey.trim()), (c) => c.charCodeAt(0));
         await controller.restoreIdentity(identity);
         await controller.completeOnboarding(true);
       });
     }
     if (restoreFile && restoreCode.trim()) {
-      return run('decrypting…', async () => {
+      return run('Decrypting…', async () => {
         const bytes = new Uint8Array(await restoreFile.arrayBuffer());
         const identity = await unwrapIdentity(bytes, restoreCode.trim()).catch(() => {
-          throw new Error('could not decrypt — wrong code or corrupt file');
+          throw new Error('That code doesn’t open this file. Check the code, or try another copy of the file.');
         });
         await controller.restoreIdentity(identity);
         await controller.completeOnboarding(true);
       });
     }
-    setError('add a recovery file + code, or paste an identity key');
+    setError('Add a recovery file and its code, or paste an identity key.');
   }
 
   if (step === 'link') {
@@ -321,9 +337,8 @@ export default function Onboarding({ controller }) {
             <>
               <h1>Sign in from another device</h1>
               <p className="muted lede">
-                On a device where you&rsquo;re already signed in, point its camera at this code —
-                or paste the link there. Your identity transfers straight across, encrypted end
-                to end; the server only ferries sealed bytes.
+                On a device where you&rsquo;re already signed in, scan this code or paste the
+                link. Your key moves across encrypted, and the server only passes it along.
               </p>
               {linkOffer ? (
                 <>
@@ -331,22 +346,22 @@ export default function Onboarding({ controller }) {
                     <Qr url={linkOffer.url} />
                   </div>
                   <p className="link-code">
-                    the other device should show <strong data-testid="link-code">{linkOffer.code}</strong>
+                    The other device should show <strong data-testid="link-code">{linkOffer.code}</strong>
                   </p>
                   <button className="button wide" onClick={() => copy(linkOffer.url)} data-testid="copy-link">
                     {copied ? <Check size={14} /> : <Copy size={14} />}
-                    {copied ? 'link copied' : 'copy link instead'}
+                    {copied ? 'Link copied' : 'Copy link instead'}
                   </button>
                   <p className="fineprint muted waiting" data-testid="link-waiting">
-                    waiting for the other device&hellip;
+                    Waiting for the other device&hellip;
                   </p>
                 </>
               ) : (
-                <p className="fineprint muted">preparing&hellip;</p>
+                <p className="fineprint muted">Preparing&hellip;</p>
               )}
               <p className="fineprint muted">
                 <button type="button" className="linkish" onClick={() => setStep('name')}>
-                  back to sign in
+                  Back to sign in
                 </button>
               </p>
             </>
@@ -365,10 +380,10 @@ export default function Onboarding({ controller }) {
                 disabled={busy}
                 data-testid="link-confirm"
               >
-                {busyText ?? 'yes, that’s me'}
+                {busyText ?? 'Yes, that’s me'}
               </button>
               <button className="button wide" onClick={rejectLink} disabled={busy} data-testid="link-reject">
-                no, that isn&rsquo;t me
+                No, that isn&rsquo;t me
               </button>
             </>
           )}
@@ -384,9 +399,8 @@ export default function Onboarding({ controller }) {
         <div className="card" data-testid="recovery-step">
           <h1>Save your recovery key</h1>
           <p className="muted lede">
-            This file plus this code gets your account back on any device. The
-            server cannot reset it — it never sees your keys. (You can also add a passkey
-            or password later, from inside.)
+            This file and this code get your account back on any device. The server never
+            sees your key, so it can&rsquo;t reset it. You can add a passkey or password later.
           </p>
           <div className="recovery-code" data-testid="recovery-code">{recovery.code}</div>
           <a
@@ -397,7 +411,7 @@ export default function Onboarding({ controller }) {
             data-testid="download-recovery"
           >
             <Download />
-            download {recovery.filename}
+            Download {recovery.filename}
           </a>
           <label className="check">
             <input
@@ -412,9 +426,9 @@ export default function Onboarding({ controller }) {
             className="button primary wide"
             disabled={!downloaded || !confirmed || busy}
             data-testid="enter-app"
-            onClick={() => run('entering…', () => controller.completeOnboarding(true))}
+            onClick={() => run('Opening quorum…', () => controller.completeOnboarding(true))}
           >
-            enter
+            Continue
           </button>
         </div>
       </Gate>
@@ -427,12 +441,11 @@ export default function Onboarding({ controller }) {
         <div className="card">
           <h1>You’ve been invited</h1>
           <p className="muted lede">
-            Pick a handle and you’re in — encrypted end-to-end from the first message.
-            You can secure the account right after.
+            Pick a handle to join. You can back up your account right after.
           </p>
           <form onSubmit={joinFast}>
             <label className="field">
-              <span>handle</span>
+              <span>Handle</span>
               <input
                 autoFocus
                 value={name}
@@ -442,13 +455,13 @@ export default function Onboarding({ controller }) {
               />
             </label>
             <button className="button primary wide" disabled={busy} data-testid="join-fast">
-              {busyText ?? 'join'}
+              {busyText ?? 'Join'}
             </button>
           </form>
           <p className="fineprint muted">
             Already have an account here?{' '}
             <button className="linkish" onClick={() => (location.href = location.pathname)}>
-              sign in first, then use the link again
+              Sign in first, then open the link again
             </button>
           </p>
           {error && <p className="error" role="alert">{error}</p>}
@@ -460,38 +473,42 @@ export default function Onboarding({ controller }) {
   return (
     <Gate>
       <div className="card">
-        <h1>Enter quorum</h1>
-        <p className="muted lede">Your identity is a keypair. Everything else follows from that.</p>
+        <h1>{mode === 'create' ? 'Create your account' : 'Sign in'}</h1>
+        <p className="muted lede">
+          {mode === 'create'
+            ? 'Pick a handle. You’ll back up your key next.'
+            : 'Use your handle, then the passkey or password you set up.'}
+        </p>
         <div className="tabs">
           <button
             className={cx('tab', mode === 'create' && 'active')}
             onClick={() => { setMode('create'); setError(null); }}
           >
-            new identity
+            New account
           </button>
           <button
             className={cx('tab', mode === 'signin' && 'active')}
             data-testid="tab-signin"
             onClick={() => { setMode('signin'); setSigninKind(undefined); setError(null); }}
           >
-            sign in
+            Sign in
           </button>
         </div>
         {mode === 'create' ? (
           inviteRequired ? (
             <div data-testid="invite-required">
               <p className="muted lede">
-                This relay is <strong>invite-only</strong>. Accounts are created by opening
-                an invite link — ask a member of the circle you want to join to send you one.
+                This server is <strong>invite-only</strong>. Accounts are created by opening an
+                invite link, so ask a member of the circle you want to join to send you one.
               </p>
               <p className="fineprint muted">
-                Already have an account here? Use the sign in tab.
+                Already have an account here? Use the Sign in tab.
               </p>
             </div>
           ) : (
           <form onSubmit={createIdentity}>
             <label className="field">
-              <span>handle</span>
+              <span>Handle</span>
               <input
                 autoFocus
                 value={name}
@@ -501,12 +518,9 @@ export default function Onboarding({ controller }) {
               />
             </label>
             <button className="button primary wide" disabled={busy} data-testid="create-identity">
-              {busyText ?? 'create identity'}
+              {busyText ?? 'Create account'}
             </button>
-            <p className="fineprint muted">
-              Your identity is a keypair generated in this browser. No email — recovery is
-              the key file you’re about to save, plus any passkey/password you add later.
-            </p>
+            <p className="fineprint muted">Members of your circles see this name.</p>
           </form>
           )
         ) : (
@@ -514,7 +528,7 @@ export default function Onboarding({ controller }) {
             {signinKind === undefined ? (
               <form onSubmit={lookUpAccount}>
                 <label className="field">
-                  <span>handle</span>
+                  <span>Handle</span>
                   <input
                     value={name}
                     onChange={(e) => setName(e.target.value)}
@@ -524,7 +538,7 @@ export default function Onboarding({ controller }) {
                   />
                 </label>
                 <button className="button primary wide" disabled={busy} data-testid="signin-continue">
-                  {busyText ?? 'continue'}
+                  {busyText ?? 'Continue'}
                 </button>
                 <div className="divider">or</div>
                 <button
@@ -535,10 +549,10 @@ export default function Onboarding({ controller }) {
                   onClick={signInDiscoverablePasskey}
                 >
                   <Key size={14} />
-                  sign in with a passkey
+                  Sign in with a passkey
                 </button>
                 <p className="fineprint muted">
-                  No handle needed — your device offers the passkeys it holds for quorum.
+                  No handle needed. Your device offers the passkeys it has for quorum.
                 </p>
                 <button
                   type="button"
@@ -546,15 +560,15 @@ export default function Onboarding({ controller }) {
                   onClick={startLink}
                   data-testid="signin-link"
                 >
-                  <LinkGlyph size={13} /> sign in from another device
+                  <LinkGlyph size={14} /> Sign in from another device
                 </button>
               </form>
             ) : (
               <>
                 <p className="signin-as muted">
-                  signing in as <strong>{name.trim().toLowerCase()}</strong>
+                  Signing in as <strong>{name.trim().toLowerCase()}</strong>
                   <button type="button" className="linkish" onClick={changeHandle} data-testid="signin-change">
-                    change
+                    Change
                   </button>
                 </p>
                 {signinKind === 'passkey' && (
@@ -568,7 +582,7 @@ export default function Onboarding({ controller }) {
                       onClick={signInPasskey}
                     >
                       <Key size={14} />
-                      {busyText ?? 'sign in with passkey'}
+                      {busyText ?? 'Sign in with passkey'}
                     </button>
                   </>
                 )}
@@ -576,7 +590,7 @@ export default function Onboarding({ controller }) {
                   <form onSubmit={signInPassword}>
                     <p className="muted lede">This account signs in with a password.</p>
                     <label className="field">
-                      <span>password</span>
+                      <span>Password</span>
                       <input
                         autoFocus
                         type="password"
@@ -586,7 +600,7 @@ export default function Onboarding({ controller }) {
                       />
                     </label>
                     <button className="button primary wide" disabled={busy} data-testid="signin-submit">
-                      {busyText ?? 'sign in'}
+                      {busyText ?? 'Sign in'}
                     </button>
                   </form>
                 )}
@@ -601,14 +615,14 @@ export default function Onboarding({ controller }) {
             )}
 
             <details className="advanced" open={signinKind === 'none' || undefined}>
-              <summary className="muted">recovery file or identity key</summary>
+              <summary className="muted">Use a recovery file or identity key</summary>
               <form onSubmit={restoreIdentity}>
                 <label className="field">
-                  <span>recovery file</span>
+                  <span>Recovery file</span>
                   <input type="file" onChange={(e) => setRestoreFile(e.target.files[0] ?? null)} data-testid="restore-file" />
                 </label>
                 <label className="field">
-                  <span>recovery code</span>
+                  <span>Recovery code</span>
                   <input
                     value={restoreCode}
                     onChange={(e) => setRestoreCode(e.target.value)}
@@ -617,7 +631,7 @@ export default function Onboarding({ controller }) {
                   />
                 </label>
                 <label className="field">
-                  <span>…or paste an identity key</span>
+                  <span>Or paste an identity key</span>
                   <textarea
                     className="keybox small"
                     value={pastedKey}
@@ -626,13 +640,13 @@ export default function Onboarding({ controller }) {
                   />
                 </label>
                 <button className="button wide" disabled={busy} data-testid="restore-submit">
-                  {busyText ?? 'restore identity'}
+                  {busyText ?? 'Restore account'}
                 </button>
               </form>
             </details>
             <p className="fineprint muted">
-              Signing in restores your identity, not old messages — their keys lived only
-              on the previous device. Ask to be re-added to circles.
+              Signing in brings back your circles and their history. To send in a circle
+              again, ask a member to re-add you or open a fresh invite link.
             </p>
           </div>
         )}

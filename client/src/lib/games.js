@@ -75,15 +75,27 @@ export function isSameOriginSrc(src, selfOrigin) {
   }
 }
 
-/** Display host for the honesty line: where this game actually lives. */
+/** Where this game actually lives: a host, or `null` when it ships with
+    quorum itself. It used to return the phrase "bundled with this app",
+    which the game stage then slotted into "runs on ___" — a sentence built
+    for a hostname, read aloud as "runs on bundled with this app". A host
+    and a phrase are different types; `gameHostNote` builds the sentence. */
 export function gameHost(game) {
   if (game.kind === 'server') return game.url;
   try {
     const u = new URL(game.url, 'https://this-app');
-    return u.host === 'this-app' ? 'bundled with this app' : u.host;
+    return u.host === 'this-app' ? null : u.host;
   } catch {
     return game.url;
   }
+}
+
+/** The one honesty line for a game surface (§10.11): who can see what. */
+export function gameHostNote(game) {
+  const host = gameHost(game);
+  return host
+    ? `Hosted by ${host}, which can see your connection but not your chat.`
+    : 'Runs inside quorum. Chat and voice stay encrypted; the game’s own traffic doesn’t.';
 }
 
 /** A game *reference* as carried inside a chat message ("bob opened X").

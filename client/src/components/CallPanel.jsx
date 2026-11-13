@@ -15,18 +15,18 @@ export default function CallPanel({ voice, me, stageOpen, onAccept, onDecline, o
     return (
       <div className="call-panel ringing incoming" data-testid="call-incoming">
         <span className="call-glyph pulse">
-          <Phone size={16} />
+          <Phone size={18} />
         </span>
         <Seal name={voice.ring.from} size={26} />
         <div className="call-text">
           <strong>{voice.ring.from}</strong>
-          <span className="muted">incoming call…</span>
+          <span className="muted">Incoming call…</span>
         </div>
         <button className="call-btn accept" data-testid="call-accept" onClick={onAccept}>
-          <Phone size={14} /> accept
+          <Phone size={14} /> Accept
         </button>
         <button className="call-btn decline" data-testid="call-decline" onClick={onDecline}>
-          <X size={14} /> decline
+          <X size={14} /> Decline
         </button>
       </div>
     );
@@ -37,15 +37,15 @@ export default function CallPanel({ voice, me, stageOpen, onAccept, onDecline, o
     return (
       <div className="call-panel ringing outgoing" data-testid="call-dialing">
         <span className="call-glyph pulse">
-          <Phone size={16} />
+          <Phone size={18} />
         </span>
         <Seal name={voice.dial.to} size={26} />
         <div className="call-text">
           <strong>{voice.dial.to}</strong>
-          <span className="muted">ringing…</span>
+          <span className="muted">Ringing…</span>
         </div>
         <button className="call-btn decline" data-testid="call-cancel" onClick={onCancel}>
-          <X size={14} /> cancel
+          <X size={14} /> Cancel
         </button>
       </div>
     );
@@ -59,7 +59,7 @@ export default function CallPanel({ voice, me, stageOpen, onAccept, onDecline, o
     return (
       <div className="call-panel connected" data-testid="call-connected">
         <span className="call-glyph live">
-          <Phone size={16} />
+          <Phone size={18} />
         </span>
         <ul className="call-parties">
           {participants.map((p) => (
@@ -69,7 +69,7 @@ export default function CallPanel({ voice, me, stageOpen, onAccept, onDecline, o
               data-testid={`call-party-${p}`}
             >
               <Seal name={p} size={20} />
-              <span className="vp-name">{p === me ? 'you' : p}</span>
+              <span className="vp-name">{p === me ? 'You' : p}</span>
               <VoiceMeter name={p} />
             </li>
           ))}
@@ -78,17 +78,21 @@ export default function CallPanel({ voice, me, stageOpen, onAccept, onDecline, o
           <button
             className={cx('call-btn', voice.muted && 'muted-on')}
             data-testid="call-mute"
-            title={voice.muted ? 'unmute your mic (M)' : 'mute your mic (M)'}
+            aria-label={voice.muted ? 'Unmute' : 'Mute'}
+            aria-pressed={voice.muted}
+            aria-keyshortcuts="m"
+            title={voice.muted ? 'Unmute (M)' : 'Mute (M)'}
             onClick={onToggleMute}
           >
             {voice.muted ? <MicOff size={14} /> : <Mic size={14} />}
           </button>
         )}
-        <button className="call-btn" data-testid="call-open-stage" title="open the call view" onClick={onOpen}>
-          <Screen size={14} /> open
+        <button className="call-btn" data-testid="call-open-stage" onClick={onOpen}>
+          <Screen size={14} /> Open call
         </button>
-        <button className="call-btn decline" data-testid="call-hangup" onClick={onHangup}>
-          <X size={14} /> hang up
+        {/* §7.3 — hanging up is the irreversible one, so it sits apart. */}
+        <button className="call-btn decline call-hangup" data-testid="call-hangup" onClick={onHangup}>
+          <X size={14} /> Hang up
         </button>
       </div>
     );

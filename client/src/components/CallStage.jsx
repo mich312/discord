@@ -1,7 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import Seal from './Seal.jsx';
 import VoiceMeter from './VoiceMeter.jsx';
-import { Wave, X, Lock, Screen, Mic, MicOff, Camera, CameraOff } from './icons.jsx';
+import EncryptionNote from './EncryptionNote.jsx';
+import { Wave, Screen, Mic, MicOff, Camera, CameraOff, ArrowLeft, ArrowUp, Minimize, Phone } from './icons.jsx';
 import { cx } from '../lib/cx.js';
 
 function timeOf(ts) {
@@ -32,8 +33,8 @@ function ScreenTile({ stream, name, mine }) {
         data-testid={`stage-screen-video-${name}`}
       />
       <span className="stage-screen-label">
-        <Screen size={12} />
-        {mine ? 'your screen' : `${name}'s screen`}
+        <Screen size={14} />
+        {mine ? 'Your screen' : `${name}’s screen`}
       </span>
     </div>
   );
@@ -72,6 +73,11 @@ export default function CallStage({
   voice,
   manager,
   me,
+  // The circle the call is in, for the encryption line under the chat.
+  server: circle,
+  // Where "back" goes, named (§7.2): the room or board the call covers.
+  backLabel = 'Back',
+  onVerify,
   messages,
   canSend,
   onSend,
@@ -99,7 +105,7 @@ export default function CallStage({
   const cameras = voice.cameras ?? [];
   const iCam = cameras.includes(me);
   const direct = voice.direct;
-  const title = direct ? `call · ${direct}` : channel;
+  const title = direct ? `Call with ${direct}` : channel;
 
   // Which screen fills the stage: the one the user clicked, as long as that
   // person is still presenting; otherwise the first live share.
@@ -108,59 +114,26 @@ export default function CallStage({
 
   return (
     <main className="call-stage" data-testid="call-stage">
+      {/* §7.2 — a takeover gets a back control on the left that names where
+          it goes. The way out used to be "close", far right, eight pixels
+          from "leave call" at the same size (§7.3). */}
       <header className="pane-head stage-head">
-        <span className="room-name">
+        <button className="ghost stage-back" data-testid="stage-back" onClick={onClose}>
+          <ArrowLeft size={18} />
+          <span>{backLabel}</span>
+        </button>
+        <h2 className="room-name">
           <span className="glyph">
-            <Wave size={13} />
+            <Wave size={14} />
           </span>
           {title}
-        </span>
+        </h2>
         <span className="stage-count">
           {participants.length} in call
           {voice.listenOnly && (
-            <span className="listen-only" title="no microphone found — hearing others, sending nothing">
-              {' '}· listen-only
-            </span>
+            <span className="listen-only"> · Listen only: no microphone found</span>
           )}
         </span>
-        <div className="stage-actions">
-          {onToggleMute && !voice.listenOnly && (
-            <button
-              className={cx('call-btn', voice.muted && 'muted-on')}
-              title={voice.muted ? 'unmute your mic (M)' : 'mute your mic (M)'}
-              data-testid="stage-mute"
-              onClick={onToggleMute}
-            >
-              {voice.muted ? <MicOff size={14} /> : <Mic size={14} />}
-              {voice.muted ? ' unmute' : ' mute'}
-            </button>
-          )}
-          {onCamera &&
-            (iCam ? (
-              <button className="call-btn muted-on" data-testid="camera-stop" onClick={onStopCamera}>
-                <CameraOff size={14} /> stop camera
-              </button>
-            ) : (
-              <button className="call-btn" data-testid="camera-start" onClick={onCamera}>
-                <Camera size={14} /> camera
-              </button>
-            ))}
-          {iShare ? (
-            <button className="call-btn decline" data-testid="share-stop" onClick={onStopShare}>
-              <Screen size={14} /> stop sharing
-            </button>
-          ) : (
-            <button className="call-btn" data-testid="share-start" onClick={onShare}>
-              <Screen size={14} /> share screen
-            </button>
-          )}
-          <button className="call-btn" data-testid="stage-close" title="back to text rooms" onClick={onClose}>
-            <X size={14} /> close
-          </button>
-          <button className="call-btn decline" data-testid="stage-leave" onClick={onLeave}>
-            leave call
-          </button>
-        </div>
       </header>
       <div className="stage-body">
         <section className="stage-main" data-testid="stage-main">
@@ -169,8 +142,8 @@ export default function CallStage({
               <ScreenTile stream={shownStream} name={shown} mine={shown === me} />
             ) : (
               <div className="stage-screen waiting" data-testid="stage-screen-waiting">
-                <Screen size={22} />
-                <span>waiting for {shown}'s screen…</span>
+                <Screen size={24} />
+                <span>Waiting for {shown}’s screen…</span>
               </div>
             ))}
           {sharing.length > 1 && (
@@ -182,8 +155,8 @@ export default function CallStage({
                   data-testid={`sharer-pill-${name}`}
                   onClick={() => setFocus(name)}
                 >
-                  <Screen size={11} />
-                  {name === me ? 'you' : name}
+                  <Screen size={14} />
+                  {name === me ? 'You' : name}
                 </button>
               ))}
             </div>
@@ -212,26 +185,29 @@ export default function CallStage({
                       <Seal name={p} size={shown ? 44 : 72} title={p} />
                     )}
                   </span>
-                  <span className="bubble-name">{p === me ? 'you' : p}</span>
+                  <span className="bubble-name">
+                    {p}
+                    {p === me && <span className="muted"> (you)</span>}
+                  </span>
                   <VoiceMeter name={p} />
                   {cameras.includes(p) && !camStream && (
                     <span className="bubble-badge" data-testid={`bubble-camera-waiting-${p}`}>
-                      <Camera size={11} /> camera…
+                      <Camera size={14} /> Camera starting…
                     </span>
                   )}
                   {sharing.includes(p) && (
                     <span className="bubble-badge" data-testid={`bubble-sharing-${p}`}>
-                      <Screen size={11} /> sharing
+                      <Screen size={14} /> Sharing
                     </span>
                   )}
                   {p !== me && voice.mutedPeers?.includes(p) && (
                     <span className="bubble-badge muted-badge" data-testid={`bubble-muted-${p}`}>
-                      <MicOff size={11} /> muted
+                      <MicOff size={14} /> Muted
                     </span>
                   )}
                   {p === me && voice.muted && (
                     <span className="bubble-badge muted-badge" data-testid="bubble-muted-you">
-                      <MicOff size={11} /> muted
+                      <MicOff size={14} /> Muted
                     </span>
                   )}
                   {conn && conn !== 'connected' && <span className="bubble-conn">{conn}</span>}
@@ -239,15 +215,62 @@ export default function CallStage({
               );
             })}
           </ul>
+          {/* The controls dock under the people, the way every call app
+              places them. Leaving sits apart from everything reversible —
+              a divider and a gap, in red — and hiding the call says the mic
+              stays live (§7.3, §7.4). */}
+          <div className="stage-dock" role="toolbar" aria-label="Call controls">
+            {onToggleMute && !voice.listenOnly && (
+              <button
+                className={cx('button', voice.muted && 'muted-on')}
+                aria-pressed={voice.muted}
+                aria-keyshortcuts="m"
+                data-testid="stage-mute"
+                onClick={onToggleMute}
+              >
+                {voice.muted ? <MicOff size={18} /> : <Mic size={18} />}
+                {voice.muted ? 'Unmute' : 'Mute'}
+              </button>
+            )}
+            {onCamera &&
+              (iCam ? (
+                <button className="button muted-on" data-testid="camera-stop" onClick={onStopCamera}>
+                  <CameraOff size={18} /> Stop camera
+                </button>
+              ) : (
+                <button className="button" data-testid="camera-start" onClick={onCamera}>
+                  <Camera size={18} /> Camera
+                </button>
+              ))}
+            {iShare ? (
+              <button className="button muted-on" data-testid="share-stop" onClick={onStopShare}>
+                <Screen size={18} /> Stop sharing
+              </button>
+            ) : (
+              <button className="button" data-testid="share-start" onClick={onShare}>
+                <Screen size={18} /> Share screen
+              </button>
+            )}
+            <button className="button ghost" data-testid="stage-close" onClick={onClose}>
+              <Minimize size={18} />
+              Hide call
+              {!voice.muted && !voice.listenOnly && <span className="muted"> · mic stays on</span>}
+            </button>
+            <span className="stage-dock-gap" aria-hidden="true" />
+            <button className="button danger" data-testid="stage-leave" onClick={onLeave}>
+              <Phone size={18} />
+              Leave
+            </button>
+          </div>
         </section>
-        <aside className="stage-chat" data-testid="stage-chat">
+        <aside className="stage-chat" data-testid="stage-chat" aria-labelledby="stage-chat-title">
           <div className="stage-chat-head">
-            <span>call chat</span>
+            <h3 id="stage-chat-title">Chat</h3>
           </div>
           <div className="scroll" ref={scroller} data-testid="stage-chat-scroll">
             {messages.length === 0 && (
               <div className="stage-chat-empty muted">
-                Nothing yet — messages here stay with this {direct ? 'call' : 'room'}.
+                No messages yet. They stay with this {direct ? 'call' : 'room'}.
               </div>
             )}
             {messages.map((m, i) =>
@@ -260,7 +283,7 @@ export default function CallStage({
                   <Seal name={m.sender} size={18} title={m.sender} />
                   <span className={cx('sender', m.sender === me && 'self')}>{m.sender}</span>
                   <span className="text">
-                    {m.file ? `sent a file: ${m.file.name}` : m.game ? `opened ${m.game.name}` : m.text}
+                    {m.file ? `sent a file: ${m.file.name}` : m.game ? `started ${m.game.name}` : m.text}
                   </span>
                   <time>{timeOf(m.ts)}</time>
                 </div>
@@ -282,15 +305,17 @@ export default function CallStage({
                 type="text"
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
-                placeholder={`Message the call`}
+                placeholder={direct ? `Message ${direct}` : `Message ${channel}`}
+                aria-label={direct ? `Message ${direct}` : `Message ${channel}`}
                 data-testid="stage-composer"
               />
+              <button type="submit" className="button primary send" disabled={!draft.trim()}>
+                <ArrowUp size={14} />
+                Send
+              </button>
             </form>
           )}
-          <div className="composer-note">
-            <Lock size={11} />
-            End-to-end encrypted
-          </div>
+          {circle && <EncryptionNote server={circle} me={me} onVerify={onVerify} />}
         </aside>
       </div>
     </main>
