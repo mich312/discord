@@ -5,6 +5,7 @@
 //      key arrives, and after a member was removed (a rotated key)
 //   B. the same account open in two tabs
 //   C. the same account on several devices, all of them sending
+//   D. more than one circle: getting to the list of them, and staying there
 //
 // `run.mjs` walks one long happy path with one tab per person. These are
 // short, independent, and about what ordinary use does to that path. Every
@@ -233,6 +234,51 @@ try {
     await alice.click('[data-testid=remove-member-dan]');
     t.check('removing the member puts every device out', await tablet.waitForSelector('[data-testid=circles-home]', { timeout: 15000 }).then(() => true, () => false));
   }
+
+  // ------------------------------------------------------------------ D --
+  {
+    t.section('D. more than one circle');
+    const alice = (await device('alice4')).page;
+    const bob = (await device('bob4')).page;
+    await onboard(alice, base, 'amy');
+    await createCircle(alice, 'First Circle');
+    await onboard(bob, base, 'bo');
+    await bob.waitForTimeout(800);
+    await propose(alice, 'bo');
+    await inCircle(bob);
+    await room(bob, 'general');
+
+    // On a wide screen the only route to the list of circles was the
+    // phone's tab bar, which is not there. So: from the fascia.
+    await alice.click('[data-testid=masthead-home]');
+    t.check('the list of circles is reachable from inside a circle', await alice.waitForSelector('[data-testid=circles-home]', { timeout: 10000 }).then(() => true, () => false));
+    // Every message anywhere produces a roster update, and each one used to
+    // throw whoever was on this screen into their first circle.
+    await say(bob, 'said while amy is on circles home');
+    await alice.waitForTimeout(1500);
+    t.check('…and a message arriving elsewhere does not throw you off it', await alice.locator('[data-testid=circles-home]').count() === 1);
+
+    await alice.click('[data-testid=new-server]');
+    await alice.fill('[data-testid=new-server-name]', 'Second Circle');
+    await alice.press('[data-testid=new-server-name]', 'Enter');
+    t.check(
+      'a second circle can be started from there',
+      await alice
+        .waitForFunction(() => document.querySelector('[data-testid=server-name]')?.textContent === 'Second Circle', { timeout: 15000 })
+        .then(() => true, () => false)
+    );
+    await room(alice, 'general');
+    await say(alice, 'only in the second circle');
+
+    await alice.click('[data-testid=masthead-home]');
+    await alice.waitForSelector('[data-testid=circles-home]');
+    await alice.click('[data-testid^=circles-open-first-circle]');
+    await room(alice, 'general');
+    t.check('switching back shows the first circle’s conversation', await sees(alice, 'said while amy is on circles home'));
+    t.check('…and not the other one’s', !(await sees(alice, 'only in the second circle', 1500)));
+    await say(alice, 'amy, back in the first circle');
+    t.check('…and it still sends', await sees(bob, 'amy, back in the first circle'));
+  }
 } catch (e) {
   crashed = e;
 }
@@ -244,5 +290,5 @@ if (failed.length || crashed) {
   console.error(`\nFAIL: ${failed.length} expectation(s) did not hold${failed.length ? ':\n  - ' + failed.join('\n  - ') : ''}`);
   process.exit(1);
 }
-console.log('\nPASS: reloads at bad moments, two tabs, several devices');
+console.log('\nPASS: reloads at bad moments, two tabs, several devices, several circles');
 process.exit(0);

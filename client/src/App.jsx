@@ -103,7 +103,15 @@ function reducer(state, action) {
     }
     case 'servers': {
       let active = state.active;
-      if (!active.server && action.servers.length > 0) {
+      // No circle open, and not because the person went to the list of
+      // them: boot, before the circles had loaded. Land on the first.
+      //
+      // `atHome` is the second half of that sentence. Without it this fired
+      // for someone standing on circles home too, and a roster update
+      // arrives with every message in every circle — so the list of your
+      // circles threw you into the first one whenever anybody, anywhere,
+      // said anything.
+      if (!active.server && !state.atHome && action.servers.length > 0) {
         active = { server: action.servers[0].id, channel: null };
       } else if (active.server) {
         const srv = action.servers.find((s) => s.id === active.server);
@@ -138,6 +146,8 @@ function reducer(state, action) {
       return {
         ...state,
         active: { server: action.server, channel: action.channel },
+        // Circles home, chosen. See the `servers` case for why it is kept.
+        atHome: !action.server,
         // Switching rooms clears the pane: rendering the old room's
         // messages until the new load resolves invites cross-channel
         // flashes and races the live-append path below.
@@ -797,6 +807,18 @@ export default function App() {
     }
   };
 
+  // The list of every circle you are in — where a second circle is made,
+  // and where what is waiting on you across all of them is shown. Reachable
+  // from the fascia on every screen: it was wired only to the phone's tab
+  // bar, so on a wider screen there was no way back to it at all, and
+  // nobody already in one circle could start another.
+  const goCircles = () =>
+    withViewTransition(() => {
+      dispatch({ type: 'select', server: null, channel: null });
+      setStage(false);
+      setGame(null);
+    });
+
   const paletteActions = [
     ...(activeServer && canManage
       ? [{ id: 'act:invite', label: 'create invite link', hint: 'action', glyph: <LinkGlyph />, run: openInvite }]
@@ -855,6 +877,7 @@ export default function App() {
         theme={theme}
         canInvite={canManage}
         onInvite={openInvite}
+        onCircles={goCircles}
         onPalette={() => setPaletteOpen(true)}
         onTheme={toggleTheme}
         me={state.me}
@@ -1369,13 +1392,7 @@ export default function App() {
         channel={channel}
         onStage={stage && !!state.voice.active}
         onGame={!!(liveGame && channel)}
-        onCircles={() =>
-          withViewTransition(() => {
-            dispatch({ type: 'select', server: null, channel: null });
-            setStage(false);
-            setGame(null);
-          })
-        }
+        onCircles={goCircles}
         onBoard={() =>
           withViewTransition(() => {
             dispatch({ type: 'select', server, channel: null });
