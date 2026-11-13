@@ -39,6 +39,11 @@ pub enum CoreError {
     /// other than the one pinned for that handle.
     #[error("key package for {0} carries an unexpected signature key")]
     KeyMismatch(String),
+    /// A commit would put a leaf in the group under a name an existing
+    /// member already holds with a different key. The commit is refused
+    /// before it is merged; see `check_commit_identities`.
+    #[error("identity conflict: {0} is not who this circle knows by that name")]
+    IdentityConflict(String),
     #[error("{0}")]
     Mls(String),
 }
@@ -59,8 +64,22 @@ pub enum Event {
     /// A commit was merged; the group moved to a new epoch. `sender` is the
     /// commit's signer: for an external (invite-link) join that is the new
     /// member itself — the UI uses this to mark link-joins as unverified.
+    ///
+    /// `active` is whether THIS device is still in the group afterwards. It
+    /// is not the same question as "is my name in `members`": an identity
+    /// holds one leaf, so when the same account joins again from another
+    /// device (an invite link opened there), that join replaces this
+    /// device's leaf. The name stays in the roster and this device is out —
+    /// every later call on the group fails. Without this flag the client
+    /// could not tell, and the device sat there looking like a member.
     #[serde(rename_all = "camelCase")]
-    MembershipChange { group: String, epoch: u64, sender: String, members: Vec<String> },
+    MembershipChange {
+        group: String,
+        epoch: u64,
+        sender: String,
+        members: Vec<String>,
+        active: bool,
+    },
     /// A proposal was queued; nothing user-visible yet.
     #[serde(rename_all = "camelCase")]
     ProposalStored { group: String, epoch: u64 },
@@ -68,6 +87,7 @@ pub enum Event {
 
 /// Result of adding a member: both blobs must reach the relay —
 /// `commit` fans out to existing members, `welcome` goes to the joiner.
+#[derive(Debug)]
 pub struct AddResult {
     pub commit: Vec<u8>,
     pub welcome: Vec<u8>,
@@ -78,7 +98,12 @@ pub struct AddResult {
 struct StateHeader {
     v: u32,
     name: String,
+    /// This DEVICE's MLS signing key — the one on its leaf.
     signer: SignatureKeyPair,
+    /// The ACCOUNT's identity key. Absent in snapshots written before the
+    /// two were separate, where `signer` is both (see `ChatClient`).
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    identity: Option<SignatureKeyPair>,
     groups: Vec<String>,
 }
 
@@ -94,30 +119,169 @@ struct IdentityBundle {
     signer: SignatureKeyPair,
 }
 
+/// One device of one account.
+///
+/// Two keys, which used to be one:
+///
+/// * `identity` — the ACCOUNT's key. The relay pins it to the handle and
+///   challenges it on every connection, safety numbers are computed over it,
+///   and it signs the entries a member writes to a channel's log. It is what
+///   the recovery file, the vault and device linking carry: every device of
+///   an account holds the same one.
+/// * `signer` — this DEVICE's key, generated here and never exported. It is
+///   the signature key on this device's MLS leaf.
+///
+/// They were the same key, so an account could hold exactly one leaf: MLS
+/// requires leaf signature keys to be unique, and a second device presenting
+/// the same one is treated as the first device resyncing and *replaces* it.
+/// A phone joining a circle evicted the laptop.
+///
+/// What ties the two together is the credential (see `device_credential`):
+/// the handle, the identity public key, and the identity key's signature
+/// over this device's key. Any member can check that a leaf claiming to be
+/// "bob" was authorized by bob's identity key, and `check_commit_identities`
+/// refuses a leaf that was not.
+///
+/// A snapshot from before the split has one key doing both jobs and a bare
+/// handle for a credential. That is still a valid device — its leaf key IS
+/// its identity key — and it keeps working unchanged beside the new kind.
 pub struct ChatClient {
     provider: OpenMlsRustCrypto,
+    identity: SignatureKeyPair,
     signer: SignatureKeyPair,
     credential_with_key: CredentialWithKey,
     groups: HashMap<String, MlsGroup>,
     name: String,
 }
 
+/// Domain separator for the identity key's signature over a device key.
+const DEVICE_CERT_CONTEXT: &[u8] = b"quorum-device-cert-v1";
+/// Version byte of the credential layout after the handle.
+const DEVICE_CREDENTIAL_V1: u8 = 1;
+const ED25519_PUBLIC_LEN: usize = 32;
+const ED25519_SIGNATURE_LEN: usize = 64;
+
+/// The exact bytes an identity key signs to authorize a device key. The
+/// handle is length-prefixed and bound in, so a certificate issued for one
+/// account's device cannot be presented under another handle.
+fn device_cert_message(name: &[u8], device_key: &[u8]) -> Vec<u8> {
+    let mut m = DEVICE_CERT_CONTEXT.to_vec();
+    m.extend_from_slice(&(name.len() as u32).to_be_bytes());
+    m.extend_from_slice(name);
+    m.extend_from_slice(device_key);
+    m
+}
+
+/// The bytes of a device's MLS credential:
+/// `handle ‖ 0x00 ‖ version ‖ identity public key ‖ certificate`.
+///
+/// A handle cannot contain NUL, so the first NUL is unambiguous — and a
+/// credential with none is the older, bare-handle kind.
+fn device_credential(
+    name: &str,
+    identity: &SignatureKeyPair,
+    device_key: &[u8],
+) -> Result<Vec<u8>, CoreError> {
+    let cert = identity
+        .sign(&device_cert_message(name.as_bytes(), device_key))
+        .map_err(|e| CoreError::Mls(format!("{e:?}")))?;
+    let mut out = name.as_bytes().to_vec();
+    out.push(0);
+    out.push(DEVICE_CREDENTIAL_V1);
+    out.extend_from_slice(identity.public());
+    out.extend_from_slice(&cert);
+    Ok(out)
+}
+
+/// What a leaf says about who it belongs to, once checked.
+struct Claim {
+    name: String,
+    /// The account identity key this leaf answers to.
+    identity_key: Vec<u8>,
+}
+
+/// Read and VERIFY a leaf's credential against its own signature key.
+///
+/// `None` means the credential is malformed or its certificate does not
+/// verify — a leaf nobody should attribute anything to. A bare-handle
+/// credential needs no certificate: its leaf key is its identity key.
+fn claim_of(
+    crypto: &impl OpenMlsCrypto,
+    credential: &Credential,
+    leaf_key: &[u8],
+) -> Option<Claim> {
+    let bytes = BasicCredential::try_from(credential.clone()).ok()?;
+    let bytes = bytes.identity();
+    let Some(split) = bytes.iter().position(|b| *b == 0) else {
+        if bytes.is_empty() {
+            return None;
+        }
+        return Some(Claim {
+            name: String::from_utf8_lossy(bytes).into_owned(),
+            identity_key: leaf_key.to_vec(),
+        });
+    };
+    let (name, rest) = (&bytes[..split], &bytes[split + 1..]);
+    if name.is_empty()
+        || rest.len() != 1 + ED25519_PUBLIC_LEN + ED25519_SIGNATURE_LEN
+        || rest[0] != DEVICE_CREDENTIAL_V1
+    {
+        return None;
+    }
+    let identity_key = &rest[1..1 + ED25519_PUBLIC_LEN];
+    let cert = &rest[1 + ED25519_PUBLIC_LEN..];
+    crypto
+        .verify_signature(
+            CIPHERSUITE.signature_algorithm(),
+            &device_cert_message(name, leaf_key),
+            identity_key,
+            cert,
+        )
+        .ok()?;
+    Some(Claim {
+        name: String::from_utf8_lossy(name).into_owned(),
+        identity_key: identity_key.to_vec(),
+    })
+}
+
 impl ChatClient {
+    /// A brand-new account, on its first device.
     pub fn new(name: &str) -> Result<Self, CoreError> {
-        let signer = SignatureKeyPair::new(CIPHERSUITE.signature_algorithm())
+        let identity = SignatureKeyPair::new(CIPHERSUITE.signature_algorithm())
             .map_err(|e| CoreError::Mls(format!("{e:?}")))?;
-        Self::with_identity(name.to_string(), signer)
+        Self::with_identity(name.to_string(), identity)
     }
 
-    fn with_identity(name: String, signer: SignatureKeyPair) -> Result<Self, CoreError> {
+    /// A new DEVICE for the account `identity` belongs to: a fresh device
+    /// key, certified by the identity key.
+    fn with_identity(name: String, identity: SignatureKeyPair) -> Result<Self, CoreError> {
+        if name.is_empty() || name.as_bytes().contains(&0) {
+            return Err(CoreError::Mls("a handle cannot be empty or contain NUL".into()));
+        }
+        let signer = SignatureKeyPair::new(CIPHERSUITE.signature_algorithm())
+            .map_err(|e| CoreError::Mls(format!("{e:?}")))?;
         let provider = OpenMlsRustCrypto::default();
         signer.store(provider.storage()).map_err(CoreError::mls)?;
-        let credential = BasicCredential::new(name.as_bytes().to_vec());
-        let credential_with_key = CredentialWithKey {
-            credential: credential.into(),
-            signature_key: signer.public().into(),
+        let credential_with_key = Self::credential_for(&name, &identity, &signer)?;
+        Ok(Self { provider, identity, signer, credential_with_key, groups: HashMap::new(), name })
+    }
+
+    /// The credential a device presents: certified when it has a key of its
+    /// own, the bare handle when its leaf key is the identity key itself.
+    fn credential_for(
+        name: &str,
+        identity: &SignatureKeyPair,
+        signer: &SignatureKeyPair,
+    ) -> Result<CredentialWithKey, CoreError> {
+        let bytes = if identity.public() == signer.public() {
+            name.as_bytes().to_vec()
+        } else {
+            device_credential(name, identity, signer.public())?
         };
-        Ok(Self { provider, signer, credential_with_key, groups: HashMap::new(), name })
+        Ok(CredentialWithKey {
+            credential: BasicCredential::new(bytes).into(),
+            signature_key: signer.public().into(),
+        })
     }
 
     pub fn name(&self) -> &str {
@@ -130,17 +294,27 @@ impl ChatClient {
         ids
     }
 
-    /// Raw Ed25519 public key of this client's MLS identity. The relay
-    /// pins it on first contact and challenges it on every connection.
+    /// Raw Ed25519 public key of the ACCOUNT's identity. The relay pins it
+    /// on first contact and challenges it on every connection; it is the
+    /// same on every device of the account.
     pub fn signature_public_key(&self) -> Vec<u8> {
+        self.identity.public().to_vec()
+    }
+
+    /// Raw Ed25519 public key of THIS DEVICE — the key on its MLS leaf, and
+    /// what names the device to the relay and to the account's other
+    /// devices. Equal to the identity key on a device from before the two
+    /// were separate.
+    pub fn device_public_key(&self) -> Vec<u8> {
         self.signer.public().to_vec()
     }
 
-    /// Sign arbitrary bytes with the MLS identity key (used for the
-    /// relay's auth challenge, and for authorship of server-log entries —
-    /// same key that signs MLS messages).
+    /// Sign arbitrary bytes with the account identity key: the relay's auth
+    /// challenge, and authorship of server-log entries. The identity key
+    /// rather than the device's, so an entry verifies no matter which of
+    /// its author's devices wrote it.
     pub fn sign(&self, message: &[u8]) -> Result<Vec<u8>, CoreError> {
-        self.signer
+        self.identity
             .sign(message)
             .map_err(|e| CoreError::Mls(format!("{e:?}")))
     }
@@ -163,7 +337,8 @@ impl ChatClient {
             .is_ok()
     }
 
-    /// The group's roster as (handle, signature public key) pairs.
+    /// The group's roster as (handle, identity public key) pairs — one per
+    /// member, however many devices they have in the group.
     ///
     /// This is the *cryptographic* answer to "which key speaks for whom",
     /// taken from the ratchet tree rather than from anything the relay
@@ -173,12 +348,27 @@ impl ChatClient {
     /// re-derive. A key learned here is only as good as the roster it came
     /// from; a safety-number check is still what rules out substitution.
     pub fn member_keys(&self, id: &str) -> Result<Vec<(String, Vec<u8>)>, CoreError> {
+        let mut out: Vec<(String, Vec<u8>)> = Vec::new();
+        for m in self.group_ref(id)?.members() {
+            // A leaf whose certificate does not verify speaks for nobody.
+            let Some(claim) = claim_of(self.provider.crypto(), &m.credential, &m.signature_key)
+            else {
+                continue;
+            };
+            if !out.iter().any(|(name, _)| *name == claim.name) {
+                out.push((claim.name, claim.identity_key));
+            }
+        }
+        Ok(out)
+    }
+
+    /// Every device in the group as (handle, device public key) pairs. How
+    /// a client tells whether one of an account's devices is already in.
+    pub fn member_devices(&self, id: &str) -> Result<Vec<(String, Vec<u8>)>, CoreError> {
         Ok(self
             .group_ref(id)?
             .members()
             .filter_map(|m| {
-                // Two statements rather than a chain: the borrow of
-                // `m.credential` has to end before `m.signature_key` moves.
                 let name = identity_of(&m.credential)?;
                 Some((name, m.signature_key))
             })
@@ -195,6 +385,11 @@ impl ChatClient {
             v: 1,
             name: self.name.clone(),
             signer: clone_signer(&self.signer)?,
+            identity: if self.identity.public() == self.signer.public() {
+                None
+            } else {
+                Some(clone_signer(&self.identity)?)
+            },
             groups: self.group_ids(),
         };
         let header = serde_json::to_vec(&header).map_err(CoreError::mls)?;
@@ -244,11 +439,13 @@ impl ChatClient {
         let provider = OpenMlsRustCrypto::default();
         *provider.storage().values.write().unwrap() = map;
 
-        let credential = BasicCredential::new(header.name.as_bytes().to_vec());
-        let credential_with_key = CredentialWithKey {
-            credential: credential.into(),
-            signature_key: header.signer.public().into(),
+        // No separate identity key: a snapshot from before devices had their
+        // own. Its one key is both, and its credential is the bare handle.
+        let identity = match header.identity {
+            Some(identity) => identity,
+            None => clone_signer(&header.signer)?,
         };
+        let credential_with_key = Self::credential_for(&header.name, &identity, &header.signer)?;
         let mut groups = HashMap::new();
         for id in header.groups {
             let group = MlsGroup::load(provider.storage(), &GroupId::from_slice(id.as_bytes()))
@@ -258,6 +455,7 @@ impl ChatClient {
         }
         Ok(Self {
             provider,
+            identity,
             signer: header.signer,
             credential_with_key,
             groups,
@@ -271,7 +469,9 @@ impl ChatClient {
         let bundle = IdentityBundle {
             v: 1,
             name: self.name.clone(),
-            signer: clone_signer(&self.signer)?,
+            // The field is called `signer` because the bundle's format
+            // predates the split; what it carries is the identity key.
+            signer: clone_signer(&self.identity)?,
         };
         serde_json::to_vec(&bundle).map_err(CoreError::mls)
     }
@@ -363,30 +563,65 @@ impl ChatClient {
         expected_identity: &str,
         expected_key: &[u8],
     ) -> Result<AddResult, CoreError> {
-        let kp_in = KeyPackageIn::tls_deserialize_exact(key_package_bytes)
-            .map_err(CoreError::mls)?;
-        let key_package = kp_in
-            .validate(self.provider.crypto(), ProtocolVersion::Mls10)
-            .map_err(CoreError::mls)?;
+        self.add_members(id, &[key_package_bytes], expected_identity, expected_key)
+    }
 
-        let leaf = key_package.leaf_node();
-        let got = identity_of(leaf.credential());
-        if got.as_deref() != Some(expected_identity) {
-            return Err(CoreError::IdentityMismatch {
-                expected: expected_identity.to_string(),
-                got: got.unwrap_or_else(|| "<non-basic credential>".to_string()),
-            });
+    /// Add one account's devices in a single commit — every KeyPackage must
+    /// belong to `expected_identity` under `expected_key`.
+    ///
+    /// One commit rather than one per device: a member with a laptop and a
+    /// phone is one decision, and each commit re-keys the whole group. The
+    /// single Welcome it produces opens on each of the added devices.
+    ///
+    /// `expected_key` is the account's IDENTITY key. Each KeyPackage has to
+    /// carry a credential that names the handle and is certified by that
+    /// key (or, for a device from before devices had keys of their own, be
+    /// signed by it directly).
+    pub fn add_members(
+        &mut self,
+        id: &str,
+        key_packages: &[&[u8]],
+        expected_identity: &str,
+        expected_key: &[u8],
+    ) -> Result<AddResult, CoreError> {
+        if key_packages.is_empty() {
+            return Err(CoreError::Mls("no key packages to add".into()));
         }
-        if leaf.signature_key().as_slice() != expected_key {
-            return Err(CoreError::KeyMismatch(expected_identity.to_string()));
+        let mut validated = Vec::with_capacity(key_packages.len());
+        for bytes in key_packages {
+            let kp_in = KeyPackageIn::tls_deserialize_exact(*bytes).map_err(CoreError::mls)?;
+            let key_package = kp_in
+                .validate(self.provider.crypto(), ProtocolVersion::Mls10)
+                .map_err(CoreError::mls)?;
+            let leaf = key_package.leaf_node();
+            let claim =
+                claim_of(self.provider.crypto(), leaf.credential(), leaf.signature_key().as_slice());
+            let got = claim.as_ref().map(|c| c.name.clone());
+            if got.as_deref() != Some(expected_identity) {
+                return Err(CoreError::IdentityMismatch {
+                    expected: expected_identity.to_string(),
+                    got: got.unwrap_or_else(|| "<unverifiable credential>".to_string()),
+                });
+            }
+            if claim.map(|c| c.identity_key).as_deref() != Some(expected_key) {
+                return Err(CoreError::KeyMismatch(expected_identity.to_string()));
+            }
+            validated.push(key_package);
         }
 
         let group = self
             .groups
             .get_mut(id)
             .ok_or_else(|| CoreError::UnknownGroup(id.to_string()))?;
+        // The caller's `expected_key` came from the relay. If this handle is
+        // already in the group, the roster's answer outranks the relay's.
+        for (name, key) in roster_identities(self.provider.crypto(), group) {
+            if name == expected_identity && key != expected_key {
+                return Err(CoreError::IdentityConflict(name));
+            }
+        }
         let (commit, welcome, _group_info) = group
-            .add_members(&self.provider, &self.signer, &[key_package])
+            .add_members(&self.provider, &self.signer, &validated)
             .map_err(CoreError::mls)?;
         // Staged, NOT merged: see `merge_staged_commit`.
         Ok(AddResult {
@@ -401,12 +636,20 @@ impl ChatClient {
             .groups
             .get_mut(id)
             .ok_or_else(|| CoreError::UnknownGroup(id.to_string()))?;
-        let target = group
+        // Every leaf under that name, not the first: a member is all of
+        // their devices, and removing a person has to mean each one. A leaf
+        // left behind keeps decrypting, under a name the roster no longer
+        // shows.
+        let targets: Vec<LeafNodeIndex> = group
             .members()
-            .find(|m| identity_of(&m.credential).as_deref() == Some(name))
-            .ok_or_else(|| CoreError::Mls(format!("no member named {name}")))?;
+            .filter(|m| identity_of(&m.credential).as_deref() == Some(name))
+            .map(|m| m.index)
+            .collect();
+        if targets.is_empty() {
+            return Err(CoreError::Mls(format!("no member named {name}")));
+        }
         let (commit, _welcome, _group_info) = group
-            .remove_members(&self.provider, &self.signer, &[target.index])
+            .remove_members(&self.provider, &self.signer, &targets)
             .map_err(CoreError::mls)?;
         // Staged, NOT merged: see `merge_staged_commit`.
         commit.tls_serialize_detached().map_err(CoreError::mls)
@@ -486,13 +729,16 @@ impl ChatClient {
     pub fn safety_number(&self, id: &str, peer: &str) -> Result<String, CoreError> {
         use sha2::{Digest, Sha256};
         let group = self.group_ref(id)?;
-        let peer_key = group
-            .members()
-            .find(|m| identity_of(&m.credential).as_deref() == Some(peer))
-            .map(|m| m.signature_key)
+        // Over the two ACCOUNT identity keys, not device keys: the number a
+        // pair compared on their laptops has to be the number their phones
+        // show, and must not change when either of them adds a device.
+        let peer_key = roster_identities(self.provider.crypto(), group)
+            .into_iter()
+            .find(|(name, _)| name == peer)
+            .map(|(_, key)| key)
             .ok_or_else(|| CoreError::Mls(format!("no member named {peer}")))?;
         let mut parties = [
-            (self.name.as_bytes().to_vec(), self.signer.public().to_vec()),
+            (self.name.as_bytes().to_vec(), self.identity.public().to_vec()),
             (peer.as_bytes().to_vec(), peer_key),
         ];
         parties.sort();
@@ -615,12 +861,16 @@ impl ChatClient {
                 Ok(Event::Message { group: id, sender, text, epoch })
             }
             ProcessedMessageContent::StagedCommitMessage(staged) => {
+                // Before the merge, never after: once merged, the leaf is in
+                // the roster and every reader has already taken its word.
+                check_commit_identities(provider.crypto(), group, &staged)?;
                 group
                     .merge_staged_commit(provider, *staged)
                     .map_err(CoreError::mls)?;
                 let epoch = group.epoch().as_u64();
                 let members = members_of(group);
-                Ok(Event::MembershipChange { group: id, epoch, sender, members })
+                let active = group.is_active();
+                Ok(Event::MembershipChange { group: id, epoch, sender, members, active })
             }
             ProcessedMessageContent::ProposalMessage(proposal) => {
                 group
@@ -661,11 +911,96 @@ impl ChatClient {
     }
 }
 
-fn members_of(group: &MlsGroup) -> Vec<String> {
+/// The verified (handle, identity key) of every leaf in the group, in tree
+/// order — one entry per device. Leaves whose credential does not verify
+/// are left out.
+fn roster_identities(crypto: &impl OpenMlsCrypto, group: &MlsGroup) -> Vec<(String, Vec<u8>)> {
     group
         .members()
-        .filter_map(|m| identity_of(&m.credential))
+        .filter_map(|m| {
+            let claim = claim_of(crypto, &m.credential, &m.signature_key)?;
+            Some((claim.name, claim.identity_key))
+        })
         .collect()
+}
+
+/// Refuse a commit that would let one name mean two accounts.
+///
+/// A credential is a self-asserted string: MLS proves that a leaf's messages
+/// were signed by that leaf's key, and nothing about whether the name on it
+/// is true. `add_members` checks the people it adds against what the relay
+/// has pinned — but that runs on one device, for one path. Everyone else
+/// merged whatever commit arrived, and an invite-link join (an external
+/// commit, built by the joiner) was checked by nobody. So a link holder
+/// could join as "alice", sit in the roster beside the real one, and have
+/// their messages attributed to her.
+///
+/// The rule, applied to every leaf a commit introduces or rewrites — added
+/// members, the committer's own path leaf (which for an external commit *is*
+/// the joiner), and updates:
+///
+/// 1. Its credential must verify: either a bare handle (the leaf key is the
+///    identity key) or a handle plus an identity key that has signed this
+///    leaf's key.
+/// 2. If that handle is already in the group, the identity key must be the
+///    one the group already knows it by.
+///
+/// Together those mean a handle maps to one identity key for as long as it
+/// is in the group, and that a second leaf under a handle is a device its
+/// owner's identity key authorized — which is what lets any member, not
+/// just the account's own devices, safely add it.
+///
+/// A leaf being removed in the same commit is deliberately not exempt:
+/// exempting removals would turn "join beside alice" into "replace alice".
+fn check_commit_identities(
+    crypto: &impl OpenMlsCrypto,
+    group: &MlsGroup,
+    staged: &StagedCommit,
+) -> Result<(), CoreError> {
+    // Owned claims: the proposal iterators hand out short-lived wrappers,
+    // so nothing borrowed from them outlives the closure.
+    let claim = |leaf: &LeafNode| {
+        (
+            identity_of(leaf.credential()),
+            claim_of(crypto, leaf.credential(), leaf.signature_key().as_slice()),
+        )
+    };
+    let mut incoming: Vec<(Option<String>, Option<Claim>)> = staged
+        .add_proposals()
+        .map(|p| claim(p.add_proposal().key_package().leaf_node()))
+        .collect();
+    incoming.extend(staged.update_proposals().map(|p| claim(p.update_proposal().leaf_node())));
+    incoming.extend(staged.update_path_leaf_node().map(claim));
+
+    let mut known = roster_identities(crypto, group);
+    for (name, claim) in incoming {
+        let Some(claim) = claim else {
+            // Named, but not certified by the key it names: somebody put a
+            // handle on a device its owner never authorized.
+            return Err(match name.filter(|n| !n.is_empty()) {
+                Some(name) => CoreError::IdentityConflict(name),
+                None => CoreError::Mls("a commit carried a leaf with no identity".into()),
+            });
+        };
+        if known.iter().any(|(n, k)| *n == claim.name && *k != claim.identity_key) {
+            return Err(CoreError::IdentityConflict(claim.name));
+        }
+        // Later leaves in the same commit are held to this one too.
+        known.push((claim.name, claim.identity_key));
+    }
+    Ok(())
+}
+
+/// The group's members by handle, each once, in the order they first
+/// appear in the tree. A member with three devices is one member.
+fn members_of(group: &MlsGroup) -> Vec<String> {
+    let mut names: Vec<String> = Vec::new();
+    for name in group.members().filter_map(|m| identity_of(&m.credential)) {
+        if !names.contains(&name) {
+            names.push(name);
+        }
+    }
+    names
 }
 
 /// Derive the two halves of a password login from Argon2id: the first 32
@@ -687,10 +1022,15 @@ pub fn derive_login_keys(password: &str, salt: &[u8]) -> Result<Vec<u8>, CoreErr
     Ok(out)
 }
 
+/// The handle a credential names — the part before the first NUL, or all
+/// of it for a bare-handle credential. Unverified: this says what the leaf
+/// *claims*, which is enough to display or to match a name against, and not
+/// enough to trust a key by. `claim_of` is the one that checks.
 fn identity_of(credential: &Credential) -> Option<String> {
-    BasicCredential::try_from(credential.clone())
-        .ok()
-        .map(|c| String::from_utf8_lossy(c.identity()).into_owned())
+    let basic = BasicCredential::try_from(credential.clone()).ok()?;
+    let bytes = basic.identity();
+    let name = bytes.split(|b| *b == 0).next().unwrap_or(bytes);
+    Some(String::from_utf8_lossy(name).into_owned())
 }
 
 // SignatureKeyPair is serde-serializable but not Clone (without a feature

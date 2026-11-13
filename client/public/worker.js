@@ -56,8 +56,18 @@ const commands = {
     else client = new Client(name);
     return { name: client.name, groups: client.groupIds(), state: snapshot() };
   },
+  /** The ACCOUNT's identity key — what the relay pins and challenges. */
   pubkey() {
     return client.signaturePublicKey();
+  },
+  /** THIS DEVICE's key: its MLS leaf key, and its name to the relay. */
+  devicePubkey() {
+    return client.devicePublicKey();
+  },
+  /** Every device in the group as [{name, key}] — how a client tells
+      whether one of an account's devices is already in. Read-only. */
+  memberDevices({ group }) {
+    return client.memberDevices(group).map(({ name, key }) => ({ name, key: Uint8Array.from(key) }));
   },
   // Pre-boot: sign-in derives keys before any identity exists locally.
   async deriveLoginKeys({ password, salt }) {
@@ -103,8 +113,13 @@ const commands = {
   // add/removeMember STAGE a commit — they no longer advance the epoch.
   // `epoch` is the epoch this commit will produce once the relay accepts
   // it into the log; members/roster only move on mergeStagedCommit.
-  addMember({ group, keyPackage, expectIdentity, expectKey }) {
-    const r = client.addMember(group, keyPackage, expectIdentity, expectKey);
+  // `keyPackages` is every device of ONE account, added in a single commit;
+  // `keyPackage` is the one-device form. Either way each must be certified
+  // by `expectKey`, the account's identity key.
+  addMember({ group, keyPackage, keyPackages, expectIdentity, expectKey }) {
+    const r = keyPackages
+      ? client.addMembers(group, keyPackages, expectIdentity, expectKey)
+      : client.addMember(group, keyPackage, expectIdentity, expectKey);
     return {
       commit: r.commit,
       welcome: r.welcome,

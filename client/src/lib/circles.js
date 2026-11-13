@@ -31,6 +31,8 @@
 // already holds and can read neither. It is what lets a new sign-in open a
 // room the old device is no longer awake for.
 
+import { mergeChanKeys } from './envelope.js';
+
 /** Fields that ride the encrypted backup — the circle as the account sees it. */
 export const SHARED_FIELDS = [
   'id',
@@ -140,6 +142,35 @@ export function hydrate(shared, device, { now = Date.now(), live = false } = {})
 }
 
 /**
+ * One circle, known two ways: fold `theirs` under `mine`.
+ *
+ * Everything with an owner — the name, the rooms, the home base — comes from
+ * `mine`, which is by construction the copy carrying the edit that caused
+ * this merge. Room keys have no owner and are never chosen between: losing
+ * one loses every message it opens, and the two copies can each hold a key
+ * the other has not seen (a second device that was online for a rotation
+ * this one slept through). So keys, and the directory of who signs as whom,
+ * are unioned.
+ */
+export function mergeCircle(mine, theirs) {
+  if (!theirs) return mine;
+  if (!mine) return theirs;
+  const chanMeta = { ...(mine.chanMeta ?? {}) };
+  for (const [channel, meta] of Object.entries(theirs.chanMeta ?? {})) {
+    // A room only they list is one this copy deleted or never had. Its keys
+    // are kept either way only if the room still exists here: a deleted
+    // room's key has nothing left to open that this copy would show.
+    if (!(mine.channels ?? []).includes(channel)) continue;
+    chanMeta[channel] = mergeChanKeys(chanMeta[channel], meta, { mineWins: true });
+  }
+  return {
+    ...mine,
+    chanMeta,
+    keys: { ...(theirs.keys ?? {}), ...(mine.keys ?? {}) },
+  };
+}
+
+/**
  * Fold a backup we just read over the circles we are holding.
  *
  * Called when a write loses the compare-and-swap: another device of this
@@ -148,21 +179,23 @@ export function hydrate(shared, device, { now = Date.now(), live = false } = {})
  *
  * - A circle only *they* have is one they joined while we were away. Take
  *   it: dropping it is how a device silently loses a circle.
- * - A circle we both have, we keep. Our copy is the one carrying the edit
- *   that triggered this write, and their copy is by definition older than
- *   that edit.
+ * - A circle we both have, we keep — ours carries the edit that triggered
+ *   this write — but with their room keys folded in (see `mergeCircle`).
  * - A circle only *we* have is either one we just joined or one they just
  *   left. Keep it and let the leave, if that is what it was, be re-applied
  *   from their next write — the alternative silently undoes a join, and a
  *   circle that reappears is a visible, fixable annoyance where one that
  *   vanishes is not.
  *
- * Last-writer-wins per circle, in other words, but never per blob. The
- * whole-blob overwrite is the failure this exists to prevent.
+ * Last-writer-wins per circle, in other words, but never per blob, and
+ * never for a key. The whole-blob overwrite is the failure this exists to
+ * prevent.
  */
 export function mergeBackups(mine, theirs) {
   const byId = new Map();
   for (const circle of theirs ?? []) if (circle?.id) byId.set(circle.id, circle);
-  for (const circle of mine ?? []) if (circle?.id) byId.set(circle.id, circle);
+  for (const circle of mine ?? []) {
+    if (circle?.id) byId.set(circle.id, mergeCircle(circle, byId.get(circle.id)));
+  }
   return [...byId.values()];
 }

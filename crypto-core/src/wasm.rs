@@ -112,6 +112,25 @@ impl Client {
         self.inner.signature_public_key()
     }
 
+    /// This device's own public key — its name to the relay and to the
+    /// account's other devices.
+    #[wasm_bindgen(js_name = devicePublicKey)]
+    pub fn device_public_key(&self) -> Vec<u8> {
+        self.inner.device_public_key()
+    }
+
+    /// `[{name, key}]`, one per DEVICE in the group.
+    #[wasm_bindgen(js_name = memberDevices)]
+    pub fn member_devices(&self, id: &str) -> Result<JsValue, JsError> {
+        let entries: Vec<MemberKey> = self
+            .inner
+            .member_devices(id)?
+            .into_iter()
+            .map(|(name, key)| MemberKey { name, key })
+            .collect();
+        Ok(serde_wasm_bindgen::to_value(&entries)?)
+    }
+
     pub fn sign(&self, message: &[u8]) -> Result<Vec<u8>, JsError> {
         Ok(self.inner.sign(message)?)
     }
@@ -154,6 +173,22 @@ impl Client {
         expected_key: &[u8],
     ) -> Result<AddResult, JsError> {
         let r = self.inner.add_member(id, key_package, expected_identity, expected_key)?;
+        Ok(AddResult { commit: r.commit, welcome: r.welcome })
+    }
+
+    /// Add several devices of ONE account in a single commit. `key_packages`
+    /// is a JS array of Uint8Array.
+    #[wasm_bindgen(js_name = addMembers)]
+    pub fn add_members(
+        &mut self,
+        id: &str,
+        key_packages: Vec<js_sys::Uint8Array>,
+        expected_identity: &str,
+        expected_key: &[u8],
+    ) -> Result<AddResult, JsError> {
+        let owned: Vec<Vec<u8>> = key_packages.iter().map(|k| k.to_vec()).collect();
+        let refs: Vec<&[u8]> = owned.iter().map(Vec::as_slice).collect();
+        let r = self.inner.add_members(id, &refs, expected_identity, expected_key)?;
         Ok(AddResult { commit: r.commit, welcome: r.welcome })
     }
 

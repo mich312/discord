@@ -130,6 +130,24 @@ async function openBoard(page) {
   await page.waitForSelector('[data-testid=overview-pane]', { timeout: 10000 });
 }
 
+/**
+ * Open a text room and wait until it is the room on screen.
+ *
+ * Not just a click. Switching rooms swaps the composer, and text typed in
+ * the instant between the click and the swap lands in the outgoing one and
+ * is discarded with it. Nobody types that fast; a script always does. That
+ * is what stopped this suite at step 6 — "the message never arrived" was
+ * the message never having been sent — and with it everything below.
+ * A read-only circle has no live composer, so its note counts as arrival.
+ */
+async function openRoom(page, channel) {
+  await page.click(`[data-testid=channel-${channel}]`);
+  await page.waitForSelector(
+    `[data-testid=composer][placeholder="Message #${channel}"], [data-testid=restored-note]`,
+    { timeout: 10000 }
+  );
+}
+
 async function joinViaInvite(page, handle, url) {
   await page.goto(url);
   await page.fill('[data-testid=handle-input]', handle);
@@ -138,19 +156,6 @@ async function joinViaInvite(page, handle, url) {
 }
 
 let failed = false;
-const known = [];
-/** Run an assertion that is known to be racing on a bug this suite did not
-    introduce. It still runs, it still reports, and it is listed at the end —
-    but it does not stop everything after it from being exercised. */
-async function knownIssue(name, fn) {
-  try {
-    await fn();
-  } catch (e) {
-    known.push(`${name} — ${e.message}`);
-    console.error(`\nKNOWN ISSUE: ${name}\n  ${e.message}`);
-  }
-}
-
 try {
   await new Promise((r) => setTimeout(r, 600)); // let servers bind
 
@@ -239,7 +244,7 @@ try {
   await alice.click('[data-testid=overview-notice-post]');
   await alice.waitForSelector('[data-testid=overview-notice]', { timeout: 10000 });
   // Into the first room to post.
-  await alice.click('[data-testid=channel-general]');
+  await openRoom(alice, 'general');
   await alice.fill('[data-testid=composer]', 'first message — bob should read this back later');
   await alice.press('[data-testid=composer]', 'Enter');
 
@@ -283,7 +288,7 @@ try {
   await bob.click('[data-testid=overview-notice-post]');
   await alice.click('[data-testid=channel-overview]');
   await alice.waitForSelector('text=brakes bedded in', { timeout: 10000 });
-  await alice.click('[data-testid=channel-general]');
+  await openRoom(alice, 'general');
 
   console.log('4c. membership is the circle\'s decision: propose, ledger, object, withdraw');
   // Two members now, so a third needs two signatures and alice cannot do it
@@ -345,10 +350,10 @@ try {
     () => !document.querySelector('[data-testid=overview-proposals]'),
     { timeout: 15000 }
   );
-  await alice.click('[data-testid=channel-general]');
+  await openRoom(alice, 'general');
 
   console.log('5. encrypted chat, both directions');
-  await bob.click('[data-testid=channel-general]'); // off the home base, into the room
+  await openRoom(bob, 'general'); // off the home base, into the room
   await alice.fill('[data-testid=composer]', 'welcome to the team, bob');
   await alice.press('[data-testid=composer]', 'Enter');
   await bob.waitForSelector('text=welcome to the team, bob', { timeout: 10000 });
@@ -368,10 +373,10 @@ try {
   await alice.fill('[data-testid=new-channel-name]', 'logistics');
   await alice.press('[data-testid=new-channel-name]', 'Enter');
   await bob.waitForSelector('[data-testid=channel-logistics]', { timeout: 10000 });
-  await alice.click('[data-testid=channel-logistics]');
+  await openRoom(alice, 'logistics');
   await alice.fill('[data-testid=composer]', 'trailer leaves at 6am');
   await alice.press('[data-testid=composer]', 'Enter');
-  await bob.click('[data-testid=channel-logistics]');
+  await openRoom(bob, 'logistics');
   await bob.waitForSelector('text=trailer leaves at 6am', { timeout: 10000 });
 
   console.log('6a. board catch-up: unread badge counts what landed while away');
@@ -424,48 +429,45 @@ try {
   await alice.fill('[data-testid=new-channel-name]', 'scratch');
   await alice.press('[data-testid=new-channel-name]', 'Enter');
   await bob.waitForSelector('[data-testid=channel-scratch]', { timeout: 10000 });
-  await alice.click('[data-testid=channel-scratch]');
+  await openRoom(alice, 'scratch');
   await alice.fill('[data-testid=composer]', 'note before rename');
   await alice.press('[data-testid=composer]', 'Enter');
-  await bob.click('[data-testid=channel-scratch]');
+  await openRoom(bob, 'scratch');
   await bob.waitForSelector('text=note before rename', { timeout: 10000 });
   await alice.click('[data-testid=channel-settings-scratch]');
   await alice.fill('[data-testid=channel-rename-input]', 'archive');
   await alice.click('[data-testid=channel-rename]');
   await bob.waitForSelector('[data-testid=channel-archive]', { timeout: 10000 });
-  await bob.click('[data-testid=channel-archive]');
+  await openRoom(bob, 'archive');
   await bob.waitForSelector('text=note before rename', { timeout: 10000 }); // history migrated
   // alice deletes it via the settings modal — confirm auto-accepted. The gear
   // is on the room you are in rather than on every chip, and renaming the
   // room you are standing in drops you back to the first one, so step into
   // the renamed room first.
-  await alice.click('[data-testid=channel-archive]');
+  await openRoom(alice, 'archive');
   await alice.click('[data-testid=channel-settings-archive]');
   alice.once('dialog', (d) => d.accept());
   await alice.click('[data-testid=channel-delete]');
   await bob.waitForSelector('[data-testid=channel-archive]', { state: 'detached', timeout: 10000 });
 
-  console.log('7. bob reloads — state must come back from IndexedDB');
+  console.log('7. bob reloads — the circle comes back from the relay, the ratchet from the device');
   await bob.reload();
-  // KNOWN FAILURE, and not this change's: bob's circles do not come back
-  // after a reload. Circles moved onto the relay (they are loaded from the
-  // encrypted backup, not kept on the device) and a device that has only
-  // ever been *added* to a circle appears never to park one, so a reload
-  // reads nothing and lands on an empty circles home. Reproduced on this
-  // commit and, identically, on the commit before this branch — the suite
-  // does not run in CI, so nothing had caught it. Everything from here down
-  // is unverified until it is fixed.
+  // This step failed for a long time: a device that had only ever been
+  // *added* to a circle reloaded into an empty circles home, because what it
+  // had just learned was still waiting on a debounced write. Changes are now
+  // staged on the device until the relay acknowledges them (see
+  // `stagePending`); `resilience.mjs` covers the tighter versions of this.
   await bob.waitForSelector('[data-testid=channel-general]', { timeout: 15000 });
   await bob.waitForFunction(
     () => document.querySelector('[data-testid=conn-dot]')?.classList.contains('online'),
     { timeout: 15000 }
   );
   // A reload lands on the overview page; open the room to check history.
-  await bob.click('[data-testid=channel-general]');
+  await openRoom(bob, 'general');
   // History survived:
   await bob.waitForSelector('text=welcome to the team, bob', { timeout: 10000 });
   // Ratchets survived — live traffic still decrypts, both directions:
-  await alice.click('[data-testid=channel-general]');
+  await openRoom(alice, 'general');
   await alice.fill('[data-testid=composer]', 'post-reload ping');
   await alice.press('[data-testid=composer]', 'Enter');
   await bob.waitForSelector('text=post-reload ping', { timeout: 10000 });
@@ -524,9 +526,9 @@ try {
   await alice.waitForSelector('text=charlie joined via invite link', { timeout: 15000 });
   await openBoard(alice);
   await alice.waitForSelector('.badge-unverified', { timeout: 5000 });
-  await alice.click('[data-testid=channel-general]');
+  await openRoom(alice, 'general');
   // Chat flows to and from the link joiner.
-  await charlie.click('[data-testid=channel-general]');
+  await openRoom(charlie, 'general');
   await charlie.fill('[data-testid=composer]', 'found my way in via the link');
   await charlie.press('[data-testid=composer]', 'Enter');
   await alice.waitForSelector('text=found my way in via the link', { timeout: 10000 });
@@ -559,7 +561,7 @@ try {
     () => document.querySelector('[data-testid=server-name]')?.textContent === 'Race Team',
     { timeout: 20000 }
   );
-  await bob.click('[data-testid=channel-general]');
+  await openRoom(bob, 'general');
   await bob.waitForSelector('text=bob should read this back later', { timeout: 15000 });
 
   console.log('12. identity key export/import: paste alice into a fresh profile');
@@ -601,7 +603,7 @@ try {
     'iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAYAAAAfFcSJAAAADUlEQVR42mP8z8BQDwAEhQGAhKmMIQAAAABJRU5ErkJggg==',
     'base64'
   );
-  await alice.click('[data-testid=channel-general]');
+  await openRoom(alice, 'general');
   await alice.setInputFiles('[data-testid=attach-input]', {
     name: 'pit-map.png',
     mimeType: 'image/png',
@@ -610,7 +612,7 @@ try {
   // Sender sees it decrypted…
   await alice.waitForSelector('[data-testid=attachment-img]', { timeout: 15000 });
   // …and so does a receiver, via blob fetch + AES-GCM decrypt.
-  await charlie.click('[data-testid=channel-general]');
+  await openRoom(charlie, 'general');
   await charlie.waitForSelector('[data-testid=attachment-img]', { timeout: 15000 });
   const naturalWidth = await charlie
     .locator('[data-testid=attachment-img]')
@@ -838,7 +840,7 @@ try {
   console.log('18d. call stage: a room call gets bubbles and its own chat thread');
   // From a room, because 18g checks that closing the stage puts you back
   // where you were — and the roster steps above left alice on the board.
-  await alice.click('[data-testid=channel-general]');
+  await openRoom(alice, 'general');
   await alice.click('[data-testid=voice-join-lounge]');
   await alice.waitForSelector('[data-testid=call-stage]', { timeout: 15000 });
   await dave.click('[data-testid=voice-join-lounge]');
@@ -858,25 +860,21 @@ try {
         ?.textContent.includes('pit window opens lap 12'),
     { timeout: 15000 }
   );
-  // dave is a link joiner, and this is the direction that races. A device
-  // that appends to a channel it holds no key for mints its own — hid and
-  // key both — and announces it. Until that announcement is merged the two
-  // sides are literally writing to two different logs, so dave's first line
-  // into a room alice opened moments ago reaches her about half the time.
-  // Reproduced against a link joiner outside this suite; nothing in the
-  // floor-plan work touches key distribution. Not fixed here: the fix is
-  // either coordinating the mint or deriving the call thread's key from
-  // something both sides already share, and neither belongs in a UI change.
+  // The other direction, from a link joiner who is not an admin. This was
+  // tolerated as a known failure for months and blamed on a key race. It was
+  // three things: the stage's thread was treated as a deleted room and
+  // swapped for #general on the next roster update, a room key announced by
+  // a non-admin was dropped at the admin gate, and receiving a call
+  // thread's key put the thread in the room list. All fixed; it is a plain
+  // assertion again.
   await dave.fill('[data-testid=stage-composer]', 'copy that, fuel is set');
   await dave.press('[data-testid=stage-composer]', 'Enter');
-  await knownIssue("a link joiner's first line into a fresh call thread", () =>
-    alice.waitForFunction(
-      () =>
-        document
-          .querySelector('[data-testid=stage-chat-scroll]')
-          ?.textContent.includes('copy that, fuel is set'),
-      { timeout: 15000 }
-    )
+  await alice.waitForFunction(
+    () =>
+      document
+        .querySelector('[data-testid=stage-chat-scroll]')
+        ?.textContent.includes('copy that, fuel is set'),
+    { timeout: 15000 }
   );
   // The call thread must never surface as a text room in the sidebar.
   // `.rooms .channel` was the sidebar; with the column gone this selector
@@ -1038,11 +1036,17 @@ try {
     await erin.fill('[data-testid=signin-handle]', 'erin');
     // Handle-first: the probe finds a passkey vault, so the passkey button
     // is the one method offered.
-    await erin.click('[data-testid=signin-continue]');
-    // The virtual authenticator simulates presence automatically, so the
-    // ceremony can complete on its own between the button appearing and a
-    // click landing on it. Offer the click, then assert the outcome — being
-    // signed in is the thing under test, not which control got us there.
+    //
+    // The virtual authenticator simulates presence automatically, and the
+    // sign-in form arms passkey autofill as soon as the handle field shows
+    // — so the ceremony can complete on its own at any point from here,
+    // taking the form (and whichever button the script was about to press)
+    // off the page. That applies to `continue` as much as to the passkey
+    // button: offer each click, then assert the outcome. Being signed in is
+    // the thing under test, not which control got us there.
+    await erin.click('[data-testid=signin-continue]', { timeout: 10000 }).catch(() => {
+      /* already through */
+    });
     await erin
       .click('[data-testid=signin-passkey]', { timeout: 10000 })
       .catch(() => {
@@ -1081,18 +1085,18 @@ try {
   // board rather than a panel that slides in over the conversation.
   await alice.setViewportSize({ width: 390, height: 844 });
   await alice.waitForSelector('[data-testid=channel-logistics]', { state: 'visible' });
-  await alice.click('[data-testid=channel-logistics]');
+  await openRoom(alice, 'logistics');
   await alice.waitForSelector('text=trailer leaves at 6am', { timeout: 10000 });
   // The room says how many of the circle are here and how many keys are
   // unchecked, and both go to the people on the board.
   await alice.click('[data-testid=room-here]');
   await alice.waitForSelector('[data-testid=overview-pane]', { timeout: 10000 });
   await alice.waitForSelector('[data-testid=member-list]', { state: 'visible' });
-  await alice.click('[data-testid=channel-logistics]');
+  await openRoom(alice, 'logistics');
   // Chat still round-trips at phone size.
   await alice.fill('[data-testid=composer]', 'checking in from the phone');
   await alice.press('[data-testid=composer]', 'Enter');
-  await charlie.click('[data-testid=channel-logistics]');
+  await openRoom(charlie, 'logistics');
   await charlie.waitForSelector('text=checking in from the phone', { timeout: 10000 });
   await alice.setViewportSize({ width: 1280, height: 720 });
 
@@ -1132,9 +1136,5 @@ try {
   }
 } finally {
   cleanup();
-}
-if (known.length) {
-  console.error(`\n${known.length} known issue(s) rode along:`);
-  for (const k of known) console.error(`  · ${k}`);
 }
 process.exit(failed ? 1 : 0);
