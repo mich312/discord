@@ -14,8 +14,10 @@
 #
 # Erases: accounts/vaults, pinned identity keys (TOFU), messages, groups,
 # invites, push subscriptions (and, with --all, uploaded attachments).
-# Existing browser clients keep local keys — have users re-onboard for a truly
-# clean slate.
+# Existing browser clients keep local keys, but a session left open across a
+# reset is no longer signed up again when it reconnects: the relay refuses it
+# as an unknown account and the app sends it to the sign-up screen. The first
+# person to sign up afterwards gets the invite-free first account.
 
 set -euo pipefail
 

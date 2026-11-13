@@ -26,6 +26,20 @@ pub enum ClientMsg {
         /// by its certificate, which members check and the relay cannot.
         #[serde(default)]
         device: Option<String>,
+        /// "Create this account if it does not exist." Sent only when a
+        /// person has just made or restored an identity in the onboarding
+        /// screen — never by a session that is merely reconnecting.
+        ///
+        /// Registration used to be implicit: any handle the relay did not
+        /// know was registered on its first successful challenge. So after a
+        /// database reset, a browser tab left open on the old deployment
+        /// reconnected by itself, was not recognised, and was signed up
+        /// again — and on an empty relay that reconnect took the one
+        /// invite-free "first account" slot before anyone reached the
+        /// sign-up screen. An unknown handle without this flag is now
+        /// refused as an unknown account, and creates nothing.
+        #[serde(default)]
+        register: Option<bool>,
         /// Client wire-protocol version. Optional so an older client still
         /// parses. Not enforced — it is here so that a skew between a cached
         /// client and an upgraded relay is diagnosable rather than showing up

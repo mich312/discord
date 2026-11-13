@@ -46,7 +46,7 @@ async fn password_vault_roundtrip() {
     let mls = ChatClient::new("alice").unwrap();
     let (mut ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/ws")).await.unwrap();
     ws.send(Message::Text(
-        json!({"t":"hello","user":"alice","pubkey":B64.encode(mls.signature_public_key())}).to_string(),
+        json!({"t":"hello","user":"alice","register":true,"pubkey":B64.encode(mls.signature_public_key())}).to_string(),
     ))
     .await
     .unwrap();

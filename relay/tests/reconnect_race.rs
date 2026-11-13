@@ -44,6 +44,7 @@ async fn connect(addr: SocketAddr, mls: &ChatClient, name: &str) -> Ws {
     ws.send(Message::Text(
         json!({
             "t": "hello",
+            "register": true,
             "user": name,
             "pubkey": B64.encode(mls.signature_public_key()),
             "invite": null,

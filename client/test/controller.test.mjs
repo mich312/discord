@@ -2077,3 +2077,59 @@ test('a global admin can purge a circle by id, whether or not this device holds 
   assert.ok(!sent.some((m) => m.t === 'send'));
   clearTimeout(c.backupTimer);
 });
+
+/* ------------------------------------------- registering is deliberate -- */
+
+test('only a sign-up or a hand-made restore asks the relay to create an account', async () => {
+  const { c } = makeController();
+  c.db = memoryDb();
+  c.crypto = async (cmd) => (cmd === 'exportIdentity' ? new Uint8Array(4) : { name: 'michael', groups: [], state: null });
+  globalThis.localStorage ??= { getItem: () => null, setItem() {}, removeItem() {} };
+
+  assert.notEqual(c.registering, true, 'a controller that has done nothing is not registering');
+  await c.createIdentity('michael');
+  assert.equal(c.registering, true, 'signing up is');
+  assert.equal(c.db.kv.get('registering'), true, 'and it survives a reload before the first connection');
+
+  // The relay accepted it: every connection after this is a reconnection.
+  c.loadCircles = async () => [];
+  c.voice = { probe() {} };
+  c.relay.request = async () => ({ servers: '[]', seq: 1 });
+  await c.onRelayEvent({ t: 'ready' }).catch(() => {});
+  assert.equal(c.registering, false);
+  assert.equal(c.db.kv.get('registering'), false);
+
+  // The app recovering an identity by itself is nobody asking for an account…
+  await c.restoreIdentity(new Uint8Array(4), { explicit: false });
+  assert.equal(c.registering, false);
+  // …a person restoring one is.
+  await c.restoreIdentity(new Uint8Array(4));
+  assert.equal(c.registering, true);
+  clearTimeout(c.backupTimer);
+});
+
+test('a relay that no longer knows the account sends the session to the gate, keeping the key', async () => {
+  const { c, dispatched } = makeController();
+  c.db = memoryDb({ session: { name: 'michael' } });
+  let removed = false;
+  globalThis.localStorage = { getItem: () => 'key', setItem() {}, removeItem: () => void (removed = true) };
+  c.me = 'michael';
+  await c.onAuthRejected('unknown account on this relay');
+  assert.match(c.authError, /no account for "michael"/);
+  assert.match(c.authError, /may have been reset/);
+  assert.equal(removed, false, 'the identity is not wiped: it may be the only copy of a key somebody wants');
+  assert.deepEqual(dispatched.at(-1), { type: 'phase', phase: 'onboarding' });
+});
+
+test('a new account starts without what an earlier one on this device left behind', async () => {
+  const { c } = makeController();
+  c.db = memoryDb({ deviceState: { old: { lastSeq: 9 } }, pendingCircles: { rev: 1, servers: [{ id: 'old' }], left: [] } });
+  globalThis.localStorage = { getItem: () => null, setItem() {}, removeItem() {} };
+  c.crypto = async (cmd) => (cmd === 'exportIdentity' ? new Uint8Array(4) : { name: 'michael', groups: [], state: null });
+  await c.loadDeviceState();
+  assert.ok(c.pendingCarry, 'the earlier account had staged a circle');
+  await c.createIdentity('michael');
+  assert.equal(c.pendingCarry, null);
+  assert.deepEqual(c.db.kv.get('deviceState'), {});
+  assert.equal(c.db.kv.get('pendingCircles'), null);
+});
