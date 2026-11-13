@@ -92,7 +92,12 @@ export default function Members({
               </span>
             )}
             {m !== me && (server.verified ?? []).includes(m) && !server.mismatched?.[m] && (
-              <span className="member-verified" role="img" aria-label="Verified on this device">
+              <span
+                className="member-verified"
+                role="img"
+                aria-label="Verified on this device"
+                data-testid={`badge-verified-${m}`}
+              >
                 <Check size={14} />
               </span>
             )}

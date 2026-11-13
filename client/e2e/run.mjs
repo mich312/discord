@@ -523,7 +523,7 @@ try {
   // Existing members see the join and the unverified badge.
   await alice.waitForSelector('text=charlie joined via invite link', { timeout: 15000 });
   await openBoard(alice);
-  await alice.waitForSelector('.badge-unverified', { timeout: 5000 });
+  await alice.waitForSelector('[data-testid=badge-unverified-charlie]', { timeout: 5000 });
   await alice.click('[data-testid=channel-general]');
   // Chat flows to and from the link joiner.
   await charlie.click('[data-testid=channel-general]');
@@ -632,12 +632,12 @@ try {
   }
   if (!/^\d{60}$/.test(aliceSees)) throw new Error(`unexpected safety number format: ${aliceSees}`);
   // charlie carried the via-link badge; verification replaces it.
-  if (!(await alice.locator('.badge-unverified').count())) {
+  if (!(await alice.locator('[data-testid=badge-unverified-charlie]').count())) {
     throw new Error('expected charlie to be marked unverified before verification');
   }
   await alice.click('[data-testid=mark-verified]');
-  await alice.waitForSelector('.badge-verified', { timeout: 5000 });
-  if (await alice.locator('.badge-unverified').count()) {
+  await alice.waitForSelector('[data-testid=badge-verified-charlie]', { timeout: 5000 });
+  if (await alice.locator('[data-testid=badge-unverified-charlie]').count()) {
     throw new Error('unverified badge should be gone after verification');
   }
   await charlie.click('[data-testid=close-modal]');
