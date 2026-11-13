@@ -280,8 +280,12 @@ that auto-provisions Let's Encrypt certificates — see
 cargo test                                            # relay + crypto core, in-memory store
 TEST_DATABASE_URL=postgres://… cargo test             # + postgres contract tests
 cd client && npm test                                 # client unit tests
-cd client && npm run build && npm run e2e             # 18-step browser journey
+cd client && npm run build && npm run e2e             # the full browser journey
+cd client && npm run e2e:resilience                   # reloads at bad moments, two tabs, two devices
 ```
+
+Both browser suites run in CI and gate deploys. They need the wasm built
+(`crypto-core/build-wasm.sh`) and the relay binary (`cargo build -p relay`).
 
 The client e2e drives five real browser profiles through onboarding,
 E2EE chat, joiners reading a room's past, reload persistence, invite-link
@@ -332,14 +336,30 @@ joins, identity recovery, encrypted attachments, safety numbers, and
   Membership itself is cryptographically enforced and cannot be bypassed.
 - **Invite blobs go stale per epoch** — the link creator's client
   refreshes them; if they're offline long enough the link pauses.
-- **Devices share one identity, not one ratchet** — several devices can
-  hold the same identity (link one from a signed-in device, or enrol a
-  passkey per device; Settings lists them and revokes any one). What they
-  do *not* share is MLS state: each device is not its own leaf, so a
-  second device joins the group afresh and sees no scrollback, and
-  identity recovery restores the identity, never the group ratchets.
-  Revocation is forward-only — it stops that passkey unlocking the
+- **One account, one sending device** — several devices can hold the same
+  identity (link one from a signed-in device, or enrol a passkey per
+  device; Settings lists them and revokes any one), and every one of them
+  reads the circle live from the relay's log. But an identity holds one
+  seat in the MLS group, so only one device can *send*: a second device
+  is read-only until an invite link is opened on it, which moves the seat
+  there and makes the previous device read-only in turn (it says so).
+  Identity recovery restores the identity, never the group ratchets.
+  Per-device keys certified by the identity would lift this; it is not
+  built. Revocation is forward-only — it stops that passkey unlocking the
   identity again, and cannot erase what a device already holds.
+- **One tab at a time** — tabs of one browser profile share one ratchet,
+  which cannot be advanced from two places. A second tab says the app is
+  open elsewhere and offers to take the session; taking it stops the
+  first. Browsers without Web Locks (Safari before 15.4) are unguarded.
+- **A refused join can stall membership changes** — a commit that tries to
+  put a member's name under a different key is refused by every client
+  before it is merged, but the relay has already counted it as the
+  circle's next epoch, so later adds and removals are rejected as stale
+  until the circle is re-formed. It turns impersonation into a nuisance
+  only a link holder can cause; the relay cannot tell a valid commit from
+  an invalid one, so the fix belongs in how epochs are agreed.
+- **A line is on screen a moment before the relay has it** — closing the
+  tab in that instant loses it; there is no outbox yet.
 - **Password vaults can be brute-forced by the server** — only for weak
   passwords, and only offline against the encrypted bundle (Argon2id,
   19 MiB/t=2). Passkey vaults have no such surface. The sign-in params
