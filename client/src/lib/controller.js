@@ -506,6 +506,7 @@ export class Controller {
       // Invite-only relays only register a fresh handle if the hello
       // carries a usable invite id (link joiners have one pending).
       getInvite: () => this.pendingInvite?.id ?? null,
+      getDevice: () => this.deviceName(),
       onAuthError: (message) => {
         this.onAuthRejected(message).catch((e) => console.warn(`auth rejection: ${e.message}`));
       },
@@ -609,6 +610,10 @@ export class Controller {
           payloads.push(b64.enc(keyPackage));
         }
         await this.relay.request({ t: 'publish_kp', payloads });
+        // Only now: whoever answers needs one of those KeyPackages.
+        for (const record of this.servers.values()) {
+          if (record.restored) this.requestSeat(record);
+        }
         // Pick up the operator's ICE servers (STUN/TURN) so voice can traverse
         // NATs. Falls back to VoiceManager's built-in STUN if unavailable.
         try {
@@ -675,6 +680,9 @@ export class Controller {
         break;
       case 'eph':
         await this.onEphemeral(msg);
+        break;
+      case 'device_join':
+        this.onDeviceJoin(msg);
         break;
     }
   }
@@ -747,6 +755,11 @@ export class Controller {
     // re-added upgrades it to a live one; keep everything it knew.
     const prior = this.servers.get(group);
     const record = {
+      // Everything the read-only record knew — the key directory, invite
+      // keys, the ledger. This record is about to be parked as the
+      // account's copy of the circle, and the account's other devices read
+      // that copy: listing fields here used to drop the rest from it.
+      ...(prior ?? {}),
       id: group,
       name: prior?.name ?? group, // placeholder until the meta rebroadcast lands
       channels: prior?.channels ?? ['general'],
@@ -770,13 +783,15 @@ export class Controller {
       // just unioning, so deletions actually land. See the `meta` handler.
       pendingMetaSync: true,
     };
+    delete record.restored;
+    delete record.outOfSync;
     this.mlsGroups.add(group);
     this.servers.set(group, record);
     await this.persistCircle(record);
     await this.addSystemMessage(
       group,
       prior?.restored
-        ? `you were re-added — this device can send again`
+        ? `this device was let into the circle — it can send now`
         : `you joined — history before this point does not exist for you`
     );
     this.dispatch({ type: 'servers', servers: this.snapshotServers() });
@@ -918,12 +933,14 @@ export class Controller {
           if (record.invites?.length) {
             await this.sendContent(record.id, this.metaContent(record));
           }
-        } else {
+        } else if (added.length || before.size !== event.members.length) {
           await this.addSystemMessage(
             record.id,
             `members now: ${event.members.join(', ')} (epoch ${event.epoch})`
           );
         }
+        // Otherwise the same people, on a different set of devices — one of
+        // them signed in somewhere new. Not an event for the room.
         // A membership change is when a key can enter or re-enter the group,
         // so re-check every badge against the key it was granted for — and
         // pick up the joiner's key, so their log entries can be attributed.
@@ -1389,6 +1406,18 @@ export class Controller {
       await this.addMember(serverId, proposal.handle);
       await this.withdrawProposal(serverId, id);
     } catch (e) {
+      // Lost the epoch to another commit — quite possibly this account's
+      // other device making the very same add. Look again in a moment,
+      // once that commit has arrived, rather than reporting a failure that
+      // may already be a success.
+      if (/at the same moment/.test(e.message ?? '') && !this.admitRetries?.has(id)) {
+        (this.admitRetries ??= new Set()).add(id);
+        setTimeout(() => {
+          this.admitRetries.delete(id);
+          this.admitIfCarried(serverId, id).catch((err) => console.warn(`admit: ${err.message}`));
+        }, 1500 + Math.random() * 1000);
+        return;
+      }
       // Leave the proposal standing: it carried, and the circle should see
       // that it did even when the add itself could not go through.
       this.dispatch({ type: 'toast', text: `could not add ${proposal.handle}: ${e.message}` });
@@ -2135,6 +2164,8 @@ export class Controller {
    * account's devices can decrypt the announcement.
    */
   nudgeReadOnly(record) {
+    // Traffic means somebody is there to answer.
+    this.requestSeat(record);
     this.readOnlyTimers ??= new Map();
     if (this.readOnlyTimers.has(record.id)) return;
     const timer = setTimeout(async () => {
@@ -2223,31 +2254,73 @@ export class Controller {
     }
   }
 
+  /** This device's name to the relay and to the account's other devices:
+      its own public key, base64url. Asked of the worker once. */
+  async deviceName() {
+    if (!this.deviceId) {
+      try {
+        this.deviceId = b64url.enc(new Uint8Array(await this.crypto('devicePubkey')));
+      } catch (e) {
+        console.warn(`device id: ${e.message}`);
+        return null;
+      }
+    }
+    return this.deviceId;
+  }
+
+  /**
+   * One KeyPackage from each of `user`'s devices, plus the identity key the
+   * relay has pinned for the handle.
+   *
+   * A person is every device they use, and each device is its own MLS leaf,
+   * so adding them takes one KeyPackage per device. An account whose devices
+   * have not connected since devices were distinguished has none under a
+   * device id; then the old single-package fetch is the answer.
+   */
+  async fetchKeyPackages(user, device) {
+    const reply = await this.relay
+      .request({ t: 'fetch_kps', user, ...(device ? { device } : {}) })
+      .catch((e) => {
+        if (/no such user/i.test(e.message ?? '')) return { packages: [], missing: true };
+        throw e;
+      });
+    let packages = (reply.packages ?? []).map((p) => ({ device: p.device, payload: p.payload }));
+    let pubkey = reply.pubkey ?? null;
+    if (!packages.length && !device && !reply.missing) {
+      const one = await this.relay.request({ t: 'fetch_kp', user });
+      if (one.payload) packages = [{ device: '', payload: one.payload }];
+      pubkey = one.pubkey ?? pubkey;
+    }
+    return { packages, pubkey };
+  }
+
   async addMember(serverId, user) {
     const record = this.servers.get(serverId);
-    const reply = await this.relay.request({ t: 'fetch_kp', user });
-    if (!reply.payload) {
+    const { packages, pubkey } = await this.fetchKeyPackages(user);
+    if (!packages.length) {
       // §11.5 names this exact string as the reason the rule exists. What
       // the organiser needs is the handle they typed and the one thing that
       // would fix it, not the name of the artefact that was missing.
       throw new Error(`no account called ${user} on this relay — check the spelling, or ask them to sign up`);
     }
     // The relay serves both halves, so make it commit to a consistent story:
-    // the KeyPackage's credential must name `user` and carry the signature
-    // key pinned for that handle. Without this the relay can hand back a
-    // KeyPackage it minted itself and join the group as "user". Refuse
-    // outright if the relay declines to state a key — an add is not urgent
-    // enough to do blind.
-    if (!reply.pubkey) {
+    // every KeyPackage's credential must name `user` and be certified by the
+    // identity key pinned for that handle. Without this the relay can hand
+    // back a KeyPackage it minted itself and join the group as "user".
+    // Refuse outright if the relay declines to state a key — an add is not
+    // urgent enough to do blind.
+    if (!pubkey) {
       throw new Error(
         `the relay didn't give an identity key for ${user}, so they can't be added yet — try again in a moment`
       );
     }
+    // All of their devices in one commit: it is one decision, and every
+    // commit re-keys the whole circle.
     const { commit, welcome, epoch, state } = await this.crypto('addMember', {
       group: serverId,
-      keyPackage: b64.dec(reply.payload),
+      keyPackages: packages.map((p) => b64.dec(p.payload)),
       expectIdentity: user,
-      expectKey: b64.dec(reply.pubkey),
+      expectKey: b64.dec(pubkey),
     });
     await this.persistState(state);
     const sent = await this.publishCommit(record, epoch, commit);
@@ -2258,13 +2331,7 @@ export class Controller {
     await this.persistState(merged);
     record.lastSeq = Math.max(record.lastSeq, sent.seq);
     await this.relay.request({ t: 'allow', group: serverId, user });
-    await this.relay.request({
-      t: 'welcome',
-      to: user,
-      group: serverId,
-      after: sent.seq,
-      payload: b64.enc(welcome),
-    });
+    await this.sendWelcomes(serverId, user, packages, welcome, sent.seq);
     record.members = members;
     record.epoch = epoch;
     await this.addSystemMessage(serverId, `${user} added — unverified until you check their safety number`);
@@ -2274,6 +2341,117 @@ export class Controller {
     await this.persistDevice(record);
     this.dispatch({ type: 'servers', servers: this.snapshotServers() });
     this.refreshRoles(serverId);
+  }
+
+  /** Hand one Welcome to each device it was built for. The same bytes each
+      time — a Welcome carries a secret for every leaf its commit added —
+      addressed per device so one waiting for an offline phone is not
+      drained by the laptop. */
+  async sendWelcomes(serverId, user, packages, welcome, after) {
+    for (const { device } of packages) {
+      await this.relay.request({
+        t: 'welcome',
+        to: user,
+        ...(device ? { device } : {}),
+        group: serverId,
+        after,
+        payload: b64.enc(welcome),
+      });
+    }
+  }
+
+  // === an account's other devices ========================================
+  //
+  // Signing in on a second device brings the account's identity and, from
+  // the relay, its circles — but not a place in any circle's MLS group,
+  // which is per device. Until it has one the device can read and cannot
+  // send. It used to stay that way until somebody found an invite link.
+  //
+  // Now it asks, and the circle lets it in. Nobody has to decide anything:
+  // the device carries a certificate from the account's identity key, the
+  // circle already knows that key from the member's existing leaf, and the
+  // crypto core refuses any device whose certificate does not match it. So
+  // *any* member's device may do the adding — the account's own devices
+  // answer first, but they do not have to be the ones online.
+
+  /** Ask a circle to add this device. Throttled: it is repeated on every
+      sign of life from the circle until somebody answers. */
+  async requestSeat(record) {
+    if (!record?.restored || !this.relay?.ready) return;
+    this.seatAsked ??= new Map();
+    const now = Date.now();
+    if (now - (this.seatAsked.get(record.id) ?? 0) < 20000) return;
+    this.seatAsked.set(record.id, now);
+    try {
+      await this.relay.request({ t: 'device_join', group: record.id });
+    } catch (e) {
+      // "not a member" is the ordinary answer for a circle the account has
+      // since left or been removed from; nothing to do about it here.
+      console.warn(`asking ${record.id} to add this device: ${e.message}`);
+    }
+  }
+
+  /** A device of `msg.user` is asking to be let into `msg.group`. */
+  onDeviceJoin(msg) {
+    const record = this.servers.get(msg.group);
+    // Adding needs a ratchet, and a device that is itself waiting has none.
+    if (!record || record.restored || !msg.user || !msg.device) return;
+    this.deviceAdmits ??= new Map();
+    const key = `${msg.group}\u0000${msg.user}\u0000${msg.device}`;
+    if (this.deviceAdmits.has(key)) return;
+    // Everyone online hears the request and only one commit can win the
+    // epoch, so stagger: the account's own devices first, then the rest.
+    const wait = msg.user === this.me ? Math.random() * 300 : 700 + Math.random() * 1800;
+    const timer = setTimeout(() => {
+      this.admitDevice(msg.group, msg.user, msg.device)
+        .catch((e) => console.warn(`adding ${msg.user}'s device to ${msg.group}: ${e.message}`))
+        .finally(() => this.deviceAdmits.delete(key));
+    }, wait);
+    this.deviceAdmits.set(key, timer);
+  }
+
+  /** Add one device of an existing member. Returns whether this device did
+      the adding. */
+  async admitDevice(serverId, user, device) {
+    const record = this.servers.get(serverId);
+    if (!record || record.restored || this.stopped) return false;
+    // Already in — somebody answered first, or it never needed asking.
+    const devices = await this.crypto('memberDevices', { group: serverId });
+    if (devices.some((d) => d.name === user && b64url.enc(d.key) === device)) return false;
+    // Only for people already in the circle, and against the identity key
+    // the CIRCLE holds for them — not whatever the relay says today. This
+    // is the whole authorization: the core refuses a KeyPackage that key
+    // did not certify. Someone who was removed is not in the roster, so
+    // this is not a way back in.
+    const roster = await this.crypto('memberKeys', { group: serverId });
+    const identity = roster?.[user];
+    if (!identity) return false;
+    const { packages } = await this.fetchKeyPackages(user, device);
+    if (!packages.length) return false;
+    const { commit, welcome, epoch, state } = await this.crypto('addMember', {
+      group: serverId,
+      keyPackages: packages.map((p) => b64.dec(p.payload)),
+      expectIdentity: user,
+      expectKey: identity,
+    });
+    await this.persistState(state);
+    // Loses quietly if another member's commit got there first: that
+    // commit arrives over the subscription, and if it was not this device
+    // being added, the device asks again.
+    const sent = await this.publishCommit(record, epoch, commit);
+    const { members, state: merged } = await this.crypto('mergeStagedCommit', { group: serverId });
+    await this.persistState(merged);
+    record.lastSeq = Math.max(record.lastSeq, sent.seq);
+    record.members = members;
+    record.epoch = epoch;
+    await this.sendWelcomes(serverId, user, packages, welcome, sent.seq);
+    // What the new device has is the circle as the relay's blob last had
+    // it; this is the current shape and every room key, over MLS.
+    await this.sendContent(serverId, this.metaContent(record));
+    await this.refreshInvites(record);
+    await this.persistDevice(record);
+    this.dispatch({ type: 'servers', servers: this.snapshotServers() });
+    return true;
   }
 
   // === circle management (rename / remove / leave / delete) ===============
@@ -2820,12 +2998,18 @@ export class Controller {
     // Snapshot before the await: what this upload is about to seal.
     const shape = this.circleShape();
     const rev = this.pendingRev;
+    // Declined, as against failed: no relay, or no load has succeeded yet.
+    // Still dirty, but there is nothing to retry against until one of those
+    // changes — and `readCircles` schedules the write when it does.
+    // Rescheduling here instead was a spin: the shape never counts as
+    // parked, so every retry waited 0ms and declined again, for as long as
+    // the relay stayed unable to serve the blob.
+    let declined = false;
     try {
-      // `false` means it declined to write (no relay, or no load has
-      // succeeded yet) rather than failed — still dirty, but nothing to
-      // retry against until something changes.
-      if ((await this.uploadBackup()) === false) this.backupDirty = true;
-      else {
+      if ((await this.uploadBackup()) === false) {
+        this.backupDirty = true;
+        declined = true;
+      } else {
         this.parkedShape = shape;
         await this.clearPending(rev);
       }
@@ -2836,7 +3020,7 @@ export class Controller {
       this.backupRetry = true;
     } finally {
       this.backupInFlight = false;
-      if (this.backupDirty) this.scheduleBackup();
+      if (this.backupDirty && !declined) this.scheduleBackup();
     }
   }
 
@@ -2943,8 +3127,9 @@ export class Controller {
     const orphans = this.adoptOrphans();
     await this.persistCircleNames();
     // Anything carried over, or rebuilt from the ratchet alone, is by
-    // definition not on the relay yet.
-    if (carry || orphans.length) this.scheduleBackup();
+    // definition not on the relay yet — and neither is anything that changed
+    // while there was no blob to write against.
+    if (carry || orphans.length || this.backupDirty) this.scheduleBackup();
     if (fresh.length || orphans.length) {
       for (const record of fresh) {
         if (record.restored) {
@@ -3455,6 +3640,7 @@ export class Controller {
     // Merge over a restored stub the same way onWelcome does.
     const prior = this.servers.get(group);
     const record = {
+      ...(prior ?? {}), // see onWelcome: nothing the account's copy holds is dropped
       id: group,
       name: prior?.name ?? group, // placeholder until a member rebroadcasts meta
       channels: prior?.channels ?? ['general'],
@@ -3474,6 +3660,8 @@ export class Controller {
       // meta rebroadcast reconcile a possibly-stale shape rather than union.
       pendingMetaSync: true,
     };
+    delete record.restored;
+    delete record.outOfSync;
     this.mlsGroups.add(group);
     this.servers.set(group, record);
     await this.persistCircle(record);
@@ -3603,6 +3791,7 @@ export class Controller {
     for (const t of this.metaReplies.values()) clearTimeout(t);
     this.metaReplies.clear();
     for (const t of this.readOnlyTimers?.values() ?? []) clearTimeout(t);
+    for (const t of this.deviceAdmits?.values() ?? []) clearTimeout(t);
     await this.voice?.leave?.().catch(() => {});
     try {
       this.relay?.close?.();

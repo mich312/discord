@@ -20,7 +20,7 @@ import CallBar from './components/CallBar.jsx';
 import PhoneTabs from './components/PhoneTabs.jsx';
 import CallStage from './components/CallStage.jsx';
 import GameStage from './components/GameStage.jsx';
-import { callChatChannel } from './lib/controller.js';
+import { callChatChannel, isCallChat } from './lib/controller.js';
 import Settings from './components/Settings.jsx';
 import NotificationsPrompt from './components/NotificationsPrompt.jsx';
 import {
@@ -115,7 +115,16 @@ function reducer(state, action) {
           active = first
             ? { server: first.id, channel: null }
             : { server: null, channel: null };
-        } else if (active.channel && !srv.channels.includes(active.channel)) {
+        } else if (
+          active.channel &&
+          // A call's thread is never in the room list — it belongs to the
+          // call's stage — so its absence is not a deletion. Treating it as
+          // one swapped the thread under an open call for the first text
+          // room on the next roster update: lines sent into the call went
+          // unseen there, and what the stage showed was another room.
+          !isCallChat(active.channel) &&
+          !srv.channels.includes(active.channel)
+        ) {
           // The active channel was renamed or deleted out from under us —
           // fall back to the first remaining channel so the view isn't stranded.
           active = { ...active, channel: srv.channels[0] };

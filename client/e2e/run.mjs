@@ -156,19 +156,6 @@ async function joinViaInvite(page, handle, url) {
 }
 
 let failed = false;
-const known = [];
-/** Run an assertion that is known to be racing on a bug this suite did not
-    introduce. It still runs, it still reports, and it is listed at the end —
-    but it does not stop everything after it from being exercised. */
-async function knownIssue(name, fn) {
-  try {
-    await fn();
-  } catch (e) {
-    known.push(`${name} — ${e.message}`);
-    console.error(`\nKNOWN ISSUE: ${name}\n  ${e.message}`);
-  }
-}
-
 try {
   await new Promise((r) => setTimeout(r, 600)); // let servers bind
 
@@ -873,25 +860,21 @@ try {
         ?.textContent.includes('pit window opens lap 12'),
     { timeout: 15000 }
   );
-  // dave is a link joiner, and this is the direction that races. A device
-  // that appends to a channel it holds no key for mints its own — hid and
-  // key both — and announces it. Until that announcement is merged the two
-  // sides are literally writing to two different logs, so dave's first line
-  // into a room alice opened moments ago reaches her about half the time.
-  // Reproduced against a link joiner outside this suite; nothing in the
-  // floor-plan work touches key distribution. Not fixed here: the fix is
-  // either coordinating the mint or deriving the call thread's key from
-  // something both sides already share, and neither belongs in a UI change.
+  // The other direction, from a link joiner who is not an admin. This was
+  // tolerated as a known failure for months and blamed on a key race. It was
+  // three things: the stage's thread was treated as a deleted room and
+  // swapped for #general on the next roster update, a room key announced by
+  // a non-admin was dropped at the admin gate, and receiving a call
+  // thread's key put the thread in the room list. All fixed; it is a plain
+  // assertion again.
   await dave.fill('[data-testid=stage-composer]', 'copy that, fuel is set');
   await dave.press('[data-testid=stage-composer]', 'Enter');
-  await knownIssue("a link joiner's first line into a fresh call thread", () =>
-    alice.waitForFunction(
-      () =>
-        document
-          .querySelector('[data-testid=stage-chat-scroll]')
-          ?.textContent.includes('copy that, fuel is set'),
-      { timeout: 15000 }
-    )
+  await alice.waitForFunction(
+    () =>
+      document
+        .querySelector('[data-testid=stage-chat-scroll]')
+        ?.textContent.includes('copy that, fuel is set'),
+    { timeout: 15000 }
   );
   // The call thread must never surface as a text room in the sidebar.
   // `.rooms .channel` was the sidebar; with the column gone this selector
@@ -1053,11 +1036,17 @@ try {
     await erin.fill('[data-testid=signin-handle]', 'erin');
     // Handle-first: the probe finds a passkey vault, so the passkey button
     // is the one method offered.
-    await erin.click('[data-testid=signin-continue]');
-    // The virtual authenticator simulates presence automatically, so the
-    // ceremony can complete on its own between the button appearing and a
-    // click landing on it. Offer the click, then assert the outcome — being
-    // signed in is the thing under test, not which control got us there.
+    //
+    // The virtual authenticator simulates presence automatically, and the
+    // sign-in form arms passkey autofill as soon as the handle field shows
+    // — so the ceremony can complete on its own at any point from here,
+    // taking the form (and whichever button the script was about to press)
+    // off the page. That applies to `continue` as much as to the passkey
+    // button: offer each click, then assert the outcome. Being signed in is
+    // the thing under test, not which control got us there.
+    await erin.click('[data-testid=signin-continue]', { timeout: 10000 }).catch(() => {
+      /* already through */
+    });
     await erin
       .click('[data-testid=signin-passkey]', { timeout: 10000 })
       .catch(() => {
@@ -1147,9 +1136,5 @@ try {
   }
 } finally {
   cleanup();
-}
-if (known.length) {
-  console.error(`\n${known.length} known issue(s) rode along:`);
-  for (const k of known) console.error(`  · ${k}`);
 }
 process.exit(failed ? 1 : 0);

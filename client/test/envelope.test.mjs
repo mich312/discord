@@ -57,9 +57,12 @@ test('destructive kinds are the ones that reach deletion or the crypto settings'
   // This table IS the authorization model. A kind missing from it is a kind
   // anyone in the circle can send, so it is asserted explicitly rather than
   // left to the switch statement that consumes it.
-  for (const k of ['chanset', 'chan-ren', 'chan-del', 'vchan-ren', 'vchan-del']) {
+  for (const k of ['chan-ren', 'chan-del', 'vchan-ren', 'vchan-del']) {
     assert.deepEqual(adminRequirement({ k }), { destructive: true }, k);
   }
+  // Destructive for its settings, which stay an admin's — but the room key
+  // it also carries is any member's to announce. See the tests for that.
+  assert.deepEqual(adminRequirement({ k: 'chanset' }), { destructive: true, keysMayPass: true });
   for (const k of ['chan', 'vchan', 'overview']) {
     assert.deepEqual(adminRequirement({ k }), { destructive: false }, k);
   }
@@ -92,7 +95,8 @@ test('a gated kind is refused outright when the sender is not an admin', () => {
   for (const content of [
     { k: 'chan-del', ch: 'general' },
     { k: 'chan-ren', ch: 'general', to: 'renamed' },
-    { k: 'chanset', ch: 'general', meta: { hid: 'h1' } },
+    // Settings only, no key: nothing in it a non-admin may change.
+    { k: 'chanset', ch: 'general', meta: { topic: 'mine now', retention: 3600 } },
     { k: 'vchan-del', ch: 'lounge' },
     { k: 'chan', ch: 'new' },
   ]) {
@@ -603,4 +607,46 @@ test('a rebroadcast that changes nothing parks nothing', () => {
   apply(r, same); // the first may normalise shapes
   const { effects } = apply(r, JSON.parse(JSON.stringify(same)));
   assert.ok(!kinds(effects).includes('backup'));
+});
+
+/* ------------------------------------------- who may announce a room key -- */
+
+test('a member who is not an admin can announce a room key, and only that', () => {
+  // A room with no key gets one from whoever writes to it first — for a
+  // call's thread, whoever speaks first. Dropped at the admin gate, that key
+  // reached nobody and the member's lines could be read by them alone.
+  const r = circle({ chanMeta: { general: { hid: 'log', hkey: 'key-a', topic: 'ours', retention: 86400 } } });
+  const { effects } = apply(
+    r,
+    { k: 'chanset', ch: 'general', meta: { hid: 'log', hkey: 'key-b', kv: 1, topic: 'theirs', retention: 3600 } },
+    { sender: 'bob', isAdmin: false }
+  );
+  assert.equal(r.chanMeta.general.hkey, 'key-b', 'the key is taken');
+  assert.deepEqual(r.chanMeta.general.hkeys, ['key-a']);
+  assert.equal(r.chanMeta.general.topic, 'ours', 'the topic is not theirs to set');
+  assert.equal(r.chanMeta.general.retention, 86400, 'nor is what the relay deletes');
+  assert.ok(!kinds(effects).includes('systemMessage'), 'no settings changed, so nothing is announced');
+  assert.ok(!kinds(effects).includes('applyRetention'));
+  assert.ok(kinds(effects).includes('backup'), 'and the key is parked');
+});
+
+test('an admin’s chanset still sets the settings', () => {
+  const r = circle({ chanMeta: { general: { hid: 'log', hkey: 'key-a', topic: 'old' } } });
+  const { effects } = apply(r, { k: 'chanset', ch: 'general', meta: { hid: 'log', hkey: 'key-a', topic: 'new', retention: 3600 } });
+  assert.equal(r.chanMeta.general.topic, 'new');
+  assert.equal(r.chanMeta.general.retention, 3600);
+  assert.ok(kinds(effects).includes('systemMessage'));
+});
+
+test('a key for a call’s thread does not turn the thread into a room', () => {
+  const r = circle();
+  apply(r, { k: 'chanset', ch: 'voice:lounge', meta: { hid: 'v', hkey: 'key-v' } }, { sender: 'bob', isAdmin: false });
+  assert.deepEqual(r.channels, ['general'], 'the room list is rooms');
+  assert.equal(r.chanMeta['voice:lounge'].hkey, 'key-v', 'the thread is readable all the same');
+});
+
+test('a key for a deleted room does not bring the room back', () => {
+  const r = circle({ deletedChannels: ['archive'] });
+  apply(r, { k: 'chanset', ch: 'archive', meta: { hid: 'a', hkey: 'key-x' } });
+  assert.deepEqual(r.channels, ['general']);
 });

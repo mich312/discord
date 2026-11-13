@@ -822,10 +822,16 @@ test('chanset from a sender whose role cannot be established cannot flip kept hi
   await c.onContent(
     r,
     'mallory',
-    JSON.stringify({ k: 'chanset', ch: 'general', meta: { hid: 'log1', hkey: 'k' } })
+    JSON.stringify({ k: 'chanset', ch: 'general', meta: { hid: 'log1', hkey: 'k', retention: 3600, topic: 'x' } })
   );
 
-  assert.equal(r.chanMeta?.general, undefined, 'the settings change was refused');
+  // Retention is what makes the relay delete entries, and the topic is the
+  // room's. Neither is taken from a sender who is not known to be an admin.
+  assert.equal(r.chanMeta?.general?.retention, undefined, 'the settings change was refused');
+  assert.equal(r.chanMeta?.general?.topic, undefined);
+  // The room key is another matter: any member may announce one, or a room
+  // first written to by a non-admin could be read by nobody else.
+  assert.equal(r.chanMeta?.general?.hkey, 'k');
   clearTimeout(c.backupTimer);
 });
 
@@ -1872,4 +1878,182 @@ test('blobs are applied in order, so the newest ratchet is the one left on disk'
   await Promise.all([first, second]);
   assert.deepEqual(written, ['ratchet-after-1', 'ratchet-after-2']);
   clearTimeout(c.backupTimer);
+});
+
+/* ------------------------------------------------ an account's devices -- */
+// Each device is its own MLS leaf. Adding a person takes a KeyPackage from
+// every device they use; a device that signs in later asks the circle to
+// let it in, and any member may — the crypto core checks the certificate.
+
+/** A crypto stub that records what it was asked to add. */
+function addingCrypto({ devices = [], roster = {} } = {}) {
+  const calls = [];
+  const fn = async (cmd, args = {}) => {
+    calls.push({ cmd, ...args });
+    if (cmd === 'memberDevices') return devices;
+    if (cmd === 'memberKeys') return roster;
+    if (cmd === 'addMember') return { commit: new Uint8Array([1]), welcome: new Uint8Array([9]), epoch: 4, state: null };
+    if (cmd === 'mergeStagedCommit') return { epoch: 4, members: ['alice', 'bob'], state: null };
+    if (cmd === 'send') return { blob: new Uint8Array([1]), epoch: 4, state: null };
+    return {};
+  };
+  fn.calls = calls;
+  return fn;
+}
+
+test('adding a person adds every device they have, in one commit', async () => {
+  const sent = [];
+  const { c } = makeController({
+    relayHandler: (msg) => {
+      sent.push(msg);
+      if (msg.t === 'fetch_kps') {
+        return Promise.resolve({
+          pubkey: b64.enc(new Uint8Array(32).fill(5)),
+          packages: [
+            { device: 'laptop', payload: b64.enc(new Uint8Array([1])) },
+            { device: 'phone', payload: b64.enc(new Uint8Array([2])) },
+          ],
+        });
+      }
+      if (msg.t === 'members') return Promise.resolve({ members: [] });
+      return Promise.resolve({ seq: 7 });
+    },
+  });
+  c.crypto = addingCrypto();
+  c.servers.set('srv', record({ members: ['alice'] }));
+  await c.addMember('srv', 'bob');
+
+  const adds = c.crypto.calls.filter((x) => x.cmd === 'addMember');
+  assert.equal(adds.length, 1, 'one commit');
+  assert.equal(adds[0].keyPackages.length, 2, 'carrying both devices');
+  assert.equal(adds[0].expectIdentity, 'bob');
+  // One Welcome each, addressed, so the phone's waits for the phone.
+  const welcomes = sent.filter((m) => m.t === 'welcome');
+  assert.deepEqual(welcomes.map((w) => [w.to, w.device]), [['bob', 'laptop'], ['bob', 'phone']]);
+  assert.ok(sent.findIndex((m) => m.t === 'send' && m.commit) < sent.findIndex((m) => m.t === 'welcome'));
+  clearTimeout(c.backupTimer);
+});
+
+test('an account whose devices are unnamed is still added the old way', async () => {
+  const sent = [];
+  const { c } = makeController({
+    relayHandler: (msg) => {
+      sent.push(msg);
+      if (msg.t === 'fetch_kps') return Promise.resolve({ packages: [], pubkey: 'AAAA' });
+      if (msg.t === 'fetch_kp') return Promise.resolve({ payload: b64.enc(new Uint8Array([3])), pubkey: 'AAAA' });
+      if (msg.t === 'members') return Promise.resolve({ members: [] });
+      return Promise.resolve({ seq: 7 });
+    },
+  });
+  c.crypto = addingCrypto();
+  c.servers.set('srv', record({ members: ['alice'] }));
+  await c.addMember('srv', 'bob');
+  const welcome = sent.find((m) => m.t === 'welcome');
+  assert.equal(welcome.device, undefined, 'unaddressed: any device of theirs may open it');
+  clearTimeout(c.backupTimer);
+});
+
+test('a read-only device asks for a seat, and does not nag', async () => {
+  const sent = [];
+  const { c } = makeController({ relayHandler: (msg) => (sent.push(msg), Promise.resolve({ seq: 1 })) });
+  const r = record({ restored: true });
+  c.servers.set('srv', r);
+  await c.requestSeat(r);
+  await c.requestSeat(r);
+  assert.deepEqual(sent.map((m) => m.t), ['device_join'], 'once per window, however often it is prompted');
+
+  // A device that can already send has nothing to ask for.
+  const live = record({ id: 'other' });
+  c.servers.set('other', live);
+  await c.requestSeat(live);
+  assert.equal(sent.length, 1);
+});
+
+test('any member lets a member’s new device in, against the circle’s own key for them', async () => {
+  const sent = [];
+  const circleKey = new Uint8Array(32).fill(4);
+  const { c } = makeController({
+    relayHandler: (msg) => {
+      sent.push(msg);
+      if (msg.t === 'fetch_kps') {
+        return Promise.resolve({
+          // The relay's idea of bob's key is deliberately NOT what gets used.
+          pubkey: b64.enc(new Uint8Array(32).fill(9)),
+          packages: [{ device: msg.device, payload: b64.enc(new Uint8Array([2])) }],
+        });
+      }
+      return Promise.resolve({ seq: 7 });
+    },
+  });
+  c.crypto = addingCrypto({ devices: [{ name: 'bob', key: new Uint8Array([1, 1]) }], roster: { bob: circleKey } });
+  c.servers.set('srv', record());
+
+  assert.equal(await c.admitDevice('srv', 'bob', 'phone'), true);
+  const add = c.crypto.calls.find((x) => x.cmd === 'addMember');
+  assert.deepEqual([...add.expectKey], [...circleKey], 'authorized by the key the circle holds, not the relay');
+  assert.equal(sent.find((m) => m.t === 'fetch_kps').device, 'phone');
+  const welcome = sent.find((m) => m.t === 'welcome');
+  assert.deepEqual([welcome.to, welcome.device], ['bob', 'phone']);
+  clearTimeout(c.backupTimer);
+});
+
+test('a device is not added twice, nor for someone who is not in the circle', async () => {
+  const { c } = makeController();
+  const bobsPhone = new Uint8Array([7, 7, 7]);
+  const name = Buffer.from(bobsPhone).toString('base64url');
+  c.crypto = addingCrypto({ devices: [{ name: 'bob', key: bobsPhone }], roster: { bob: new Uint8Array(32) } });
+  c.servers.set('srv', record());
+  assert.equal(await c.admitDevice('srv', 'bob', name), false, 'already in');
+  assert.equal(c.crypto.calls.some((x) => x.cmd === 'addMember'), false);
+
+  // carol was removed (or never joined): the roster has no key for her, so
+  // asking is not a way back in.
+  assert.equal(await c.admitDevice('srv', 'carol', 'tablet'), false);
+  assert.equal(c.crypto.calls.some((x) => x.cmd === 'addMember'), false);
+
+  // And a device that is itself read-only has no ratchet to add with.
+  c.servers.set('ro', record({ id: 'ro', restored: true }));
+  assert.equal(await c.admitDevice('ro', 'bob', 'tablet'), false);
+});
+
+test('being let in keeps what the account’s copy of the circle already held', async () => {
+  const { c } = makeController();
+  c.db = memoryDb();
+  c.crypto = async (cmd) =>
+    cmd === 'joinFromWelcome' ? { group: 'srv', epoch: 5, members: ['alice', 'bob'], state: null } : {};
+  c.servers.set(
+    'srv',
+    record({
+      restored: true,
+      name: 'Race Team',
+      keys: { bob: 'bobs-identity-key' },
+      invites: [{ id: 'inv', key: 'frag' }],
+      chanMeta: { general: { hid: 'h', hkey: KEY_A } },
+    })
+  );
+  await c.onWelcome({ group: 'srv', after: 9, payload: b64.enc(new Uint8Array([1])) });
+  const r = c.servers.get('srv');
+  assert.ok(!r.restored, 'it can send now');
+  assert.deepEqual(r.keys, { bob: 'bobs-identity-key' }, 'the key directory survives');
+  assert.deepEqual(r.invites, [{ id: 'inv', key: 'frag' }], 'and so do invite keys the other device relies on');
+  assert.equal(r.chanMeta.general.hkey, KEY_A);
+  clearTimeout(c.backupTimer);
+});
+
+test('a write the relay cannot take yet waits for a load instead of spinning', async () => {
+  // No blob has been read, so the upload declines. It used to reschedule
+  // itself at once — and since nothing was ever parked, "at once" meant
+  // 0ms, forever, for as long as the relay could not serve the blob.
+  let uploads = 0;
+  const { c } = makeController();
+  c.db = memoryDb();
+  c.identityBytes = () => new Uint8Array(32).fill(7);
+  const upload = c.uploadBackup.bind(c);
+  c.uploadBackup = async () => (uploads++, upload());
+  c.servers.set('srv', record());
+  c.scheduleBackup();
+  await new Promise((r) => setTimeout(r, 60));
+  assert.equal(uploads, 1, 'asked once, declined, and left alone');
+  assert.equal(c.backupDirty, true, 'still owed');
+  assert.ok(c.db.kv.get('pendingCircles')?.servers?.length, 'and still written down on the device');
 });

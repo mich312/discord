@@ -180,7 +180,15 @@ export function adminRequirement(content) {
     case 'vchan':
     case 'overview':
       return { destructive: false };
+    // A `chanset` is two things in one envelope, and only one of them is an
+    // admin's to send. The SETTINGS (topic, auto-delete) are: retention makes
+    // the relay delete entries. The ROOM KEY is not: a room with no key yet
+    // gets one from whoever writes to it first, which for a call's thread is
+    // whoever speaks first, and a key nobody else is told about seals that
+    // member's lines where only they can read them. So a non-admin's chanset
+    // passes the gate and the case below takes its keys and nothing else.
     case 'chanset':
+      return { destructive: true, keysMayPass: true };
     case 'chan-ren':
     case 'chan-del':
     case 'vchan-ren':
@@ -307,6 +315,15 @@ export function mergeChanKeys(mine = {}, theirs = {}, { mineWins = false } = {})
   };
 }
 
+/** The part of a channel's meta that says how to read it, and nothing
+    about how it behaves: what a member who is not an admin may announce. */
+export function keysOnly(meta) {
+  const { hid, hkey, hkeys, alts, kv } = meta ?? {};
+  return Object.fromEntries(
+    Object.entries({ hid, hkey, hkeys, alts, kv }).filter(([, v]) => v !== undefined)
+  );
+}
+
 /**
  * Parse an envelope body. A payload that is not JSON is treated as a plain
  * chat line in `#general` — the oldest wire shape, and still what a
@@ -347,7 +364,7 @@ export function applyEnvelope(record, sender, content, ctx = {}) {
   // needs an answer and did not get one is refused: `adminRequirement` is
   // the whole allowlist, so forgetting to resolve it fails closed.
   const need = adminRequirement(content);
-  if (need && !need.authorMayPass && isAdmin !== true) return done();
+  if (need && !need.authorMayPass && !need.keysMayPass && isAdmin !== true) return done();
 
   const inThisCall = (ch) => inCall?.server === record.id && inCall?.channel === ch;
 
@@ -503,19 +520,33 @@ export function applyEnvelope(record, sender, content, ctx = {}) {
       // rides in `meta.hkey` — inside MLS, so the relay never sees it. The
       // sender's copy is authoritative for the settings, but never for the
       // keys: see `mergeChanKeys`.
-      if (!record.channels.includes(content.ch)) record.channels.push(content.ch);
-      const incoming = content.meta ?? {};
+      //
+      // `ensureChannel`, not a bare push: a call's thread (`voice:<room>`)
+      // has a key and settings like any channel but is not a room, and a
+      // room this device has seen deleted must not come back because its
+      // key was mentioned. The push that was here put every call thread
+      // into the room list of everyone who received its key.
+      const admin = isAdmin === true;
+      const incoming = admin ? (content.meta ?? {}) : keysOnly(content.meta);
+      // A non-admin's chanset with no key in it has nothing in it they may
+      // change: refused whole, exactly as it was before keys could pass.
+      if (!admin && !Object.keys(incoming).length) break;
+      ensureChannel(record, content.ch);
       record.chanMeta = {
         ...(record.chanMeta ?? {}),
-        [content.ch]: mergeChanKeys(record.chanMeta?.[content.ch], incoming),
+        // From a non-admin this is a key announcement and nothing more, so
+        // our settings stand — the same merge a metadata rebroadcast gets.
+        [content.ch]: mergeChanKeys(record.chanMeta?.[content.ch], incoming, { mineWins: !admin }),
       };
-      emit({
-        t: 'systemMessage',
-        server: record.id,
-        text: `#${content.ch} settings changed by ${sender}${describeChanMeta(content.meta)}`,
-        channel: content.ch,
-      });
-      emit({ t: 'applyRetention', channel: content.ch });
+      if (admin) {
+        emit({
+          t: 'systemMessage',
+          server: record.id,
+          text: `#${content.ch} settings changed by ${sender}${describeChanMeta(content.meta)}`,
+          channel: content.ch,
+        });
+        emit({ t: 'applyRetention', channel: content.ch });
+      }
       emit({ t: 'backfillHistory' });
       emit({ t: 'backup' });
       break;

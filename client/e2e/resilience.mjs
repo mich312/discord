@@ -4,7 +4,7 @@
 //   A. a reload at a bad moment — just after being added, just after a room
 //      key arrives, and after a member was removed (a rotated key)
 //   B. the same account open in two tabs
-//   C. the same account on two devices
+//   C. the same account on several devices, all of them sending
 //
 // `run.mjs` walks one long happy path with one tab per person. These are
 // short, independent, and about what ordinary use does to that path. Every
@@ -140,7 +140,7 @@ try {
 
   // ------------------------------------------------------------------ C --
   {
-    t.section('C. the same account on two devices');
+    t.section('C. the same account on several devices');
     const alice = (await device('alice3')).page;
     await onboard(alice, base, 'ava');
     await createCircle(alice, 'Book Circle');
@@ -161,40 +161,77 @@ try {
     await say(laptop, 'dan on the laptop');
     await sees(alice, 'dan on the laptop');
 
-    const phone = (await device('dan-phone')).page;
-    await phone.goto(base);
-    await phone.click('[data-testid=tab-signin]');
-    await phone.fill('[data-testid=signin-handle]', 'dan');
-    await phone.click('[data-testid=signin-continue]');
-    await phone.fill('[data-testid=signin-password]', 'tyre pressures at dawn');
-    await phone.click('[data-testid=signin-submit]');
+    /** Sign in as dan on a fresh device. */
+    const signIn = async (label) => {
+      const page = (await device(label)).page;
+      await page.goto(base);
+      await page.click('[data-testid=tab-signin]');
+      await page.fill('[data-testid=signin-handle]', 'dan');
+      await page.click('[data-testid=signin-continue]');
+      await page.fill('[data-testid=signin-password]', 'tyre pressures at dawn');
+      await page.click('[data-testid=signin-submit]');
+      return page;
+    };
+    /** A device can send once its composer is live and nothing says read-only. */
+    const canSend = (page, timeout = 20000) =>
+      page
+        .waitForFunction(
+          () =>
+            !document.querySelector('[data-testid=restored-note]') &&
+            document.querySelector('[data-testid=composer]') &&
+            !document.querySelector('[data-testid=composer]').disabled,
+          { timeout }
+        )
+        .then(() => true, () => false);
+
+    const phone = await signIn('dan-phone');
     t.check('signing in on a second device brings the circle with it', await inCircle(phone, 30000).then(() => true, () => false));
     await phone.click('[data-testid=channel-general]');
     t.check('…with its history', await sees(phone, 'written before dan joined'));
-    t.check('…read-only, and saying so', await phone.waitForSelector('[data-testid=restored-note]', { timeout: 10000 }).then(() => true, () => false));
+    // Nobody does anything: the phone asks, and the circle — here dan's own
+    // laptop — lets it in on the strength of its certificate.
+    t.check('…and it is let in to send, without anyone being asked', await canSend(phone));
 
-    await say(alice, 'while the phone is signed in');
-    t.check('the laptop keeps receiving', await sees(laptop, 'while the phone is signed in'));
-    t.check('the read-only phone sees new messages as they are sent', await sees(phone, 'while the phone is signed in'));
-    await say(laptop, 'dan again, on the laptop');
-    t.check('…including what the same account wrote elsewhere', await sees(phone, 'dan again, on the laptop'));
-
-    // One identity holds one sending seat. Opening an invite link on the
-    // phone moves it there; the laptop must say so and keep reading, not
-    // sit there looking like a member with a ratchet that no longer works.
-    await phone.goto(url);
-    await inCircle(phone);
-    await online(phone);
-    await room(phone, 'general');
-    t.check('the laptop is told it is now read-only', await laptop.waitForSelector('[data-testid=restored-note]', { timeout: 15000 }).then(() => true, () => false));
     await say(phone, 'dan on the phone');
-    t.check('the phone can send once the seat moves to it', await sees(alice, 'dan on the phone'));
-    t.check('the laptop, now read-only, still sees it', await sees(laptop, 'dan on the phone'));
+    t.check('the second device sends', await sees(alice, 'dan on the phone'));
+    t.check('…and the first device sees what the second wrote', await sees(laptop, 'dan on the phone'));
+    t.check('the first device was not displaced', await canSend(laptop, 3000));
+    await say(laptop, 'dan back on the laptop');
+    t.check('the first device still sends', await sees(alice, 'dan back on the laptop'));
+    t.check('…and the second sees it', await sees(phone, 'dan back on the laptop'));
     await say(alice, 'to dan, wherever he is');
     t.check('both of the account’s devices receive', (await sees(phone, 'to dan, wherever he is')) && (await sees(laptop, 'to dan, wherever he is')));
+
     await board(alice);
     const roster = await alice.textContent('[data-testid=member-list]');
     t.check('the roster lists the account once', roster.split('dan').length === 2);
+    await room(alice, 'general');
+
+    await phone.reload();
+    await inCircle(phone);
+    await online(phone);
+    await room(phone, 'general');
+    t.check('the second device is still a full member after a reload', await canSend(phone, 8000));
+    await say(phone, 'dan on the phone, after a reload');
+    t.check('…and its ratchet survived it', await sees(alice, 'dan on the phone, after a reload'));
+
+    // Neither of dan's devices online: a third still gets in, because any
+    // member may add a device its owner's identity key has certified.
+    await laptop.context().close();
+    await phone.context().close();
+    const tablet = await signIn('dan-tablet');
+    await inCircle(tablet, 30000);
+    await tablet.click('[data-testid=channel-general]');
+    t.check('with none of the account’s devices online, another member lets a new one in', await canSend(tablet));
+    await say(tablet, 'dan on the tablet');
+    t.check('…and it sends', await sees(alice, 'dan on the tablet'));
+    t.check('…and reads what its siblings wrote', await sees(tablet, 'dan on the phone, after a reload'));
+
+    // Removing a person removes every device of theirs.
+    await board(alice);
+    alice.once('dialog', (d) => d.accept());
+    await alice.click('[data-testid=remove-member-dan]');
+    t.check('removing the member puts every device out', await tablet.waitForSelector('[data-testid=circles-home]', { timeout: 15000 }).then(() => true, () => false));
   }
 } catch (e) {
   crashed = e;
@@ -207,5 +244,5 @@ if (failed.length || crashed) {
   console.error(`\nFAIL: ${failed.length} expectation(s) did not hold${failed.length ? ':\n  - ' + failed.join('\n  - ') : ''}`);
   process.exit(1);
 }
-console.log('\nPASS: reloads at bad moments, two tabs, two devices');
+console.log('\nPASS: reloads at bad moments, two tabs, several devices');
 process.exit(0);

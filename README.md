@@ -132,8 +132,15 @@ only thing that makes the claim falsifiable.
   anywhere), or the wrap half of Argon2id(password) — the auth half is
   all the server ever checks. Invite-link joiners onboard in seconds and
   are nagged to secure the account afterwards. Signing in restores who
-  you are and (via the circles backup) what you knew — live group keys
-  still lived on the old device, so sending needs a re-add.
+  you are and, from the relay, your circles and their conversations; the
+  new device then asks each circle to let it in, and any member who is
+  online does so automatically (see *Devices* below).
+- **Devices** — an account can be signed in on several devices at once,
+  and each of them reads and sends. A device has its own key, which the
+  account's identity key certifies; that certificate is what lets a circle
+  admit a member's new device without anybody deciding anything, and what
+  stops anyone else joining under that member's name. One browser tab at a
+  time runs a device's session — a second tab offers to take it over.
 - **Channel settings** (admins, per channel) — a topic shown at the top
   of the room and auto-delete. Settings travel inside the encryption like
   channel names; changes are announced in the channel. There is no switch
@@ -167,9 +174,9 @@ only thing that makes the claim falsifiable.
   key derived from your identity bundle — the same bytes the account vault
   already round-trips, so any device that can sign in can open it and the
   relay never can. This is not a backup of a local copy; it is the copy.
-  Sign in somewhere new and your circles are simply there, read-only with
-  their conversations intact, until a re-add (or an invite link) hands that
-  device the MLS ratchets that let it send. Writes compare-and-swap on a
+  Sign in somewhere new and your circles are simply there with their
+  conversations intact — readable at once, and writable as soon as a member
+  who is online has let the new device in. Writes compare-and-swap on a
   version the relay keeps beside the blob, so a second signed-in device
   cannot silently overwrite a circle the first one just joined; a client
   that loses the swap re-reads, folds its own change over what it finds,
@@ -336,17 +343,24 @@ joins, identity recovery, encrypted attachments, safety numbers, and
   Membership itself is cryptographically enforced and cannot be bypassed.
 - **Invite blobs go stale per epoch** — the link creator's client
   refreshes them; if they're offline long enough the link pauses.
-- **One account, one sending device** — several devices can hold the same
-  identity (link one from a signed-in device, or enrol a passkey per
-  device; Settings lists them and revokes any one), and every one of them
-  reads the circle live from the relay's log. But an identity holds one
-  seat in the MLS group, so only one device can *send*: a second device
-  is read-only until an invite link is opened on it, which moves the seat
-  there and makes the previous device read-only in turn (it says so).
-  Identity recovery restores the identity, never the group ratchets.
-  Per-device keys certified by the identity would lift this; it is not
-  built. Revocation is forward-only — it stops that passkey unlocking the
-  identity again, and cannot erase what a device already holds.
+- **Every device is a full member; stale ones are not pruned** — each
+  device of an account has its own key, certified by the account's
+  identity key, and its own leaf in every circle. Signing in somewhere new
+  brings the circles from the relay, and the device then asks each circle
+  to let it in: any member who is online does so automatically, because
+  the certificate is checked against the identity key the circle already
+  holds for that member (nobody has to approve it, and nobody can add a
+  device its owner's identity did not certify). Until that happens the
+  device reads but cannot send. Removing a member removes all of their
+  devices. What is not built: dropping a single device's leaf. A browser
+  that was wiped, or a phone that is gone, keeps its place in the group
+  until its owner is removed and re-added — and since every device holds
+  the same identity bundle, losing one is losing the account, exactly as
+  before. Passkey revocation is forward-only: it stops that passkey
+  unlocking the identity again, and cannot erase what a device holds.
+- **One device per account in a call** — presence and call signaling are
+  not echoed between an account's own devices, so two of them joining the
+  same voice room is not supported.
 - **One tab at a time** — tabs of one browser profile share one ratchet,
   which cannot be advanced from two places. A second tab says the app is
   open elsewhere and offers to take the session; taking it stops the
