@@ -445,7 +445,7 @@ export class Controller {
 
   /** Persist the device half of `record`, leaving the relay alone. */
   async persistDevice(record) {
-    if (!record?.id) return;
+    if (!record?.id || this.stopped) return;
     this.deviceState = { ...(this.deviceState ?? {}), [record.id]: deviceHalf(record) };
     await this.db.kvPut('deviceState', this.deviceState);
   }
@@ -568,6 +568,16 @@ export class Controller {
         for (const record of this.servers.values()) {
           if (record.restored) {
             this.refreshRoles(record.id);
+            // No ratchet, so nothing on the subscription will decrypt — but
+            // it does not need to. Each blob that arrives says "something
+            // was just said", which is the cue to read the log, and the log
+            // is what this device can open. Without it a read-only device
+            // was a photograph: correct when taken, and never again.
+            // `after` is past the end on purpose: the backlog is the same
+            // undecryptable blobs with nothing new to say.
+            this.relay
+              .request({ t: 'subscribe', group: record.id, after: Number.MAX_SAFE_INTEGER })
+              .catch((e) => console.warn(`subscribe (read-only) ${record.id}: ${e.message}`));
             continue;
           }
           const sub = await this.relay
@@ -667,7 +677,9 @@ export class Controller {
   /** Ephemeral fan-out: MLS-encrypted voice presence / WebRTC signaling.
       Never logged server-side, never stored client-side. */
   async onEphemeral(msg) {
-    if (!this.servers.has(msg.group)) return;
+    const record = this.servers.get(msg.group);
+    // A read-only device has no ratchet to open one with.
+    if (!record || record.restored) return;
     try {
       const { event, state } = await this.crypto('receive', { bytes: b64.dec(msg.payload) });
       await this.persistState(state);
@@ -713,9 +725,18 @@ export class Controller {
   }
 
   async onWelcome(msg) {
-    const { group, epoch, members, state } = await this.crypto('joinFromWelcome', {
-      welcome: b64.dec(msg.payload),
-    });
+    let joined;
+    try {
+      joined = await this.crypto('joinFromWelcome', { welcome: b64.dec(msg.payload) });
+    } catch (e) {
+      // The relay hands a Welcome to every connection the account has open,
+      // because it cannot tell which device's KeyPackage it was built for.
+      // On the others it does not open, and that is not an error worth a
+      // toast — the device it was for has it.
+      console.warn(`a welcome for ${msg.group} did not open on this device: ${e.message}`);
+      return;
+    }
+    const { group, epoch, members, state } = joined;
     await this.persistState(state);
     // A backup-restored record may already exist for this circle — being
     // re-added upgrades it to a live one; keep everything it knew.
@@ -762,6 +783,10 @@ export class Controller {
   async onGroupMessage(msg) {
     const record = this.servers.get(msg.group);
     if (!record) return;
+    if (record.restored) {
+      this.nudgeReadOnly(record);
+      return;
+    }
     // Every stored blob advances the resume point — even ones we can't
     // process (our own commits echoed by catch-up, stale epochs). A blob
     // that wedges the cursor would wedge the client forever.
@@ -807,6 +832,7 @@ export class Controller {
         replay: msg.seq <= (this.catchUpTo.get(msg.group) ?? 0),
       });
       console.warn(`undecryptable blob seq ${msg.seq} in ${msg.group} (${why}): ${e.message}`);
+      this.noteImpersonation(record, msg, e);
       this.noteFork(record);
     }
 
@@ -826,6 +852,16 @@ export class Controller {
           // Early return, but the ratchet still moved and covers every other
           // group in this snapshot — persist before leaving.
           await this.persistState(ratchet);
+          return;
+        }
+        // Our name is still in the roster but this device is not: the same
+        // account joined again from another device, and one identity holds
+        // one seat. Everything the ratchet could do here is over, so stop
+        // pretending — become what a freshly signed-in device is: able to
+        // read the circle from the relay, unable to send.
+        if (event.active === false) {
+          await this.persistState(ratchet);
+          await this.yieldSeat(record);
           return;
         }
         const before = new Set(record.members);
@@ -2055,6 +2091,39 @@ export class Controller {
     }
   }
 
+  /**
+   * Something was just said in a circle this device can only read.
+   *
+   * Coalesced: a burst of traffic is one read, a moment later. The circles
+   * blob is re-read too, less often — a room created or a key rotated since
+   * this device loaded reaches it only that way, written by whichever of the
+   * account's devices can decrypt the announcement.
+   */
+  nudgeReadOnly(record) {
+    this.readOnlyTimers ??= new Map();
+    if (this.readOnlyTimers.has(record.id)) return;
+    const timer = setTimeout(async () => {
+      this.readOnlyTimers.delete(record.id);
+      const current = this.servers.get(record.id);
+      if (!current?.restored) return;
+      try {
+        const now = Date.now();
+        if (now - (this.blobRereadAt ?? 0) > 15000) {
+          this.blobRereadAt = now;
+          await this.readCircles();
+          this.dispatch({ type: 'servers', servers: this.snapshotServers() });
+        }
+        await this.catchUpLogs(current);
+        // Unconditional: a room this device has not opened gains nothing in
+        // memory, but its unread count on the board still moved.
+        this.dispatch({ type: 'refreshMessages' });
+      } catch (e) {
+        console.warn(`read-only refresh ${record.id}: ${e.message}`);
+      }
+    }, 400);
+    this.readOnlyTimers.set(record.id, timer);
+  }
+
   /** Forward catch-up across every channel of a circle: what landed while
       this device was away, for the rooms it already has open. */
   async catchUpLogs(record) {
@@ -2405,6 +2474,50 @@ export class Controller {
    * which is the existing external-commit rejoin, and the record is marked
    * so the UI can keep saying so after the toast is gone.
    */
+  /**
+   * A commit was refused because it put a member's name under a second key.
+   *
+   * Said out loud, once per attempt. The refusal itself happens in the
+   * crypto core before the commit is merged, so nothing was let in — but
+   * somebody holding an invite link to this circle tried to be somebody
+   * else, and the members are the only people who can act on that (the link
+   * should be revoked). Left as an "undecryptable blob" warning it would
+   * never reach them.
+   */
+  noteImpersonation(record, msg, error) {
+    const match = /identity conflict: (\S+)/.exec(error?.message ?? '');
+    if (!match) return;
+    const text = `someone tried to join as ${match[1]} with a different key and was refused — revoke this circle's invite links`;
+    console.error(`impersonation refused in ${record.id} (relay sender ${msg.sender}): ${error.message}`);
+    this.toast(text);
+    this.addSystemMessage(record.id, text);
+  }
+
+  /**
+   * This device's seat in a circle went to another device of the same
+   * account. Drop the dead ratchet and carry on read-only.
+   */
+  async yieldSeat(record) {
+    const wasActiveCall = this.voice?.active?.server === record.id;
+    this.mlsGroups.delete(record.id);
+    try {
+      const { state } = await this.crypto('forgetGroup', { group: record.id });
+      await this.persistState(state);
+    } catch (e) {
+      console.warn(`forget group ${record.id}: ${e.message}`);
+    }
+    record.restored = true;
+    record.outOfSync = false;
+    this.forks.clear(record.id);
+    if (wasActiveCall) await this.voice.leave().catch(() => {});
+    const text = `this account joined "${record.name}" from another device — only one device can send at a time, so this one is now read-only. Open an invite link here to move sending back.`;
+    this.toast(text);
+    this.addSystemMessage(record.id, text);
+    await this.persistDevice(record);
+    this.refreshRoles(record.id);
+    this.dispatch({ type: 'servers', servers: this.snapshotServers() });
+  }
+
   noteFork(record) {
     const verdict = this.forks.verdict(record.id);
     const text = forkMessage(verdict, record.name ?? record.id);
@@ -2580,7 +2693,7 @@ export class Controller {
    * `readCircles`) rather than believing it over the relay.
    */
   stagePending() {
-    if (!this.db?.kvPut) return;
+    if (!this.db?.kvPut || this.stopped) return;
     this.pendingRev += 1;
     const mine = [...this.servers.values()].map(sharedHalf);
     // Until the relay's blob has been read, memory is only part of the
@@ -2653,6 +2766,7 @@ export class Controller {
 
   /** Run one upload, then start the next if anything changed meanwhile. */
   async flushBackup() {
+    if (this.stopped) return;
     this.backupTimer = null;
     this.backupPendingSince = null;
     this.backupDirty = false;
@@ -2812,6 +2926,13 @@ export class Controller {
         // the load. The record stays as it is, but the blob may carry room
         // keys another device of this account parked since, and a key is
         // never something to decline.
+        if (held.restored) {
+          // A read-only device has no other source for the circle's shape:
+          // it cannot decrypt the envelopes that announce a new room. What
+          // the account's other device parked is simply the newer answer.
+          Object.assign(held, sharedHalf(mergeCircle(s, sharedHalf(held))));
+          continue;
+        }
         const merged = mergeCircle(sharedHalf(held), s);
         held.chanMeta = merged.chanMeta;
         held.keys = merged.keys;
@@ -3420,7 +3541,28 @@ export class Controller {
   }
 
   async persistState(state) {
-    if (state) await this.db.kvPut('mlsState', state);
+    // Once another tab has the session this tab's ratchet copy is a fork of
+    // it; writing it back would roll the other tab's ratchet backwards.
+    if (state && !this.stopped) await this.db.kvPut('mlsState', state);
+  }
+
+  /**
+   * Another tab took the session (see session-lock.js). Stop everything
+   * that touches the ratchet or the relay, for good: this controller is not
+   * restarted — the tab reloads if the user wants it back.
+   */
+  async shutdown() {
+    this.stopped = true;
+    clearTimeout(this.backupTimer);
+    for (const t of this.metaReplies.values()) clearTimeout(t);
+    this.metaReplies.clear();
+    for (const t of this.readOnlyTimers?.values() ?? []) clearTimeout(t);
+    await this.voice?.leave?.().catch(() => {});
+    try {
+      this.relay?.close?.();
+    } catch {
+      /* already down */
+    }
   }
 
   snapshotServers() {

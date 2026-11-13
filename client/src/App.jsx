@@ -1,6 +1,7 @@
 import React, { useCallback, useEffect, useMemo, useReducer, useRef, useState } from 'react';
 import { openDb } from './lib/db.js';
 import { createCrypto } from './lib/rpc.js';
+import { SessionLock } from './lib/session-lock.js';
 import { Controller } from './lib/controller.js';
 import { parseInviteUrl } from './lib/invite.js';
 import { parseLinkUrl, verifyCode } from './lib/link.js';
@@ -185,8 +186,12 @@ function reducer(state, action) {
 }
 
 
+/** Set just before a superseded tab reloads to take the session back. */
+const TAKE_SESSION_KEY = 'quorum-take-session';
+
 export default function App() {
   const [state, rawDispatch] = useReducer(reducer, initial);
+  const takeSessionRef = useRef(() => {});
   // The roster regroups (a member sliding into "in call" / "playing") on a
   // voice update, which is network-driven, not a click — so we can't wrap it
   // at a call site. Instead the dispatch itself runs a View Transition, but
@@ -294,20 +299,49 @@ export default function App() {
     const invite = parseInviteUrl(location);
     if (invite) controller.setPendingInvite(invite);
     controllerRef.current = controller;
-    openDb()
-      .then((db) => {
-        controller.db = db;
-        controller.boot().catch((e) => dispatch({ type: 'toast', text: e.message }));
-      })
-      // Private browsing and locked-down profiles reject openDb outright.
-      // This had no catch, so the rejection went unhandled and the app sat
-      // on the boot splash forever with nothing on screen to explain it.
-      .catch((e) =>
-        dispatch({
-          type: 'fatal',
-          text: `this browser will not let quorum store data (${e.message}). Private browsing usually causes this — try a normal window.`,
+    const start = () =>
+      openDb()
+        .then((db) => {
+          controller.db = db;
+          controller.boot().catch((e) => dispatch({ type: 'toast', text: e.message }));
         })
-      );
+        // Private browsing and locked-down profiles reject openDb outright.
+        // This had no catch, so the rejection went unhandled and the app sat
+        // on the boot splash forever with nothing on screen to explain it.
+        .catch((e) =>
+          dispatch({
+            type: 'fatal',
+            text: `this browser will not let quorum store data (${e.message}). Private browsing usually causes this — try a normal window.`,
+          })
+        );
+    // One tab at a time runs the session: two would share one ratchet, and
+    // a shared ratchet silently breaks both (see session-lock.js). Nothing
+    // that reads the ratchet — the database included — starts before this
+    // tab holds the lock.
+    const lock = new SessionLock({
+      onSuperseded: async () => {
+        await controller.shutdown();
+        dispatch({ type: 'phase', phase: 'superseded' });
+      },
+    });
+    takeSessionRef.current = () => {
+      dispatch({ type: 'phase', phase: 'loading' });
+      lock.takeOver().then(start);
+    };
+    // "Use it here" on a tab that was superseded reloads into a clean
+    // controller, and this flag carries the intent across the reload.
+    let wanted = false;
+    try {
+      wanted = sessionStorage.getItem(TAKE_SESSION_KEY) === '1';
+      sessionStorage.removeItem(TAKE_SESSION_KEY);
+    } catch {
+      /* storage blocked: the user is asked again, which is fine */
+    }
+    lock.tryAcquire().then((mine) => {
+      if (mine) start();
+      else if (wanted) takeSessionRef.current();
+      else dispatch({ type: 'phase', phase: 'elsewhere' });
+    });
   }, []);
 
   // Sending side of device-linking: a signed-in device opened with a link URL
@@ -603,6 +637,35 @@ export default function App() {
       <div className="boot-fatal">
         <h1>quorum can't start</h1>
         <p>{state.fatal}</p>
+      </div>
+    );
+  }
+  // Open in another tab of this browser. Not an error and not a dead end:
+  // say where the session is, and offer it here.
+  if (state.phase === 'elsewhere' || state.phase === 'superseded') {
+    const moved = state.phase === 'superseded';
+    return (
+      <div className="boot-fatal" data-testid={moved ? 'session-superseded' : 'session-elsewhere'}>
+        <h1>{moved ? 'quorum moved to another tab' : 'quorum is open in another tab'}</h1>
+        <p>
+          One tab at a time: your encryption keys advance with every message, and two tabs
+          advancing them separately would break both. Switching keeps everything.
+        </p>
+        <button
+          className="button"
+          data-testid="session-take"
+          onClick={() => {
+            if (!moved) return takeSessionRef.current();
+            try {
+              sessionStorage.setItem(TAKE_SESSION_KEY, '1');
+            } catch {
+              /* asked again after the reload */
+            }
+            location.reload();
+          }}
+        >
+          use it here
+        </button>
       </div>
     );
   }
