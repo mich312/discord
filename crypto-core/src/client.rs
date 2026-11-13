@@ -39,6 +39,11 @@ pub enum CoreError {
     /// other than the one pinned for that handle.
     #[error("key package for {0} carries an unexpected signature key")]
     KeyMismatch(String),
+    /// A commit would put a leaf in the group under a name an existing
+    /// member already holds with a different key. The commit is refused
+    /// before it is merged; see `check_commit_identities`.
+    #[error("identity conflict: {0} is already in this circle under a different key")]
+    IdentityConflict(String),
     #[error("{0}")]
     Mls(String),
 }
@@ -59,8 +64,22 @@ pub enum Event {
     /// A commit was merged; the group moved to a new epoch. `sender` is the
     /// commit's signer: for an external (invite-link) join that is the new
     /// member itself — the UI uses this to mark link-joins as unverified.
+    ///
+    /// `active` is whether THIS device is still in the group afterwards. It
+    /// is not the same question as "is my name in `members`": an identity
+    /// holds one leaf, so when the same account joins again from another
+    /// device (an invite link opened there), that join replaces this
+    /// device's leaf. The name stays in the roster and this device is out —
+    /// every later call on the group fails. Without this flag the client
+    /// could not tell, and the device sat there looking like a member.
     #[serde(rename_all = "camelCase")]
-    MembershipChange { group: String, epoch: u64, sender: String, members: Vec<String> },
+    MembershipChange {
+        group: String,
+        epoch: u64,
+        sender: String,
+        members: Vec<String>,
+        active: bool,
+    },
     /// A proposal was queued; nothing user-visible yet.
     #[serde(rename_all = "camelCase")]
     ProposalStored { group: String, epoch: u64 },
@@ -401,12 +420,22 @@ impl ChatClient {
             .groups
             .get_mut(id)
             .ok_or_else(|| CoreError::UnknownGroup(id.to_string()))?;
-        let target = group
+        // Every leaf under that name, not the first. One name should mean
+        // one leaf, and since `check_commit_identities` it does — but a group
+        // formed before commits were checked can hold a second leaf under a
+        // member's name, and removing a person has to mean all of them: a
+        // leaf left behind keeps decrypting, under a name the roster no
+        // longer shows.
+        let targets: Vec<LeafNodeIndex> = group
             .members()
-            .find(|m| identity_of(&m.credential).as_deref() == Some(name))
-            .ok_or_else(|| CoreError::Mls(format!("no member named {name}")))?;
+            .filter(|m| identity_of(&m.credential).as_deref() == Some(name))
+            .map(|m| m.index)
+            .collect();
+        if targets.is_empty() {
+            return Err(CoreError::Mls(format!("no member named {name}")));
+        }
         let (commit, _welcome, _group_info) = group
-            .remove_members(&self.provider, &self.signer, &[target.index])
+            .remove_members(&self.provider, &self.signer, &targets)
             .map_err(CoreError::mls)?;
         // Staged, NOT merged: see `merge_staged_commit`.
         commit.tls_serialize_detached().map_err(CoreError::mls)
@@ -615,12 +644,16 @@ impl ChatClient {
                 Ok(Event::Message { group: id, sender, text, epoch })
             }
             ProcessedMessageContent::StagedCommitMessage(staged) => {
+                // Before the merge, never after: once merged, the leaf is in
+                // the roster and every reader has already taken its word.
+                check_commit_identities(group, &staged)?;
                 group
                     .merge_staged_commit(provider, *staged)
                     .map_err(CoreError::mls)?;
                 let epoch = group.epoch().as_u64();
                 let members = members_of(group);
-                Ok(Event::MembershipChange { group: id, epoch, sender, members })
+                let active = group.is_active();
+                Ok(Event::MembershipChange { group: id, epoch, sender, members, active })
             }
             ProcessedMessageContent::ProposalMessage(proposal) => {
                 group
@@ -659,6 +692,61 @@ impl ChatClient {
     pub fn members(&self, id: &str) -> Result<Vec<String>, CoreError> {
         Ok(members_of(self.group_ref(id)?))
     }
+}
+
+/// Refuse a commit that would let one name mean two keys.
+///
+/// A basic credential is a self-asserted string: MLS proves that a leaf's
+/// messages were signed by that leaf's key, and nothing about whether the
+/// name on it is true. `add_member` checks the name and key of the person it
+/// adds against what the relay has pinned — but that check runs on one
+/// device, for one path. Everyone else merged whatever commit arrived, and
+/// an invite-link join (an external commit, built by the joiner) was checked
+/// by nobody. So a link holder could join as "alice", sit in the roster
+/// beside the real one, and have their messages attributed to her; the
+/// client's key directory, keyed by name, then took the newcomer's key as
+/// alice's and started dropping the real alice's log entries as forged.
+///
+/// The rule: every leaf a commit introduces or rewrites — added members,
+/// the committer's own path leaf (which for an external commit *is* the
+/// joiner), and updates — must not carry a name some current member holds
+/// under a different signature key. Same name and same key is the same
+/// identity joining again from another device, and passes — MLS treats it as
+/// a resync and replaces the old leaf (see `Event::MembershipChange::active`).
+///
+/// A leaf being removed in the same commit is deliberately not exempt. An
+/// external commit may remove the joiner's previous leaf (a resync), which
+/// has the same key and so never conflicts; exempting removals would turn
+/// "join beside alice" into "replace alice".
+fn check_commit_identities(group: &MlsGroup, staged: &StagedCommit) -> Result<(), CoreError> {
+    // Owned (name, key) pairs: the proposal iterators hand out short-lived
+    // wrappers, so nothing borrowed from them outlives the closure.
+    let claim = |leaf: &LeafNode| {
+        (identity_of(leaf.credential()), leaf.signature_key().as_slice().to_vec())
+    };
+    let mut incoming: Vec<(Option<String>, Vec<u8>)> = staged
+        .add_proposals()
+        .map(|p| claim(p.add_proposal().key_package().leaf_node()))
+        .collect();
+    incoming.extend(staged.update_proposals().map(|p| claim(p.update_proposal().leaf_node())));
+    incoming.extend(staged.update_path_leaf_node().map(claim));
+
+    let current: Vec<(String, Vec<u8>)> = group
+        .members()
+        .filter_map(|m| identity_of(&m.credential).map(|name| (name, m.signature_key)))
+        .collect();
+
+    for (name, key) in incoming {
+        // A leaf nobody can name cannot be shown in a roster or looked up in
+        // a key directory; there is no honest reason to send one.
+        let name = name
+            .filter(|n| !n.is_empty())
+            .ok_or_else(|| CoreError::Mls("a commit carried a leaf with no identity".into()))?;
+        if current.iter().any(|(n, k)| *n == name && *k != key) {
+            return Err(CoreError::IdentityConflict(name));
+        }
+    }
+    Ok(())
 }
 
 fn members_of(group: &MlsGroup) -> Vec<String> {

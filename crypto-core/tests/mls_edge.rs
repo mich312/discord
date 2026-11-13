@@ -306,3 +306,121 @@ fn expect_message_edge(event: Event, sender: &str, text: &str) {
         other => panic!("expected message, got {other:?}"),
     }
 }
+
+// --- one name, one key ----------------------------------------------------
+//
+// A basic credential is a self-asserted string. These pin the rule that a
+// commit may not put a name in the group under a key other than the one a
+// current member already holds for it — on every path a leaf can arrive by.
+
+/// alice creates the group and adds bob; both are at the same epoch.
+fn pair() -> (ChatClient, ChatClient) {
+    let mut alice = ChatClient::new("alice").unwrap();
+    let mut bob = ChatClient::new("bob").unwrap();
+    alice.create_group(G).unwrap();
+    let add = alice
+        .add_member(G, &bob.key_package().unwrap(), "bob", &bob.signature_public_key())
+        .unwrap();
+    alice.merge_staged_commit(G).unwrap();
+    bob.join_from_welcome(&add.welcome).unwrap();
+    (alice, bob)
+}
+
+#[test]
+fn a_link_joiner_cannot_take_an_existing_members_name() {
+    let (mut alice, mut bob) = pair();
+    // Somebody else entirely, calling themselves alice.
+    let mut mallory = ChatClient::new("alice").unwrap();
+    assert_ne!(alice.signature_public_key(), mallory.signature_public_key());
+
+    let info = alice.export_group_info(G).unwrap();
+    let (_, commit) = mallory.join_by_external_commit(&info).unwrap();
+
+    let epoch = bob.epoch(G).unwrap();
+    let err = bob.process_incoming(&commit).unwrap_err();
+    assert!(
+        err.to_string().starts_with("identity conflict: alice"),
+        "the refusal names who was being impersonated: {err}"
+    );
+    // Refused before the merge: nothing about bob's group moved.
+    assert_eq!(bob.epoch(G).unwrap(), epoch);
+    assert_eq!(bob.members(G).unwrap(), vec!["alice", "bob"]);
+    let keys = bob.member_keys(G).unwrap();
+    assert_eq!(keys.len(), 2);
+    assert!(keys.iter().any(|(n, k)| n == "alice" && *k == alice.signature_public_key()));
+
+    // And the real alice is still who bob hears.
+    let blob = alice.send_message(G, "still me").unwrap();
+    match bob.process_incoming(&blob).unwrap() {
+        Event::Message { sender, text, .. } => {
+            assert_eq!((sender.as_str(), text.as_str()), ("alice", "still me"));
+        }
+        other => panic!("expected a message, got {other:?}"),
+    }
+    // Nothing the impostor sends from their own branch is readable.
+    let forged = mallory.send_message(G, "it's me, alice").unwrap();
+    assert!(bob.process_incoming(&forged).is_err());
+}
+
+#[test]
+fn an_admin_cannot_add_a_second_key_under_a_members_name() {
+    // The adder's own check compares the KeyPackage with what the relay
+    // pinned — so a hostile relay, or a modified client, gets past it. Every
+    // other member has to refuse the commit independently.
+    let (mut alice, mut bob) = pair();
+    let mut carol = ChatClient::new("carol").unwrap();
+    let add = alice
+        .add_member(G, &carol.key_package().unwrap(), "carol", &carol.signature_public_key())
+        .unwrap();
+    alice.merge_staged_commit(G).unwrap();
+    bob.process_incoming(&add.commit).unwrap();
+    carol.join_from_welcome(&add.welcome).unwrap();
+
+    let fake_bob = ChatClient::new("bob").unwrap();
+    let add = alice
+        .add_member(G, &fake_bob.key_package().unwrap(), "bob", &fake_bob.signature_public_key())
+        .unwrap();
+    let err = carol.process_incoming(&add.commit).unwrap_err();
+    assert!(err.to_string().starts_with("identity conflict: bob"), "{err}");
+    assert_eq!(carol.members(G).unwrap(), vec!["alice", "bob", "carol"]);
+}
+
+#[test]
+fn the_same_identity_joining_again_replaces_its_old_device() {
+    // Same name AND same key: one person, opening an invite link on a second
+    // device. It is not a conflict — but it is not a second seat either. MLS
+    // resyncs: the new leaf replaces the old one, and the old device is out.
+    let (mut alice, mut bob) = pair();
+    let mut bobs_phone = ChatClient::import_identity(&bob.export_identity().unwrap()).unwrap();
+    assert_eq!(bob.signature_public_key(), bobs_phone.signature_public_key());
+
+    let info = alice.export_group_info(G).unwrap();
+    let (_, commit) = bobs_phone.join_by_external_commit(&info).unwrap();
+
+    match alice.process_incoming(&commit).unwrap() {
+        Event::MembershipChange { members, active, .. } => {
+            assert_eq!(members, vec!["alice", "bob"], "one bob, not two");
+            assert!(active, "alice is untouched");
+        }
+        other => panic!("expected a membership change, got {other:?}"),
+    }
+    // The old device is told, in so many words, that it is no longer in —
+    // its name is still in the roster, so nothing else would say so.
+    match bob.process_incoming(&commit).unwrap() {
+        Event::MembershipChange { members, active, .. } => {
+            assert!(members.contains(&"bob".to_string()));
+            assert!(!active, "the laptop's leaf was replaced by the phone's");
+        }
+        other => panic!("expected a membership change, got {other:?}"),
+    }
+
+    let blob = bobs_phone.send_message(G, "from the phone").unwrap();
+    match alice.process_incoming(&blob).unwrap() {
+        Event::Message { sender, text, .. } => {
+            assert_eq!((sender.as_str(), text.as_str()), ("bob", "from the phone"));
+        }
+        other => panic!("expected a message, got {other:?}"),
+    }
+    assert!(bob.process_incoming(&blob).is_err(), "the replaced device can no longer read");
+    assert!(bob.send_message(G, "from the laptop").is_err(), "or send");
+}
