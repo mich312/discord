@@ -8,7 +8,8 @@
     "test": "node --test test/*.test.mjs",
     "e2e": "node e2e/run.mjs",
     "preview:ui": "vite --open /preview.html",
-    "shots:ui": "node e2e/gallery-shots.mjs"
+    "shots:ui": "node e2e/gallery-shots.mjs",
+    "e2e:resilience": "node e2e/resilience.mjs"
   },
   "dependencies": {
     "qrcode-generator": "^2.0.4",
