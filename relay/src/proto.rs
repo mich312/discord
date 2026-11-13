@@ -18,6 +18,14 @@ pub enum ClientMsg {
         pubkey: String,
         #[serde(default)]
         invite: Option<String>,
+        /// Which of the account's devices this connection is: the base64url
+        /// of the device's own public key (its MLS leaf key). Optional so a
+        /// client from before devices were distinguished still connects; it
+        /// is then the account's one unnamed device. Not authenticated by
+        /// the relay — it is routing, and what a device may *do* is decided
+        /// by its certificate, which members check and the relay cannot.
+        #[serde(default)]
+        device: Option<String>,
         /// Client wire-protocol version. Optional so an older client still
         /// parses. Not enforced — it is here so that a skew between a cached
         /// client and an upgraded relay is diagnosable rather than showing up
@@ -32,6 +40,22 @@ pub enum ClientMsg {
     PublishKp { rid: u64, payloads: Vec<String> },
     /// Consume one of `user`'s KeyPackages.
     FetchKp { rid: u64, user: String },
+    /// Consume one KeyPackage from EACH of `user`'s devices — what adding a
+    /// person needs, since each device is its own MLS leaf. With `device`,
+    /// only that one (letting a single new device into a circle its account
+    /// is already in). A caller may name their own account, but never the
+    /// device they are connected as.
+    FetchKps {
+        rid: u64,
+        user: String,
+        #[serde(default)]
+        device: Option<String>,
+    },
+    /// "This device holds the account's identity but is not in `group` yet —
+    /// would somebody add it." Fanned out, unlogged, to the group's live
+    /// subscribers. Members only. Whether to act on it is the receivers'
+    /// decision, made against the device's certificate.
+    DeviceJoin { rid: u64, group: String },
     CreateGroup { rid: u64, group: String },
     /// Allow `user` to subscribe/send on `group` (server-side ACL only —
     /// the cryptographic boundary is MLS membership, not this list).
@@ -79,7 +103,20 @@ pub enum ClientMsg {
     BlobTicket { rid: u64, id: String },
     /// Deliver a Welcome directly to `to` (stored if offline). `group` and
     /// `after` tell the joiner where their log begins.
-    Welcome { rid: u64, to: String, group: String, after: u64, payload: String },
+    ///
+    /// `device` addresses one device of `to`. A Welcome opens only on the
+    /// devices whose KeyPackages went into it, so one that is stored for an
+    /// offline device must wait for *that* device, not be handed to whichever
+    /// of the account's devices connects first. Absent = any device.
+    Welcome {
+        rid: u64,
+        to: String,
+        #[serde(default)]
+        device: Option<String>,
+        group: String,
+        after: u64,
+        payload: String,
+    },
     /// Park an encrypted GroupInfo blob under an opaque invite id. Members
     /// only. `expires_at` (unix secs) / `max_uses` are server-enforced —
     /// weak controls; MLS membership stays the real boundary.
@@ -238,6 +275,22 @@ pub enum ClientMsg {
     Ping { rid: u64 },
 }
 
+/// One device's KeyPackage in a `Kps` reply.
+#[derive(Debug, Clone, Serialize)]
+pub struct DeviceKeyPackage {
+    pub device: String,
+    pub payload: String,
+}
+
+/// Longest device id the relay will route by. A base64url Ed25519 key is 43.
+pub const MAX_DEVICE_ID: usize = 64;
+
+/// How long a device may go without publishing KeyPackages before the relay
+/// stops handing its remaining ones out. Every connect publishes, so a
+/// device silent for this long is a reinstalled browser or a lost phone, and
+/// adding a member should not keep adding leaves for it.
+pub const DEVICE_FRESH_SECS: u64 = 30 * 24 * 3600;
+
 #[derive(Debug, Clone, Serialize)]
 #[serde(tag = "t", rename_all = "snake_case")]
 pub enum ServerMsg {
@@ -259,6 +312,14 @@ pub enum ServerMsg {
         #[serde(skip_serializing_if = "Option::is_none")] payload: Option<String>,
         #[serde(default, skip_serializing_if = "Option::is_none")] pubkey: Option<String>,
     },
+    /// One consumed KeyPackage per device of `user`, and the identity key
+    /// pinned for the handle. Empty when none of the account's devices has
+    /// published under a device id (a client from before devices were
+    /// distinguished) — the caller falls back to `FetchKp`.
+    Kps { rid: u64, user: String, packages: Vec<DeviceKeyPackage>, pubkey: Option<String> },
+    /// A device of `user` is asking to be added to `group`. See
+    /// `ClientMsg::DeviceJoin`.
+    DeviceJoin { group: String, user: String, device: String },
     Msg { group: String, seq: u64, epoch: u64, sender: String, payload: String },
     Welcome { from: String, group: String, after: u64, payload: String },
     Invite { rid: u64, group: String, payload: String },

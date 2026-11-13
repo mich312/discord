@@ -248,8 +248,9 @@ pub struct Hub {
     /// connected most recently received everything and the others received
     /// nothing, with their sockets open and their dots green.
     subscribers: HashMap<String, HashMap<ConnId, Subscriber>>,
-    /// user -> (connection -> outbound channel), for Welcome delivery.
-    online: HashMap<String, HashMap<ConnId, Outbound>>,
+    /// user -> (connection -> which device it is, and where to send), for
+    /// Welcome delivery.
+    online: HashMap<String, HashMap<ConnId, (String, Outbound)>>,
     /// group -> send lock. Ordering only has to hold WITHIN a group, so
     /// serializing per group rather than globally lets unrelated circles
     /// append concurrently. See the Send arm.
@@ -374,17 +375,32 @@ async fn next_text(socket: &mut WebSocket) -> Option<String> {
     None
 }
 
-/// hello -> challenge -> auth. Returns the authenticated user name.
-async fn authenticate(socket: &mut WebSocket, app: &App) -> Option<String> {
+/// A device id the relay will route by: short, and nothing but base64url.
+/// Anything else is treated as no id at all rather than refused — the id is
+/// a routing label, and a client that sends a strange one is simply the
+/// account's unnamed device.
+fn clean_device_id(device: Option<String>) -> String {
+    device
+        .filter(|d| {
+            !d.is_empty()
+                && d.len() <= crate::proto::MAX_DEVICE_ID
+                && d.bytes().all(|b| b.is_ascii_alphanumeric() || b == b'-' || b == b'_')
+        })
+        .unwrap_or_default()
+}
+
+/// hello -> challenge -> auth. Returns the authenticated user name and the
+/// device id the connection gave ("" if none).
+async fn authenticate(socket: &mut WebSocket, app: &App) -> Option<(String, String)> {
     let hello = next_text(socket).await?;
-    let (user, claimed_key, invite) = match serde_json::from_str::<ClientMsg>(&hello) {
-        Ok(ClientMsg::Hello { user, pubkey, invite, v }) => {
+    let (user, claimed_key, invite, device) = match serde_json::from_str::<ClientMsg>(&hello) {
+        Ok(ClientMsg::Hello { user, pubkey, invite, device, v }) => {
             if let Some(v) = v {
                 if v != PROTOCOL_VERSION {
                     tracing::debug!(client_version = v, "protocol version skew");
                 }
             }
-            (user, pubkey, invite)
+            (user, pubkey, invite, clean_device_id(device))
         }
         _ => {
             let _ = send_json(socket, &ServerMsg::Error { rid: None, message: "expected hello".into() }).await;
@@ -463,7 +479,7 @@ async fn authenticate(socket: &mut WebSocket, app: &App) -> Option<String> {
 
     let ready = ServerMsg::Ready { user: user.clone(), global_admin: app.admins.contains(&user) };
     send_json(socket, &ready).await.ok()?;
-    Some(user)
+    Some((user, device))
 }
 
 /// The invite gate for first-time registration. Open registration and the
@@ -510,7 +526,7 @@ fn verify_sig(pubkey: &[u8], message: &[u8], sig: &[u8]) -> bool {
 }
 
 pub async fn handle_socket(mut socket: WebSocket, app: Arc<App>) {
-    let Some(user) = authenticate(&mut socket, &app).await else { return };
+    let Some((user, device)) = authenticate(&mut socket, &app).await else { return };
 
     let (tx, mut rx, depth) = Outbound::new();
     let conn: ConnId = NEXT_CONN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
@@ -521,7 +537,7 @@ pub async fn handle_socket(mut socket: WebSocket, app: Arc<App>) {
         // Welcome that saw us offline could store *just after* we drained,
         // stranding it until our next reconnect.
         let mut hub = app.hub.lock().await;
-        hub.online.entry(user.clone()).or_default().insert(conn, tx.clone());
+        hub.online.entry(user.clone()).or_default().insert(conn, (device.clone(), tx.clone()));
         // Connect/disconnect is the single most useful line an operator has
         // when someone reports "messages aren't arriving": it answers
         // whether the client is even here. The handle is metadata the relay
@@ -529,7 +545,7 @@ pub async fn handle_socket(mut socket: WebSocket, app: Arc<App>) {
         // deployment's own logs rather than anything exported.
         tracing::info!(user = %user, online = hub.online.len(), "client connected");
         app.metrics.ws_connections.inc();
-        if let Ok(welcomes) = app.store.take_welcomes(&user).await {
+        if let Ok(welcomes) = app.store.take_welcomes(&user, &device).await {
             for w in welcomes {
                 let _ = tx.send(ServerMsg::Welcome {
                     from: w.from,
@@ -590,7 +606,7 @@ pub async fn handle_socket(mut socket: WebSocket, app: Arc<App>) {
                 continue;
             }
         };
-        let reply = handle_request(&app, &user, conn, &tx, msg).await;
+        let reply = handle_request(&app, &user, &device, conn, &tx, msg).await;
         if let Some(reply) = reply {
             if !tx.send(reply) {
                 break;
@@ -624,6 +640,7 @@ fn err(rid: u64, e: impl std::fmt::Display) -> Option<ServerMsg> {
 async fn handle_request(
     app: &Arc<App>,
     user: &str,
+    device: &str,
     conn: ConnId,
     tx: &Outbound,
     msg: ClientMsg,
@@ -643,7 +660,7 @@ async fn handle_request(
                     Err(e) => return err(rid, e),
                 }
             }
-            match app.store.publish_key_packages(user, decoded).await {
+            match app.store.publish_key_packages(user, device, decoded, now_unix()).await {
                 Ok(()) => Some(ServerMsg::Ok { rid, seq: None }),
                 Err(e) => err(rid, e),
             }
@@ -674,6 +691,74 @@ async fn handle_request(
                 }),
                 Err(e) => err(rid, e),
             }
+        }
+
+        ClientMsg::FetchKps { rid, user: target, device: only } => {
+            let only = only.map(|d| clean_device_id(Some(d)));
+            // Taking a KeyPackage consumes it. A caller may take their own
+            // account's — that is how one device lets another in — but
+            // never the device they are connected as, which nobody has a
+            // reason to add and which would only drain its own supply.
+            if target == user && only.as_deref().is_none_or(|d| d.is_empty() || d == device) {
+                return err(rid, "cannot fetch your own device's key package");
+            }
+            let pinned = match app.store.get_user_pubkey(&target).await {
+                Ok(Some(p)) => p,
+                Ok(None) => return err(rid, "no such user"),
+                Err(e) => return err(rid, e),
+            };
+            let fresh_after = now_unix().saturating_sub(crate::proto::DEVICE_FRESH_SECS);
+            let own_account = target == user;
+            match app.store.take_device_key_packages(&target, only.as_deref(), fresh_after).await {
+                Ok(packages) => Some(ServerMsg::Kps {
+                    rid,
+                    user: target,
+                    packages: packages
+                        .into_iter()
+                        // Never the caller's own device, even when it asked
+                        // for the whole account.
+                        .filter(|(d, _)| !(own_account && d == device))
+                        .map(|(device, payload)| crate::proto::DeviceKeyPackage {
+                            device,
+                            payload: B64.encode(payload),
+                        })
+                        .collect(),
+                    pubkey: Some(B64.encode(pinned)),
+                }),
+                Err(e) => err(rid, e),
+            }
+        }
+
+        ClientMsg::DeviceJoin { rid, group } => {
+            if let Err(e) = require_member(app, &group, user).await {
+                return err(rid, e);
+            }
+            if device.is_empty() {
+                return err(rid, "this connection did not name its device");
+            }
+            // Unlogged, to whoever is live. The relay vouches for nothing
+            // here beyond "an authenticated connection of this member asked":
+            // whether the device belongs in the group is decided by members,
+            // against a certificate the relay cannot forge.
+            let mut hub = app.hub.lock().await;
+            if let Some(subs) = hub.subscribers.get_mut(&group) {
+                let out = ServerMsg::DeviceJoin {
+                    group: group.clone(),
+                    user: user.to_string(),
+                    device: device.to_string(),
+                };
+                subs.retain(|id, sub| {
+                    if *id == conn {
+                        return true;
+                    }
+                    let kept = sub.out.offer(out.clone());
+                    if !kept {
+                        app.metrics.subscribers_dropped.inc();
+                    }
+                    kept
+                });
+            }
+            Some(ServerMsg::Ok { rid, seq: None })
         }
 
         ClientMsg::CreateGroup { rid, group } => {
@@ -964,7 +1049,8 @@ async fn handle_request(
             Some(ServerMsg::BlobTicket { rid, ticket: app.blob_tickets.mint(&id) })
         }
 
-        ClientMsg::Welcome { rid, to, group, after, payload } => {
+        ClientMsg::Welcome { rid, to, device: to_device, group, after, payload } => {
+            let to_device = clean_device_id(to_device);
             if let Err(e) = require_member(app, &group, user).await {
                 return err(rid, e);
             }
@@ -991,12 +1077,15 @@ async fn handle_request(
             // connect+drain (see handle_socket) — which would otherwise let a
             // Welcome be neither delivered nor drained.
             let hub = app.hub.lock().await;
-            // To every connection the recipient has open. A Welcome opens
-            // only on the device whose KeyPackage it was built for, and the
-            // relay cannot tell which that is, so all of them get it and the
-            // ones it is not for set it aside.
+            // To the device it is addressed to, on every connection that
+            // device has open. Unaddressed, it goes to every connection the
+            // recipient has: the relay cannot tell which device it opens on,
+            // so all of them get it and the ones it is not for set it aside.
             let delivered = hub.online.get(&to).is_some_and(|conns| {
-                conns.values().fold(false, |any, ch| ch.offer(out.clone()) || any)
+                conns
+                    .values()
+                    .filter(|(d, _)| to_device.is_empty() || *d == to_device)
+                    .fold(false, |any, (_, ch)| ch.offer(out.clone()) || any)
             });
             if delivered {
                 app.metrics.welcomes_delivered.inc();
@@ -1006,7 +1095,7 @@ async fn handle_request(
             if !delivered {
                 let stored =
                     StoredWelcome { from: user.to_string(), group: group.clone(), after, payload };
-                if let Err(e) = app.store.store_welcome(&to, stored).await {
+                if let Err(e) = app.store.store_welcome(&to, &to_device, stored).await {
                     drop(hub);
                     return err(rid, e);
                 }

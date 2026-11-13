@@ -1527,3 +1527,138 @@ async fn removing_a_member_unsubscribes_every_device_of_theirs() {
     laptop.expect_none("msg").await;
     phone.expect_none("msg").await;
 }
+
+// --- devices over the wire ---------------------------------------------------
+
+impl TestClient {
+    /// Connect naming a device, the way a current client does.
+    async fn connect_as_device(addr: SocketAddr, mls: ChatClient, name: &str, device: &str) -> TestClient {
+        let (ws, _) = tokio_tungstenite::connect_async(format!("ws://{addr}/ws")).await.unwrap();
+        let mut client = TestClient {
+            ws,
+            buffered: VecDeque::new(),
+            mls,
+            name: name.to_string(),
+            next_rid: 1,
+            global_admin: false,
+        };
+        client
+            .send_raw(json!({
+                "t": "hello", "user": name, "device": device,
+                "pubkey": B64.encode(client.mls.signature_public_key()),
+            }))
+            .await;
+        let challenge = client.recv().await;
+        let nonce = B64.decode(challenge["nonce"].as_str().unwrap()).unwrap();
+        let mut signed = b"relay-auth-v2".to_vec();
+        signed.extend_from_slice(&nonce);
+        signed.extend_from_slice(&(name.len() as u32).to_be_bytes());
+        signed.extend_from_slice(name.as_bytes());
+        let sig = client.mls.sign(&signed).unwrap();
+        client.send_raw(json!({"t": "auth", "sig": B64.encode(sig)})).await;
+        assert_eq!(client.recv().await["t"], "ready");
+        client
+    }
+
+    async fn publish_opaque_kps(&mut self, payloads: &[&[u8]]) {
+        let payloads: Vec<String> = payloads.iter().map(|p| B64.encode(p)).collect();
+        let reply = self.request(json!({"t": "publish_kp", "payloads": payloads})).await;
+        assert_eq!(reply["t"], "ok", "{reply}");
+    }
+}
+
+/// bob on a laptop and a phone (same identity, two named devices), and alice.
+async fn bob_on_two_devices(addr: SocketAddr) -> (TestClient, TestClient, TestClient) {
+    let bob = ChatClient::new("bob").unwrap();
+    let phone_mls = ChatClient::import_identity(&bob.export_identity().unwrap()).unwrap();
+    let laptop = TestClient::connect_as_device(addr, bob, "bob", "laptop").await;
+    let phone = TestClient::connect_as_device(addr, phone_mls, "bob", "phone").await;
+    let alice = TestClient::connect_as_device(addr, ChatClient::new("alice").unwrap(), "alice", "a1").await;
+    (laptop, phone, alice)
+}
+
+#[tokio::test]
+async fn adding_a_person_fetches_a_key_package_from_each_of_their_devices() {
+    let addr = spawn_relay().await;
+    let (mut laptop, mut phone, mut alice) = bob_on_two_devices(addr).await;
+    laptop.publish_opaque_kps(&[b"laptop-1", b"laptop-2"]).await;
+    phone.publish_opaque_kps(&[b"phone-1"]).await;
+
+    let reply = alice.request(json!({"t": "fetch_kps", "user": "bob"})).await;
+    assert_eq!(reply["t"], "kps", "{reply}");
+    let got: Vec<(String, Vec<u8>)> = reply["packages"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|p| (p["device"].as_str().unwrap().to_string(), B64.decode(p["payload"].as_str().unwrap()).unwrap()))
+        .collect();
+    assert_eq!(
+        got,
+        vec![("laptop".to_string(), b"laptop-1".to_vec()), ("phone".to_string(), b"phone-1".to_vec())]
+    );
+    assert!(reply["pubkey"].is_string(), "the pinned identity key rides along");
+
+    // One device can be asked for on its own — and by the account's other
+    // device, which is how a laptop lets its own phone in.
+    phone.publish_opaque_kps(&[b"phone-2"]).await;
+    let reply = laptop.request(json!({"t": "fetch_kps", "user": "bob", "device": "phone"})).await;
+    assert_eq!(reply["packages"][0]["device"], "phone");
+    // Never the device you are connected as.
+    let reply = laptop.request(json!({"t": "fetch_kps", "user": "bob", "device": "laptop"})).await;
+    assert_eq!(reply["t"], "error", "{reply}");
+    let reply = laptop.request(json!({"t": "fetch_kps", "user": "bob"})).await;
+    assert_eq!(reply["t"], "error", "{reply}");
+}
+
+#[tokio::test]
+async fn a_device_asks_the_circle_to_let_it_in() {
+    let addr = spawn_relay().await;
+    let (mut laptop, mut phone, mut alice) = bob_on_two_devices(addr).await;
+    alice.request(json!({"t": "create_group", "group": "g1"})).await;
+    alice.request(json!({"t": "allow", "group": "g1", "user": "bob"})).await;
+    laptop.request(json!({"t": "subscribe", "group": "g1", "after": 0})).await;
+
+    let reply = phone.request(json!({"t": "device_join", "group": "g1"})).await;
+    assert_eq!(reply["t"], "ok", "{reply}");
+    for member in [&mut alice, &mut laptop] {
+        let ask = member.recv_until(|m| m["t"] == "device_join").await;
+        assert_eq!((ask["group"].as_str(), ask["user"].as_str(), ask["device"].as_str()), (Some("g1"), Some("bob"), Some("phone")));
+    }
+
+    // Not for strangers to a group, and not without a device to name.
+    let mut carol = TestClient::connect_as_device(addr, ChatClient::new("carol").unwrap(), "carol", "c1").await;
+    assert_eq!(carol.request(json!({"t": "device_join", "group": "g1"})).await["t"], "error");
+    let mut unnamed = TestClient::connect(addr, ChatClient::new("dave").unwrap(), "dave").await.unwrap();
+    alice.request(json!({"t": "allow", "group": "g1", "user": "dave"})).await;
+    assert_eq!(unnamed.request(json!({"t": "device_join", "group": "g1"})).await["t"], "error");
+}
+
+#[tokio::test]
+async fn an_addressed_welcome_reaches_only_its_device_and_waits_for_it() {
+    let addr = spawn_relay().await;
+    let (mut laptop, phone, mut alice) = bob_on_two_devices(addr).await;
+    alice.request(json!({"t": "create_group", "group": "g1"})).await;
+    alice.request(json!({"t": "allow", "group": "g1", "user": "bob"})).await;
+
+    // The phone goes offline; a Welcome for it must wait for it, and must
+    // not be handed to the laptop, which is connected.
+    let phone_identity = phone.mls.export_identity().unwrap();
+    drop(phone);
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    let reply = alice
+        .request(json!({"t": "welcome", "to": "bob", "device": "phone", "group": "g1", "after": 0, "payload": B64.encode(b"for-the-phone")}))
+        .await;
+    assert_eq!(reply["t"], "ok", "{reply}");
+    laptop.expect_none("welcome").await;
+
+    let mut phone = TestClient::connect_as_device(addr, ChatClient::import_identity(&phone_identity).unwrap(), "bob", "phone").await;
+    let welcome = phone.recv_until(|m| m["t"] == "welcome").await;
+    assert_eq!(B64.decode(welcome["payload"].as_str().unwrap()).unwrap(), b"for-the-phone");
+
+    // Live, it goes straight to that device and nowhere else.
+    alice
+        .request(json!({"t": "welcome", "to": "bob", "device": "phone", "group": "g1", "after": 0, "payload": B64.encode(b"again")}))
+        .await;
+    phone.recv_until(|m| m["t"] == "welcome").await;
+    laptop.expect_none("welcome").await;
+}

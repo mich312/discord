@@ -30,8 +30,8 @@ async fn key_packages_consume_fifo_then_run_dry() {
     let s = store();
     // No packages yet -> None, not an error.
     assert_eq!(s.take_key_package("bob").await.unwrap(), None);
-    s.publish_key_packages("bob", vec![b"kp1".to_vec(), b"kp2".to_vec()]).await.unwrap();
-    s.publish_key_packages("bob", vec![b"kp3".to_vec()]).await.unwrap();
+    s.publish_key_packages("bob", "", vec![b"kp1".to_vec(), b"kp2".to_vec()], 0).await.unwrap();
+    s.publish_key_packages("bob", "", vec![b"kp3".to_vec()], 0).await.unwrap();
     assert_eq!(s.take_key_package("bob").await.unwrap(), Some(b"kp1".to_vec()));
     assert_eq!(s.take_key_package("bob").await.unwrap(), Some(b"kp2".to_vec()));
     assert_eq!(s.take_key_package("bob").await.unwrap(), Some(b"kp3".to_vec()));
@@ -93,12 +93,12 @@ async fn welcomes_queue_in_order_and_drain_once() {
         after: n,
         payload: vec![n as u8],
     };
-    assert!(s.take_welcomes("carol").await.unwrap().is_empty(), "no welcomes -> empty");
-    s.store_welcome("carol", w(1)).await.unwrap();
-    s.store_welcome("carol", w(2)).await.unwrap();
-    let drained = s.take_welcomes("carol").await.unwrap();
+    assert!(s.take_welcomes("carol", "").await.unwrap().is_empty(), "no welcomes -> empty");
+    s.store_welcome("carol", "", w(1)).await.unwrap();
+    s.store_welcome("carol", "", w(2)).await.unwrap();
+    let drained = s.take_welcomes("carol", "").await.unwrap();
     assert_eq!(drained.iter().map(|w| w.after).collect::<Vec<_>>(), vec![1, 2]);
-    assert!(s.take_welcomes("carol").await.unwrap().is_empty(), "draining consumes");
+    assert!(s.take_welcomes("carol", "").await.unwrap().is_empty(), "draining consumes");
 }
 
 #[tokio::test]
@@ -457,4 +457,75 @@ async fn invite_uses_are_counted_once_per_claimant() {
         s.redeem_invite("single", "mallory", 0).await,
         Err(StoreError::InviteInvalid)
     ));
+}
+
+// --- devices --------------------------------------------------------------
+// Each device of an account is its own MLS leaf, so its KeyPackages and its
+// Welcomes are kept apart from its siblings'. Same contract on both stores.
+
+#[tokio::test]
+async fn device_key_packages_yield_one_per_fresh_device() {
+    let s = store();
+    let user = "bob".to_string();
+    s.register_user(&user, b"k").await.unwrap();
+    s.publish_key_packages(&user, "laptop", vec![b"l1".to_vec(), b"l2".to_vec()], 1_000).await.unwrap();
+    s.publish_key_packages(&user, "phone", vec![b"p1".to_vec()], 1_000).await.unwrap();
+    // A device that stopped publishing long ago, and a client that never
+    // named its device at all.
+    s.publish_key_packages(&user, "old-tablet", vec![b"t1".to_vec()], 10).await.unwrap();
+    s.publish_key_packages(&user, "", vec![b"unnamed".to_vec()], 1_000).await.unwrap();
+
+    let got = s.take_device_key_packages(&user, None, 500).await.unwrap();
+    assert_eq!(
+        got,
+        vec![("laptop".to_string(), b"l1".to_vec()), ("phone".to_string(), b"p1".to_vec())],
+        "the oldest package of each named device that is still publishing"
+    );
+    // Consumed: the laptop has one left, the phone none.
+    let again = s.take_device_key_packages(&user, None, 500).await.unwrap();
+    assert_eq!(again, vec![("laptop".to_string(), b"l2".to_vec())]);
+    assert!(s.take_device_key_packages(&user, None, 500).await.unwrap().is_empty());
+
+    // The stale device is still there for a caller that reaches back far
+    // enough, and one device can be asked for on its own.
+    let tablet = s.take_device_key_packages(&user, Some("old-tablet"), 0).await.unwrap();
+    assert_eq!(tablet, vec![("old-tablet".to_string(), b"t1".to_vec())]);
+    // The unnamed package is only ever served the old way.
+    assert_eq!(s.take_key_package(&user).await.unwrap(), Some(b"unnamed".to_vec()));
+}
+
+#[tokio::test]
+async fn a_device_stays_fresh_by_its_newest_package() {
+    let s = store();
+    let user = "bob".to_string();
+    s.register_user(&user, b"k").await.unwrap();
+    s.publish_key_packages(&user, "laptop", vec![b"old".to_vec()], 10).await.unwrap();
+    s.publish_key_packages(&user, "laptop", vec![b"new".to_vec()], 1_000).await.unwrap();
+    // The package at the head of the queue predates the cutoff; the device
+    // does not, so it is served — oldest first.
+    let got = s.take_device_key_packages(&user, None, 500).await.unwrap();
+    assert_eq!(got, vec![("laptop".to_string(), b"old".to_vec())]);
+}
+
+#[tokio::test]
+async fn a_welcome_waits_for_the_device_it_is_for() {
+    let s = store();
+    let to = "bob".to_string();
+    let w = |n: u64| StoredWelcome {
+        from: "alice".into(),
+        group: "g1".into(),
+        after: n,
+        payload: format!("w{n}").into_bytes(),
+    };
+    s.store_welcome(&to, "phone", w(1)).await.unwrap();
+    s.store_welcome(&to, "", w(2)).await.unwrap();
+    s.store_welcome(&to, "phone", w(3)).await.unwrap();
+
+    // The laptop connects first. It gets the unaddressed one and must not
+    // drain the phone's.
+    let laptop = s.take_welcomes(&to, "laptop").await.unwrap();
+    assert_eq!(laptop.iter().map(|w| w.after).collect::<Vec<_>>(), vec![2]);
+    let phone = s.take_welcomes(&to, "phone").await.unwrap();
+    assert_eq!(phone.iter().map(|w| w.after).collect::<Vec<_>>(), vec![1, 3], "in the order queued");
+    assert!(s.take_welcomes(&to, "phone").await.unwrap().is_empty());
 }
