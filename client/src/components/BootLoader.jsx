@@ -14,7 +14,7 @@ export default function BootLoader() {
       <div className="boot-bar" aria-hidden="true">
         <span />
       </div>
-      <div className="boot-label mono">decrypting your circles</div>
+      <div className="boot-label" role="status">Decrypting your circles…</div>
     </div>
   );
 }

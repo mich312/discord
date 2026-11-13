@@ -304,7 +304,7 @@ if (!crashed) {
     // only place it appears for them, by id.
     await root.keyboard.press('Control+k');
     await root.waitForSelector('.palette-input');
-    await root.fill('.palette-input', 'relay admin');
+    await root.fill('.palette-input', 'admin overview');
     await root.keyboard.press('Enter');
     const row = root.locator('[data-testid^=admin-delete-stuck-circle]');
     t.check('the overview lists a circle the admin is not in', await row.waitFor({ timeout: 10000 }).then(() => true, () => false));
@@ -321,9 +321,9 @@ if (!crashed) {
     // Not for everyone: amy has no such entry in her palette.
     await amy.keyboard.press('Control+k');
     await amy.waitForSelector('.palette-input');
-    await amy.fill('.palette-input', 'relay admin');
+    await amy.fill('.palette-input', 'admin overview');
     await amy.waitForTimeout(400);
-    t.check('someone who is not a global admin is not offered the overview', (await amy.locator('text=relay admin overview').count()) === 0);
+    t.check('someone who is not a global admin is not offered the overview', (await amy.locator('text=Server admin overview').count()) === 0);
   } catch (e) {
     crashed = e;
   }

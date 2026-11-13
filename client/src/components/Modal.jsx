@@ -7,11 +7,11 @@ import { normalizeThreshold } from '../lib/quorum.js';
 import { cx } from '../lib/cx.js';
 
 const RETENTION_CHOICES = [
-  { value: 0, label: 'keep until deleted by hand' },
-  { value: 3600, label: 'after 1 hour' },
-  { value: 86400, label: 'after 1 day' },
-  { value: 7 * 86400, label: 'after 1 week' },
-  { value: 30 * 86400, label: 'after 30 days' },
+  { value: 0, label: 'Keep until deleted by hand' },
+  { value: 3600, label: 'After 1 hour' },
+  { value: 86400, label: 'After 1 day' },
+  { value: 7 * 86400, label: 'After 1 week' },
+  { value: 30 * 86400, label: 'After 30 days' },
 ];
 
 export default function Modal({
@@ -112,16 +112,16 @@ export default function Modal({
   const heads = {
     invite: { glyph: <LinkGlyph />, title: 'Invite link' },
     secure: { glyph: <ShieldCheck />, title: 'Secure your account' },
-    safety: { glyph: <ShieldCheck />, title: `Safety number — ${modal.peer ?? ''}` },
+    safety: { glyph: <ShieldCheck />, title: `Verify ${modal.peer ?? ''}` },
     identity: { glyph: <Key />, title: 'Identity key' },
-    circle: { glyph: <Gear />, title: modal.name ? `${modal.name} — circle settings` : 'Circle settings' },
+    circle: { glyph: <Gear />, title: modal.name ? `${modal.name} settings` : 'Circle settings' },
     logout: { glyph: <LogOut />, title: 'Log out of this device' },
     'link-send': { glyph: <LinkGlyph />, title: 'Set up another device' },
-    admin: { glyph: <ShieldCheck />, title: 'Relay admin overview' },
+    admin: { glyph: <ShieldCheck />, title: 'Server admin overview' },
     channel: {
       glyph: <Gear />,
       title: modal.voice
-        ? `${modal.channel ?? ''} — voice room`
+        ? `${modal.channel ?? ''} settings`
         : `#${modal.channel ?? ''} settings`,
     },
   };
@@ -152,21 +152,24 @@ export default function Modal({
             <textarea className="keybox" readOnly value={modal.url} data-testid="invite-url" />
             <button className="button primary" onClick={() => copy(modal.url)} data-testid="copy-invite">
               {copied ? <Check size={14} /> : <Copy size={14} />}
-              {copied ? 'copied' : 'copy link'}
+              {copied ? 'Copied' : 'Copy link'}
             </button>
+            {/* §10.10 — the history disclosure belongs here, at the moment it
+                takes effect, not only in the room the joiner lands in. §10.7
+                — expiry is something the server honours, so it is said as
+                what the server does. */}
             <p className="fineprint muted">
-              Anyone who has this link becomes a member. It expires in 7 days, and anyone
-              who joins with it is marked <em>unverified</em> until someone checks their
-              safety number.
+              Anyone with this link can join, and once in they can read the circle&rsquo;s past
+              messages. The server stops accepting the link after 7 days. People who join with
+              it show as not verified until someone checks their safety number.
             </p>
           </>
         )}
         {modal.type === 'secure' && (
           <>
             <p className="muted">
-              Your identity key lives only in this browser right now. Park an{' '}
-              <em>encrypted</em> copy on the server so you can sign in elsewhere — the
-              server can never read it.
+              Your key exists only in this browser right now. Save an encrypted backup to the
+              server so you can sign in on other devices. The server can&rsquo;t read it.
             </p>
             <button
               className="button primary wide"
@@ -174,9 +177,9 @@ export default function Modal({
               data-testid="secure-passkey"
               onClick={() => attempt(onSecurePasskey)}
             >
-              use a passkey (recommended)
+              Use a passkey (recommended)
             </button>
-            <div className="divider">or a password</div>
+            <div className="divider">Or use a password</div>
             <form
               onSubmit={(e) => {
                 e.preventDefault();
@@ -184,48 +187,49 @@ export default function Modal({
               }}
             >
               <label className="field">
-                <span>password (8+ chars — longer is safer)</span>
+                <span>Password</span>
                 <input
                   type="password"
                   value={password}
                   onChange={(e) => setPassword(e.target.value)}
+                  aria-describedby="secure-password-hint"
                   data-testid="secure-password"
                 />
               </label>
+              <p className="fineprint muted" id="secure-password-hint">
+                At least 8 characters. Longer is safer, and a passkey is stronger still.
+              </p>
               <button className="button" disabled={busy} data-testid="secure-password-submit">
-                {busy ? 'deriving keys…' : 'secure with password'}
+                {busy ? 'Securing…' : 'Use this password'}
               </button>
             </form>
-            <p className="fineprint muted">
-              Passkeys are strongest. If you use a password, make it a long one.
-            </p>
             {onEnrollDevice && (
               <>
-                <div className="divider">just this device</div>
+                <div className="divider">Just this device</div>
                 <button
                   className="button wide"
                   disabled={busy}
                   data-testid="enroll-device"
                   onClick={() => attempt(onEnrollDevice)}
                 >
-                  <Key size={14} /> add one-tap for this device
+                  <Key size={14} /> Add one-tap sign-in on this device
                 </button>
                 <p className="fineprint muted">
-                  Registers a passkey for this device only — your other devices&rsquo; passkeys keep
-                  working. Best right after signing in on a new machine.
+                  Registers a passkey for this device only. Your other devices&rsquo; passkeys keep
+                  working.
                 </p>
               </>
             )}
             {showDevices && devices !== null && devices.length > 0 && (
               <>
-                <div className="divider">devices that can sign in</div>
+                <div className="divider">Devices that can sign in</div>
                 <ul className="device-list" data-testid="device-list">
                   {devices.map((d) => (
                     <li key={d.credId} className="device-row">
                       <span className="device-name">
-                        {d.label || 'unnamed device'}
-                        <span className="device-when mono">
-                          added {new Date(d.createdAt).toLocaleDateString()}
+                        {d.label || 'Unnamed device'}
+                        <span className="device-when">
+                          Added {new Date(d.createdAt).toLocaleDateString()}
                         </span>
                       </span>
                       {confirmRevoke === d.credId ? (
@@ -241,7 +245,7 @@ export default function Modal({
                             })
                           }
                         >
-                          really revoke?
+                          Confirm revoke
                         </button>
                       ) : (
                         <button
@@ -250,7 +254,7 @@ export default function Modal({
                           data-testid={`device-revoke-${d.credId}`}
                           onClick={() => setConfirmRevoke(d.credId)}
                         >
-                          revoke
+                          Revoke
                         </button>
                       )}
                     </li>
@@ -260,13 +264,13 @@ export default function Modal({
                     "Revoke" reads as "cut that device off", and for a device
                     someone is holding, unlocked, it is not that. */}
                 <p className="fineprint muted">
-                  Revoking stops that passkey unlocking your account from now on. It cannot erase
-                  what is already stored on a device someone is holding — if one went missing
-                  while signed in, treat its messages as read by whoever has it.
+                  Revoking stops that passkey unlocking your account from now on. It can&rsquo;t erase
+                  what is already on a device someone is holding: if one went missing while signed
+                  in, assume whoever has it can read its messages.
                 </p>
               </>
             )}
-            <div className="divider">or keep it manual</div>
+            <div className="divider">Or download a key file</div>
             <a
               className="button"
               href={identityKey ? URL.createObjectURL(new Blob([identityKey], { type: 'text/plain' })) : '#'}
@@ -275,7 +279,7 @@ export default function Modal({
               onClick={() => onSecureFile()}
             >
               <Download size={14} />
-              download key file
+              Download key file
             </a>
             {error && <p className="error" role="alert">{error}</p>}
           </>
@@ -285,13 +289,14 @@ export default function Modal({
             {!linkSent ? (
               <>
                 <p className="muted">
-                  A device wants to sign in as <strong>you</strong>. This hands it your
-                  identity, sealed end to end — the server only ferries the bytes. Do it{' '}
-                  <em>only</em> if you&rsquo;re the one setting up that device.
+                  A device wants to sign in as <strong>you</strong>. This sends it your key,
+                  encrypted so only that device can open it. Do this only if you&rsquo;re the one
+                  setting up that device.
                 </p>
                 <p className="fineprint muted">
                   It should be showing the code{' '}
-                  <strong className="mono">{modal.code}</strong> — check it matches before you send.
+                  <strong className="mono">{modal.code}</strong>. Check that it matches before you
+                  send.
                 </p>
                 <button
                   className="button primary wide"
@@ -304,17 +309,17 @@ export default function Modal({
                     })
                   }
                 >
-                  {busy ? 'sending…' : 'send my identity to it'}
+                  {busy ? 'Sending…' : 'Send my key to it'}
                 </button>
                 <button className="button wide" onClick={onClose}>
-                  cancel
+                  Cancel
                 </button>
                 {error && <p className="error" role="alert">{error}</p>}
               </>
             ) : (
               <p className="muted" data-testid="link-sent">
-                Sent. Finish signing in on the other device — it&rsquo;ll ask you to confirm
-                your handle.
+                Sent. Finish signing in on the other device; it will ask you to confirm your
+                handle.
               </p>
             )}
           </>
@@ -322,9 +327,8 @@ export default function Modal({
         {modal.type === 'safety' && (
           <>
             <p className="muted">
-              Compare these digits with {modal.peer} over a channel you already trust (in
-              person, a call). If they match, nobody — including the relay — has swapped
-              keys on either of you.
+              Compare these numbers with {modal.peer} in person or on a call. If they match,
+              nobody, the server included, has swapped either of your keys.
             </p>
             <div className="safety-number" data-testid="safety-number">
               {modal.number.split(' ').map((group, i) => (
@@ -348,30 +352,32 @@ export default function Modal({
                 them, on a call or in person. If they did, compare again and the new
                 numbers should match. If they didn’t, someone has put a different key in
                 front of you. Removing {modal.peer} ends their access to this circle, but
-                it can’t change their key — and nobody can change it for them.
+                it can’t change their key, and nobody can change it for them.
               </p>
             ) : modal.verified ? (
-              <p className="fineprint muted">already marked verified on this device.</p>
+              <p className="fineprint muted">Already marked verified on this device.</p>
             ) : (
-              /* Two outcomes, equally weighted. A dialog whose only button
-                 grants trust is a consent funnel: the user who does the
-                 comparison properly and finds it wrong had nothing to press. */
+              /* Two outcomes, equally weighted (§10.4): same fill, same
+                 border, same width. It was a coral fill for "they match"
+                 beside a red outline for "they don't" — the asymmetry that
+                 reads as "here is the button, and here is the way out of
+                 pressing it". The signing ledger already does it this way. */
               <div className="safety-actions">
                 <button
-                  className="button primary"
+                  className="button"
                   data-testid="mark-verified"
                   onClick={() => onVerify(modal.server, modal.peer)}
                 >
                   <Check size={14} />
-                  they match
+                  They match
                 </button>
                 <button
-                  className="button danger"
+                  className="button"
                   data-testid="mark-mismatch"
                   onClick={() => onMismatch(modal.server, modal.peer)}
                 >
                   <AlertTriangle size={14} />
-                  they don’t match
+                  They don’t match
                 </button>
               </div>
             )}
@@ -384,12 +390,11 @@ export default function Modal({
         {modal.type === 'admin' && (
           <>
             <p className="muted">
-              Everything the relay knows: registered handles and groups. Names,
-              channels, and messages stay end-to-end encrypted — no admin can
-              read them.
+              Everything the server knows: registered handles and groups. Circle names, rooms and
+              messages stay encrypted, and no admin can read them.
             </p>
             <div className="section-label">
-              <span className="overline">users</span>
+              <span className="overline">Users</span>
               <span className="member-count">{modal.users.length}</span>
             </div>
             <ul className="member-list" data-testid="admin-users">
@@ -398,13 +403,13 @@ export default function Modal({
               ))}
             </ul>
             <div className="section-label">
-              <span className="overline">groups</span>
+              <span className="overline">Groups</span>
               <span className="member-count">{modal.groups.length}</span>
             </div>
             <p className="fineprint muted">
-              Deleting a circle here purges it from the relay — roster, messages and
-              invites — for everyone in it, whether or not anyone can still open it.
-              Their devices drop it the next time they connect. This can&rsquo;t be undone.
+              Deleting a circle here removes it from the server for everyone in it: its members,
+              messages and invites, whether or not anyone can still open it. Their devices drop it
+              the next time they connect. This can&rsquo;t be undone.
             </p>
             <ul className="member-list" data-testid="admin-groups">
               {modal.groups.map((g) => (
@@ -416,7 +421,8 @@ export default function Modal({
                   <button
                     className="ghost member-remove danger"
                     data-testid={`admin-delete-${g.group}`}
-                    title={`delete ${g.group} for everyone`}
+                    aria-label={`Delete ${modal.names?.[g.group] ?? g.group} for everyone`}
+                    title="Delete for everyone"
                     disabled={busy}
                     onClick={() => {
                       const ok = window.confirm(
@@ -425,7 +431,7 @@ export default function Modal({
                       if (ok) attempt(() => onAdminDeleteGroup(g.group));
                     }}
                   >
-                    delete
+                    Delete
                   </button>
                 </li>
               ))}
@@ -448,17 +454,17 @@ export default function Modal({
                 }}
               >
                 <label className="field">
-                  <span>topic — shown at the top of the room</span>
+                  <span>Topic</span>
                   <input
                     type="text"
                     value={topic}
                     onChange={(e) => setTopic(e.target.value)}
-                    placeholder="what this room is for"
+                    placeholder="What this room is for, shown at the top"
                     data-testid="channel-topic"
                   />
                 </label>
                 <label className="field">
-                  <span>auto-delete messages</span>
+                  <span>Auto-delete messages</span>
                   <select
                     value={retention}
                     onChange={(e) => setRetention(e.target.value)}
@@ -472,21 +478,21 @@ export default function Modal({
                   </select>
                 </label>
                 <p className="fineprint muted">
-                  This room&rsquo;s messages live on the relay, encrypted under a key
-                  everyone in the circle holds — so anyone added later can read its
-                  past, and the circle keeps it when you sign in somewhere new.
-                  Auto-delete is how far back that reaches: the relay deletes
-                  entries past it, which is the one bound on what the room key ever
-                  unlocks.
+                  This room&rsquo;s messages are stored on the server, encrypted with a key everyone
+                  in the circle holds. Anyone added later can read them, and they come back when you
+                  sign in somewhere new. Auto-delete asks the server to remove messages older than
+                  this, which limits what that key can ever unlock.
                 </p>
                 <button className="button primary wide" disabled={busy} data-testid="channel-save">
-                  {busy ? 'saving…' : 'save settings'}
+                  {busy ? 'Saving…' : 'Save'}
                 </button>
               </form>
             )}
             <div className="chan-manage">
               <label className="field">
-                <span>rename {modal.voice ? 'voice room' : 'channel'}</span>
+                {/* §11.3 — the product says "room" everywhere, so its
+                    destructive dialog does too; it said "channel" here. */}
+                <span>Rename {modal.voice ? 'voice room' : 'room'}</span>
                 <input
                   type="text"
                   value={renameTo}
@@ -507,7 +513,7 @@ export default function Modal({
                     })
                   }
                 >
-                  rename
+                  Rename
                 </button>
                 <button
                   type="button"
@@ -527,7 +533,7 @@ export default function Modal({
                     });
                   }}
                 >
-                  delete {modal.voice ? 'voice room' : 'channel'}
+                  Delete {modal.voice ? 'voice room' : 'room'}
                 </button>
               </div>
             </div>
@@ -537,14 +543,14 @@ export default function Modal({
         {modal.type === 'identity' && (
           <>
             <p className="muted">
-              This string is your whole identity — the private key that signs your messages
-              and logs you in. <strong>Anyone who has it is you.</strong>
+              This is your private key. It signs your messages and signs you in.{' '}
+              <strong>Anyone who has it can act as you.</strong>
             </p>
             <textarea className="keybox" readOnly value={modal.key ?? ''} data-testid="identity-key" />
             <div className="row">
               <button className="button primary" onClick={() => copy(modal.key)} data-testid="copy-identity">
                 {copied ? <Check size={14} /> : <Copy size={14} />}
-                {copied ? 'copied' : 'copy key'}
+                {copied ? 'Copied' : 'Copy key'}
               </button>
               <a
                 className="button"
@@ -553,13 +559,13 @@ export default function Modal({
                 data-testid="download-identity"
               >
                 <Download size={14} />
-                download
+                Download
               </a>
             </div>
             <p className="fineprint muted">
-              Unlike the recovery file, this export is NOT passphrase-protected. Paste it
-              into “restore → identity key” on another device to sign in there. It restores
-              your account, not your old messages.
+              Unlike the recovery file, this isn&rsquo;t protected by a code. Paste it into
+              &ldquo;Use a recovery file or identity key&rdquo; when signing in on another device.
+              It brings back your account and your circles.
             </p>
           </>
         )}
@@ -577,7 +583,7 @@ export default function Modal({
                 }}
               >
                 <label className="field">
-                  <span>circle name</span>
+                  <span>Circle name</span>
                   <input
                     type="text"
                     value={serverName}
@@ -590,16 +596,16 @@ export default function Modal({
                   disabled={busy || !serverName.trim() || serverName.trim() === modal.name}
                   data-testid="circle-rename"
                 >
-                  rename circle
+                  Rename circle
                 </button>
               </form>
                 <fieldset className="glyph-picker">
                   {/* A real fieldset/legend, not a styled div — the four
                       buttons are one choice and a screen reader has to hear
                       the question before the options (§8.7). */}
-                  <legend>circle face</legend>
+                  <legend>Circle face</legend>
                   <p className="fineprint muted">
-                    The colour is the circle&rsquo;s own and can&rsquo;t be changed — it&rsquo;s
+                    The colour is the circle&rsquo;s own and can&rsquo;t be changed: it&rsquo;s
                     how members pick it out of a list. Everyone sees the face you choose.
                   </p>
                   <div className="glyph-options">
@@ -633,16 +639,15 @@ export default function Modal({
                     not in a separate "advanced" place. This number is the
                     circle's answer to the one irreversible thing it can do,
                     and it belongs beside its name and its face. */}
-                <div className="divider">letting people in</div>
+                <div className="divider">Letting people in</div>
                 <p className="fineprint muted">
-                  Anyone here can put a name forward. It takes this many signatures
-                  before they are added — and one is not a choice, it is this switched
-                  off, so the lowest a circle of {memberCount} can set is{' '}
-                  {memberCount === 1 ? 1 : 2}.
+                  Anyone here can propose someone. They are added once this many members have
+                  signed. One would mean no check at all, so the lowest a circle of {memberCount}{' '}
+                  can set is {memberCount === 1 ? 1 : 2}.
                 </p>
                 <div className="threshold-picker">
                   <label className="field">
-                    <span>signatures needed</span>
+                    <span>Signatures needed</span>
                     <input
                       type="number"
                       min={memberCount === 1 ? 1 : 2}
@@ -672,7 +677,7 @@ export default function Modal({
                       })
                     }
                   >
-                    save
+                    Save
                   </button>
                 </div>
               </>
@@ -682,11 +687,11 @@ export default function Modal({
               </p>
             )}
 
-            <div className="divider">leaving</div>
+            <div className="divider">Leaving</div>
             <p className="fineprint muted">
-              Leaving removes this circle from your account, not just from this device —
-              your other devices drop it when they next reconnect. You&rsquo;ll need a new
-              invite to come back; the others keep the circle.
+              Leaving removes this circle from your account, not just this device. Your other
+              devices drop it when they next connect. You&rsquo;ll need a new invite to come back;
+              the others keep the circle.
             </p>
             <button
               className="button danger"
@@ -703,15 +708,15 @@ export default function Modal({
                 });
               }}
             >
-              leave circle
+              Leave circle
             </button>
 
             {modal.canManage && (
               <>
-                <div className="divider">deleting the circle</div>
+                <div className="divider">Deleting the circle</div>
                 <p className="fineprint muted">
-                  Deleting removes every member (their access is re-keyed away) and purges
-                  the circle from the relay. This can&rsquo;t be undone.
+                  Deleting removes every member, re-keys their access away and removes the circle
+                  from the server. This can&rsquo;t be undone.
                 </p>
                 <label className="check">
                   <input
@@ -733,7 +738,7 @@ export default function Modal({
                     })
                   }
                 >
-                  {busy ? 'deleting…' : 'delete circle'}
+                  {busy ? 'Deleting…' : 'Delete circle'}
                 </button>
               </>
             )}
@@ -748,16 +753,16 @@ export default function Modal({
             </p>
             {unsecured ? (
               <p className="error" role="alert" data-testid="logout-unsecured-warning">
-                This account isn&rsquo;t secured yet — there is no passkey, password, or
-                exported key, so this browser holds the <strong>only</strong> copy of your
-                identity. Log out now and there is nothing left to sign back in with. Secure
-                the account first and logging out costs you nothing.
+                This account isn&rsquo;t secured yet. There is no passkey, password or exported key,
+                so this browser holds the <strong>only</strong> copy of your key, and logging out
+                now leaves nothing to sign back in with. Secure the account first and logging out
+                costs you nothing.
               </p>
             ) : (
               <p className="fineprint muted">
-                You&rsquo;ll need your passkey, password, or recovery/identity key to sign
-                back in. Your circles and their messages do come back — they are kept on the
-                relay, sealed. Sending doesn&rsquo;t: ask to be re-added for that.
+                You&rsquo;ll need your passkey, password, or recovery or identity key to sign back
+                in. Your circles and their messages come back, because they are stored encrypted on
+                the server. To send again, ask to be re-added.
               </p>
             )}
             <div className="row">
@@ -768,16 +773,16 @@ export default function Modal({
                 onClick={() => attempt(onLogout)}
               >
                 <LogOut size={14} />
-                {busy ? 'logging out…' : 'log out'}
+                {busy ? 'Logging out…' : 'Log out'}
               </button>
               <button className="button" data-testid="logout-cancel" onClick={onClose}>
-                cancel
+                Cancel
               </button>
             </div>
             {error && <p className="error" role="alert">{error}</p>}
           </>
         )}
-        <button className="ghost close" onClick={onClose} data-testid="close-modal" title="close">
+        <button className="ghost close" onClick={onClose} data-testid="close-modal" aria-label="Close" title="Close">
           <X size={14} />
         </button>
       </div>

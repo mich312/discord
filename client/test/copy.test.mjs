@@ -99,6 +99,35 @@ test('no fear vocabulary reaches user-facing copy', () => {
   assert.deepEqual(hits, [], `§11.6 — state the risk once, calmly, beside its fix:\n${hits.join('\n')}`);
 });
 
+// The em-dash pivot — "X — and the interface never pretends otherwise" — was
+// the commonest tic in the product's copy, and the one that most made it read
+// as generated: about 130 of them in JSX alone. Two sentences, or a comma,
+// say the same thing. What remains is user content quoted in examples and a
+// handful of attributions; it is a ceiling, and it only goes down.
+const EM_DASH_CEILING = 0;
+
+// The two dev-only boards are mock conversations; a dash in "trailer leaves
+// at 6am — pack the diffuser" is a member's message, not the product's voice.
+const MOCK_PAGES = new Set(['preview.jsx', 'prototypes.jsx']);
+
+function emDashes() {
+  const hits = [];
+  for (const f of sources().filter((p) => !MOCK_PAGES.has(p.slice(root.length + 1)))) {
+    for (const [line, text] of copyIn(readFileSync(f, 'utf8'))) {
+      if (text.includes('\u2014')) hits.push(`${f.slice(root.length + 1)}:${line} ${text.trim().slice(0, 80)}`);
+    }
+  }
+  return hits;
+}
+
+test('em-dashes in user-facing copy do not grow past today’s count', () => {
+  const hits = emDashes();
+  assert.ok(
+    hits.length <= EM_DASH_CEILING,
+    `${hits.length} em-dashes in copy, ceiling ${EM_DASH_CEILING}. Use two sentences or a comma:\n${hits.join('\n')}`
+  );
+});
+
 test('the lint reads copy and not code', () => {
   // The check is only worth having if it is narrow enough to stay switched
   // on, so its own scope is asserted: an identifier is not a sentence, and a

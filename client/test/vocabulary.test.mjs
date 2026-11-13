@@ -86,7 +86,6 @@ const ORPHANS = new Set([
   'muted-badge',
   'now',
   'outgoing',
-  'overview-pane',
   'ringing',
   'signin',
   'vp-name',

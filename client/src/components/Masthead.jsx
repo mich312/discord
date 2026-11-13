@@ -1,5 +1,6 @@
 import React from 'react';
-import { QuorumGlyph, LinkGlyph, CommandGlyph, Sun, Moon } from './icons.jsx';
+import { QuorumGlyph, LinkGlyph, Search, Sun, Moon, Wave, Mic, MicOff } from './icons.jsx';
+import { describeCallLength } from '../lib/overview.js';
 import Seal from './Seal.jsx';
 import CircleMarker from './CircleMarker.jsx';
 import { cx } from '../lib/cx.js';
@@ -13,6 +14,14 @@ import { cx } from '../lib/cx.js';
 // channel column; the other opened the roster. All three are gone as panels:
 // rooms are the strip under this bar at every width, circles are a screen,
 // and the circle's people are the first thing on its board.
+/** The connection, in words. Below 821px the word is the only thing the
+    phone fascia has room for, so it is short. */
+const CONNECTION_LABEL = {
+  online: 'Connected',
+  connecting: 'Connecting…',
+  offline: 'Offline',
+};
+
 export default function Masthead({
   server,
   channel,
@@ -30,6 +39,11 @@ export default function Masthead({
   onTheme,
   me,
   onSettings,
+  // A call running somewhere the screen is not: on a phone it rides here as
+  // a pill instead of in the call bar (CSS decides which shows).
+  callPill = null,
+  muted = false,
+  onOpenCall,
 }) {
   return (
     <header className="masthead">
@@ -42,8 +56,8 @@ export default function Masthead({
         type="button"
         className={cx('masthead-brand', server && 'compact')}
         data-testid="masthead-home"
-        aria-label="all your circles"
-        title="all your circles"
+        aria-label="All your circles"
+        title="All your circles"
         aria-current={server ? undefined : 'page'}
         onClick={onCircles}
       >
@@ -64,38 +78,56 @@ export default function Masthead({
         />
       )}
       <div className="masthead-actions">
-        {server && canInvite && (
-          <button className="button" data-testid="create-invite" title="create an invite link" onClick={onInvite}>
-            <LinkGlyph />
-            invite
+        {callPill && (
+          <button
+            className={cx('masthead-call', muted && 'muted')}
+            data-testid="masthead-call"
+            aria-label={`In a call in ${callPill.channel}, mic ${muted ? 'off' : 'on'}. Open call`}
+            onClick={onOpenCall}
+          >
+            <Wave size={14} className="masthead-call-wave" />
+            {muted ? <MicOff size={14} className="masthead-call-mic" /> : <Mic size={14} className="masthead-call-mic" />}
+            <span>{describeCallLength(callPill.since, now)}</span>
           </button>
         )}
-        <button className="palette-hint" title="command palette" onClick={onPalette}>
-          <CommandGlyph />
-          <span>go to…</span>
+        {server && canInvite && (
+          <button className="button" data-testid="create-invite" onClick={onInvite}>
+            <LinkGlyph size={14} />
+            Invite
+          </button>
+        )}
+        <button
+          className="palette-hint"
+          data-testid="palette-hint"
+          aria-label="Search or jump to (⌘K)"
+          onClick={onPalette}
+        >
+          <Search size={14} />
+          <span>Search or jump to</span>
           <kbd>⌘K</kbd>
         </button>
+        {/* On a phone this lives in settings (CSS hides it below 821px —
+            a preference, not a status, so §9.5 does not apply). */}
         <button
-          className="icon-btn"
-          title={theme === 'paper' ? 'switch to carbon (dark)' : 'switch to paper (light)'}
+          className="icon-btn theme-btn"
+          aria-label={theme === 'paper' ? 'Switch to dark theme' : 'Switch to light theme'}
+          title={theme === 'paper' ? 'Switch to dark theme' : 'Switch to light theme'}
           onClick={onTheme}
         >
-          {theme === 'paper' ? <Moon /> : <Sun />}
+          {theme === 'paper' ? <Moon size={18} /> : <Sun size={18} />}
         </button>
         {/* Going offline mid-conversation produced no announcement in any
             viewport, and below 820px `.conn-label` is hidden, which left a 7px
             coloured dot as the entire indicator — state carried by hue alone.
             role="status" announces the change; the dot carries a shape as well
             as a colour so it survives being unreadable. */}
-        <span
-          className="conn-chip"
-          role="status"
-          aria-live="polite"
-          title={`relay: ${connection}`}
-        >
+        {/* §1.2 — a socket is not a key. The dot used to be green when
+            online, the same green as a verified safety number, and coral
+            while connecting. It is neutral while things are fine and only
+            takes a colour, with its word, when they are not. */}
+        <span className={cx('conn-chip', connection)} role="status" aria-live="polite">
           <span className={`conn-dot ${connection}`} data-testid="conn-dot" aria-hidden="true" />
-          <span className="conn-label">relay·{connection}</span>
-          <span className="sr-only">relay {connection}</span>
+          <span className="conn-label">{CONNECTION_LABEL[connection] ?? connection}</span>
         </span>
         {/* Signed in as. The sidebar's self-card carried this, and it is the
             one thing on screen that says which account these keys belong to
@@ -106,7 +138,7 @@ export default function Masthead({
           <button
             className="self-chip"
             data-testid="open-settings"
-            title={`${me} — settings`}
+            aria-label={`${me}: settings`}
             onClick={onSettings}
           >
             <Seal name={me} size={22} />

@@ -12,7 +12,7 @@
 // to zero and then replaced by an assertion like that one.
 import test from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync } from 'node:fs';
+import { readFileSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 const raw = readFileSync(fileURLToPath(new URL('../src/styles.css', import.meta.url)), 'utf8');
@@ -50,7 +50,10 @@ function report(hits, ceiling, rule) {
 // 499 literal px spacing declarations across 30-odd distinct values, of
 // which the top six cover two thirds. Writing the scale down is a separate
 // change from stopping the bleeding; this is the second one.
-const SPACING_CEILING = 499;
+// Walked down from 499 when the scale (--s-1 … --s-8) was written into the
+// token block and the cleanup pass rebuilt the board, roster and call stage
+// on it.
+const SPACING_CEILING = 449;
 const SPACING = /^(padding|margin|gap|row-gap|column-gap|inset)(-(top|right|bottom|left|inline|block))?$/;
 
 test('spacing literals do not grow past today’s count', () => {
@@ -63,7 +66,8 @@ test('spacing literals do not grow past today’s count', () => {
 // 13px is the most-used size in the product and is not a token — which is
 // most of this number. A `--text-*` step for it is the fix, and it is a
 // rename across ~19 sites rather than a lint.
-const TYPE_CEILING = 34;
+// Was 34. --text-ui (13px) is now a step, and the cleanup moved its sites.
+const TYPE_CEILING = 10;
 
 test('font-size literals do not grow past today’s count', () => {
   const hits = declarations.filter(
@@ -85,7 +89,7 @@ test('no font size is a decimal', () => {
 
 test('the font shorthand’s size slot does not grow past today’s count', () => {
   const hits = declarations.filter(([p, v]) => p === 'font' && /\b\d+(\.\d+)?px\b/.test(v));
-  report(hits, 8, '§2.7 font shorthand');
+  report(hits, 2, '§2.7 font shorthand');
 });
 
 test('nothing renders below the 10px floor', () => {
@@ -104,7 +108,7 @@ test('nothing renders below the 10px floor', () => {
 // Mostly keyframe durations, which are a different question from the
 // transition tiers --fast/--slow: a shimmer is not a state change. The
 // number is here so a sixth component choosing .12s is visible.
-const MOTION_CEILING = 25;
+const MOTION_CEILING = 23;
 
 test('duration literals do not grow past today’s count', () => {
   const hits = declarations.filter(
@@ -137,4 +141,56 @@ test('the layering scale stays ordered', () => {
   for (let i = 1; i < values.length; i++) {
     assert.ok(values[i] > values[i - 1], `--z-${order[i]} must sit above --z-${order[i - 1]}`);
   }
+});
+
+/* ----------------------------------------------------- 4.4 the capitals -- */
+
+test('nothing is set in transformed capitals', () => {
+  // §4.4 kept all-caps mono for machine data, and the product spent it on
+  // every label, tab, badge, warning and button instead — 41 uppercase
+  // transforms, which is most of why it read as decoration. Sentence case is
+  // typed, not transformed, so this is asserted at zero rather than against
+  // a ceiling: a code or an id that genuinely is capitals is written that way.
+  const hits = declarations.filter(([p, v]) => p === 'text-transform' && v === 'uppercase');
+  assert.deepEqual(hits, [], '§4.4 — write sentence case; do not transform it');
+});
+
+/* ------------------------------------------------- 1.2 green is not a socket -- */
+
+test('the connection dot never borrows green', () => {
+  // §1.2 names this case: a websocket rendered in the green of a verified
+  // key teaches "green = safe" and then spends it on a socket. The dot was
+  // var(--ok) online and var(--accent) while connecting.
+  const rules = [...css.matchAll(/([^{}]*\.conn-dot[^{}]*)\{([^}]*)\}/g)];
+  const bad = rules.filter(([, , body]) => /var\(--(ok|accent)\b/.test(body)).map(([, sel]) => sel.trim());
+  assert.deepEqual(bad, [], '§1.1, §1.2 — connection state is neutral, or red when broken');
+});
+
+/* ----------------------------------------------------------- 6.1 icons -- */
+
+test('icons render at 14, 18 or 24 only', () => {
+  // §6.1. Its cautionary example said "seventeen icon sizes were in use", and
+  // at the time of the cleanup there were still seventeen, with 106 of 175
+  // icon call sites off the scale. Avatars (Seal), circle marks and the
+  // brand glyph are sized freely — they are identity, not icons.
+  const dir = fileURLToPath(new URL('../src/components/', import.meta.url));
+  const iconSrc = readFileSync(`${dir}icons.jsx`, 'utf8');
+  const icons = [...iconSrc.matchAll(/^export const (\w+)/gm)]
+    .map((m) => m[1])
+    .filter((n) => n !== 'QuorumGlyph');
+  const files = [
+    ...readdirSync(dir).filter((f) => f.endsWith('.jsx')).map((f) => `${dir}${f}`),
+    fileURLToPath(new URL('../src/App.jsx', import.meta.url)),
+  ];
+  const off = [];
+  for (const f of files) {
+    const src = readFileSync(f, 'utf8');
+    for (const m of src.matchAll(new RegExp(`<(${icons.join('|')})\\b[^>]*?\\bsize=\\{(\\d+)\\}`, 'g'))) {
+      if (![14, 18, 24].includes(Number(m[2]))) {
+        const line = src.slice(0, m.index).split('\n').length;
+        off.push(`${f.split('/src/')[1]}:${line} <${m[1]} size={${m[2]}}>`);
+      }
+    }
+  }
+  assert.deepEqual(off, [], `§6.1 — 14, 18 or 24:\n${off.join('\n')}`);
 });

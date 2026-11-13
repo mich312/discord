@@ -1,15 +1,18 @@
 import React from 'react';
 
-// Hand-drawn 16px stroke icon set — no icon-font, no CDN, currentColor
-// throughout so every glyph inherits the text register around it.
-const Svg = ({ size = 16, children, ...rest }) => (
+// Hand-drawn stroke icon set on a 16-unit grid — no icon-font, no CDN,
+// currentColor throughout so every glyph inherits the text register around
+// it. §6.1: rendered at 14, 18 or 24px only (scale.test holds the call
+// sites to that), with the 14px size drawn a touch heavier so a small
+// glyph does not thin out beside 13px text.
+const Svg = ({ size = 14, children, ...rest }) => (
   <svg
     width={size}
     height={size}
     viewBox="0 0 16 16"
     fill="none"
     stroke="currentColor"
-    strokeWidth="1.4"
+    strokeWidth={size <= 14 ? 1.6 : 1.4}
     strokeLinecap="round"
     strokeLinejoin="round"
     aria-hidden="true"
@@ -261,6 +264,44 @@ export const Trash = (p) => (
 export const ArrowRight = (p) => (
   <Svg {...p}>
     <path d="M2.5 8h11M9.5 4l4 4-4 4" />
+  </Svg>
+);
+export const Star = ({ filled = false, ...p }) => (
+  <Svg {...p} fill={filled ? 'currentColor' : 'none'}>
+    <path d="M8 2l1.8 3.7 4 .6-2.9 2.8.7 4L8 11.2 4.4 13.1l.7-4L2.2 6.3l4-.6z" />
+  </Svg>
+);
+export const Search = (p) => (
+  <Svg {...p}>
+    <circle cx="7" cy="7" r="4.5" />
+    <path d="M13.5 13.5l-3.3-3.3" />
+  </Svg>
+);
+export const ArrowLeft = (p) => (
+  <Svg {...p}>
+    <path d="M13.5 8h-11M6.5 4l-4 4 4 4" />
+  </Svg>
+);
+export const ArrowUp = (p) => (
+  <Svg {...p}>
+    <path d="M8 13.5v-11M4 6.5l4-4 4 4" />
+  </Svg>
+);
+export const ChevronDown = (p) => (
+  <Svg {...p}>
+    <path d="M4 6l4 4 4-4" />
+  </Svg>
+);
+export const Minimize = (p) => (
+  <Svg {...p}>
+    <path d="M2.5 9.5h4v4M13.5 6.5h-4v-4M9.5 6.5l4-4M2.5 13.5l4-4" />
+  </Svg>
+);
+export const Server = (p) => (
+  <Svg {...p}>
+    <rect x="2.5" y="2.5" width="11" height="4.5" rx="1" />
+    <rect x="2.5" y="9" width="11" height="4.5" rx="1" />
+    <path d="M5 4.75h.01M5 11.25h.01" />
   </Svg>
 );
 

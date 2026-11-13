@@ -496,7 +496,7 @@ function PersonRow({ p }) {
     <li className="p-person">
       <Seal name={p.name} size={22} />
       <span className="p-person-name">{p.name}</span>
-      {p.tag === 'you' && <span className="badge-you">you</span>}
+      {p.tag === 'you' && <span className="badge">You</span>}
       {p.tag === 'checked' && (
         <span className="p-person-state ok">
           <Check size={11} /> checked {p.when}

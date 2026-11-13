@@ -1,8 +1,8 @@
 import React, { useEffect, useRef, useState } from 'react';
 import Seal from './Seal.jsx';
 import VoiceMeter from './VoiceMeter.jsx';
-import { activitySrc, freshPresence, gameHost, isSameOriginSrc } from '../lib/games.js';
-import { X, Lock, External, Gamepad, Wave, Users, LinkGlyph } from './icons.jsx';
+import { activitySrc, freshPresence, gameHostNote, isSameOriginSrc } from '../lib/games.js';
+import { ArrowLeft, External, Gamepad, Wave, Users, LinkGlyph, ArrowUp } from './icons.jsx';
 import { cx } from '../lib/cx.js';
 
 /** Sandbox tokens for a game frame.
@@ -61,9 +61,11 @@ export default function GameStage({
   return (
     <main className="game-stage" data-testid="game-stage">
       <header className="pane-head stage-head game-stage-head">
+        {/* §7.2 and §6.2 — a back control names where it goes and points
+            that way. It was an X labelled "back". */}
         <button className="ghost game-back" data-testid="game-back" onClick={onClose}>
-          <X size={13} />
-          <span>back</span>
+          <ArrowLeft size={18} />
+          <span>#{channel}</span>
         </button>
         <span className="room-name">
           <span className="glyph">
@@ -71,14 +73,15 @@ export default function GameStage({
           </span>
           {game.name}
         </span>
-        <span className="sealed-note game-host-note" title={game.url}>
-          runs on {gameHost(game)} — its host sees your connection, not your chat
+        {/* The one honesty line on this surface (§10.11). The dock used to
+            repeat it in capitals at the bottom; it is said here, once. */}
+        <span className="sealed-note game-host-note" data-testid="game-host-note">
+          {gameHostNote(game)}
         </span>
         <div className="stage-actions">
           {canSend && onInviteSeat && (
             <button
               className="call-btn invite-seat"
-              title="drop a join card into the room"
               data-testid="game-invite-seat"
               onClick={() => {
                 onInviteSeat();
@@ -86,17 +89,16 @@ export default function GameStage({
                 setTimeout(() => setInvited(false), 1800);
               }}
             >
-              <LinkGlyph size={13} /> {invited ? 'card sent' : 'invite seat'}
+              <LinkGlyph size={14} /> {invited ? 'Invite sent' : 'Invite to game'}
             </button>
           )}
           <a
             className="call-btn"
-            title="open in its own tab"
             href={game.url}
             target="_blank"
             rel="noreferrer noopener"
           >
-            <External size={13} /> open in tab
+            <External size={14} /> Open in new tab
           </a>
         </div>
       </header>
@@ -136,7 +138,7 @@ export default function GameStage({
               data-testid="dock-tab-crew"
               onClick={() => setTab('crew')}
             >
-              <Users size={12} /> members · {server.members.length}
+              <Users size={14} /> Members · {server.members.length}
             </button>
           </div>
           {tab === 'crew' ? (
@@ -148,9 +150,9 @@ export default function GameStage({
                 return (
                   <div key={m} className={cx('dock-crew-row', speaking && 'speaking')}>
                     <Seal name={m} size={22} title={m} />
-                    <span className="dock-crew-name">{m === me ? 'you' : m}</span>
+                    <span className="dock-crew-name">{m}{m === me && <span className="muted"> (you)</span>}</span>
                     <span className="dock-crew-state">
-                      {inThisCall ? 'in the call' : p ? `playing ${p.name}` : ''}
+                      {inThisCall ? 'In the call' : p ? `Playing ${p.name}` : ''}
                     </span>
                   </div>
                 );
@@ -173,7 +175,7 @@ export default function GameStage({
                   <Seal name={m.sender} size={18} title={m.sender} />
                   <span className={cx('sender', m.sender === me && 'self')}>{m.sender}</span>
                   <span className="text">
-                    {m.file ? `sent a file: ${m.file.name}` : m.game ? `opened ${m.game.name}` : m.text}
+                    {m.file ? `sent a file: ${m.file.name}` : m.game ? `started ${m.game.name}` : m.text}
                   </span>
                   <time>{timeOf(m.ts)}</time>
                 </div>
@@ -197,29 +199,35 @@ export default function GameStage({
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
                 placeholder={`Message #${channel}`}
+                aria-label={`Message #${channel}`}
                 data-testid="game-composer"
               />
+              <button type="submit" className="button primary send" disabled={!draft.trim()}>
+                <ArrowUp size={14} />
+                Send
+              </button>
             </form>
           )}
           {inCallHere ? (
             <div className="game-voice-strip" data-testid="game-voice-strip">
               <div className="game-voice-head">
-                <span className="overline live">
-                  <Wave size={11} /> {voice.active.channel} — {participants.length} live
+                <span className="game-voice-title">
+                  <Wave size={14} /> {voice.active.channel} · {participants.length}
+                  <span className="sr-only"> in call</span>
                 </span>
                 <span className="game-voice-ctl">
                   {onToggleMute && !voice.listenOnly && (
                     <button
-                      className={cx('voice-join', voice.muted && 'muted-on')}
-                      title={voice.muted ? 'unmute your mic' : 'mute your mic'}
+                      className={cx('button', voice.muted && 'muted-on')}
+                      aria-pressed={voice.muted}
                       data-testid="game-voice-mute"
                       onClick={onToggleMute}
                     >
-                      {voice.muted ? 'unmute' : 'mute'}
+                      {voice.muted ? 'Unmute' : 'Mute'}
                     </button>
                   )}
-                  <button className="voice-join leave" data-testid="game-voice-leave" onClick={onVoiceLeave}>
-                    leave
+                  <button className="button danger" data-testid="game-voice-leave" onClick={onVoiceLeave}>
+                    Leave call
                   </button>
                 </span>
               </div>
@@ -238,18 +246,14 @@ export default function GameStage({
           ) : (
             <div className="game-voice-strip empty">
               <button
-                className="voice-join"
+                className="button"
                 data-testid="game-voice-join"
                 onClick={() => onVoiceJoin(firstVoiceRoom)}
               >
-                <Wave size={12} /> join {firstVoiceRoom}
+                <Wave size={14} /> Join {firstVoiceRoom}
               </button>
             </div>
           )}
-          <div className="composer-note">
-            <Lock size={11} />
-            Chat and call are encrypted — the game isn&rsquo;t
-          </div>
         </aside>
       </div>
     </main>

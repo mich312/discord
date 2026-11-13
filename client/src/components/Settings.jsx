@@ -118,8 +118,8 @@ export default function Settings({
   }
 
   const dspOptions = [
-    ['noiseSuppression', 'Noise suppression', 'Gate out steady background noise — keyboards, fans, hum.'],
-    ['echoCancellation', 'Echo cancellation', 'Stop your speakers bleeding back into your mic on open speakers.'],
+    ['noiseSuppression', 'Noise suppression', 'Filters steady background noise: keyboards, fans, hum.'],
+    ['echoCancellation', 'Echo cancellation', 'Stops your speakers bleeding back into your mic.'],
     ['autoGainControl', 'Auto gain', 'Even out your level so you are not too quiet or clipping.'],
   ];
 
@@ -136,14 +136,14 @@ export default function Settings({
         <div className="dialog-head">
           <span className="dialog-glyph"><ShieldCheck /></span>
           <h1>Settings</h1>
-          <button className="icon-btn dialog-close" data-testid="settings-close" title="close" onClick={onClose}>
-            <X size={16} />
+          <button className="icon-btn dialog-close" data-testid="settings-close" aria-label="Close" title="Close" onClick={onClose}>
+            <X size={18} />
           </button>
         </div>
 
         {/* Profile */}
         <section className="settings-section">
-          <h2 className="settings-label">profile</h2>
+          <h2 className="settings-label">Profile</h2>
           <div className="settings-profile">
             <Seal name={me} size={40} title={me} />
             <div>
@@ -157,9 +157,9 @@ export default function Settings({
 
         {/* Notifications */}
         <section className="settings-section">
-          <h2 className="settings-label">notifications</h2>
+          <h2 className="settings-label">Notifications</h2>
           <div className="settings-row">
-            <span className="settings-row-glyph"><Bell size={15} /></span>
+            <span className="settings-row-glyph"><Bell size={14} /></span>
             <div className="settings-row-body">
               <div>Push notifications</div>
               <div className="fineprint muted">
@@ -183,10 +183,10 @@ export default function Settings({
             >
               {perm === 'granted' ? (
                 <>
-                  <Check size={13} /> re-register
+                  <Check size={14} /> Re-register
                 </>
               ) : (
-                'enable'
+                'Turn on'
               )}
             </button>
           </div>
@@ -194,9 +194,9 @@ export default function Settings({
 
         {/* Appearance */}
         <section className="settings-section">
-          <h2 className="settings-label">appearance</h2>
+          <h2 className="settings-label">Appearance</h2>
           <div className="settings-row">
-            <span className="settings-row-glyph">{theme === 'paper' ? <Sun size={15} /> : <Moon size={15} />}</span>
+            <span className="settings-row-glyph">{theme === 'paper' ? <Sun size={14} /> : <Moon size={14} />}</span>
             <div className="settings-row-body">
               <div>Theme</div>
               {/* Say which of the two states you are in. Without this, a
@@ -204,37 +204,37 @@ export default function Settings({
                   and there is no way to tell that the theme is about to
                   change by itself at sunset. */}
               <div className="fineprint muted">
-                {theme === 'paper' ? 'paper (light)' : 'carbon (dark)'}
+                {theme === 'paper' ? 'Light' : 'Dark'}
                 {themePref === null ? ' · following your system' : ''}
               </div>
             </div>
             {themePref !== null && (
               <button className="button ghost" data-testid="settings-theme-system" onClick={onSystemTheme}>
-                use system
+                Use system
               </button>
             )}
             <button className="button" data-testid="settings-theme" onClick={onTheme}>
-              switch to {theme === 'paper' ? 'carbon' : 'paper'}
+              Switch to {theme === 'paper' ? 'dark' : 'light'}
             </button>
           </div>
         </section>
 
         {/* Audio devices */}
         <section className="settings-section">
-          <h2 className="settings-label">audio</h2>
+          <h2 className="settings-label">Audio</h2>
           {needsMic && (
             <div className="settings-row">
-              <span className="settings-row-glyph"><Wave size={15} /></span>
+              <span className="settings-row-glyph"><Wave size={14} /></span>
               <div className="settings-row-body fineprint muted">
                 Allow microphone access to name your devices.
               </div>
               <button className="button" data-testid="settings-grant-mic" onClick={grantMic}>
-                allow
+                Allow
               </button>
             </div>
           )}
           <label className="settings-field">
-            <span>microphone</span>
+            <span>Microphone</span>
             <select value={inputId} onChange={(e) => chooseInput(e.target.value)} data-testid="settings-mic">
               <option value="">System default</option>
               {inputs.map((d) => (
@@ -245,7 +245,7 @@ export default function Settings({
             </select>
           </label>
           <label className="settings-field">
-            <span>output</span>
+            <span>Output</span>
             {sinkSupported ? (
               <select value={outputId} onChange={(e) => chooseOutput(e.target.value)} data-testid="settings-output">
                 <option value="">System default</option>
@@ -257,16 +257,16 @@ export default function Settings({
               </select>
             ) : (
               <span className="fineprint muted">
-                Output selection isn’t supported in this browser — it follows the system default.
+                This browser can&rsquo;t pick an output, so sound follows the system default.
               </span>
             )}
           </label>
           <p className="fineprint muted">
-            Output changes apply immediately; a new microphone switches live if you’re in a call.
+            Output changes apply at once, and a new microphone switches live if you&rsquo;re in a call.
           </p>
 
           <div className="settings-dsp">
-            <div className="settings-dsp-head">mic processing</div>
+            <div className="settings-dsp-head">Mic processing</div>
             {dspOptions.map(([key, label, hint]) => (
               <label className="settings-toggle" key={key}>
                 <input
@@ -282,8 +282,8 @@ export default function Settings({
               </label>
             ))}
             <p className="fineprint muted">
-              On by default. Turn them off for raw capture — good hardware, or sharing music where
-              the gate would clamp the quiet parts. Changes apply to a live call at once.
+              On by default. Turn them off for raw capture, for example with good hardware or when
+              sharing music. Changes apply to a live call at once.
             </p>
           </div>
 
@@ -291,7 +291,7 @@ export default function Settings({
               media is peer-to-peer, so everyone in a call learns everyone
               else's IP address. */}
           <div className="settings-dsp">
-            <div className="settings-dsp-head">call privacy</div>
+            <div className="settings-dsp-head">Call privacy</div>
             <label className="settings-toggle">
               <input
                 type="checkbox"
@@ -300,11 +300,11 @@ export default function Settings({
                 data-testid="settings-relay-only"
               />
               <span className="settings-toggle-body">
-                <span className="settings-toggle-label">hide my IP address from call peers</span>
+                <span className="settings-toggle-label">Hide my IP address from people in a call</span>
                 <span className="fineprint muted">
                   Calls are peer-to-peer, so by default everyone in a call can see your address.
-                  This routes your media through the relay’s TURN server instead. It hides{' '}
-                  <em>yours</em> — it does not hide theirs unless they turn this on too.
+                  This routes your audio and video through the server&rsquo;s relay instead. It hides{' '}
+                  <em>your</em> address; theirs stays visible unless they turn this on too.
                 </span>
               </span>
             </label>
@@ -313,8 +313,8 @@ export default function Settings({
               // privacy switch that quietly does nothing is worse than one
               // that visibly does not work.
               <p className="fineprint warn" data-testid="settings-relay-no-turn">
-                This relay has no TURN server configured, so calls will not connect while this is
-                on. Ask the operator to set <code>TURN_URLS</code>, or turn this off.
+                This server has no call relay set up, so calls won&rsquo;t connect while this is on.
+                Ask whoever runs it to set <code>TURN_URLS</code>, or turn this off.
               </p>
             )}
             <p className="fineprint muted">
@@ -323,7 +323,7 @@ export default function Settings({
           </div>
 
           <div className="settings-dsp">
-            <div className="settings-dsp-head">sounds</div>
+            <div className="settings-dsp-head">Sounds</div>
             <label className="settings-toggle">
               <input
                 type="checkbox"
@@ -332,7 +332,7 @@ export default function Settings({
                 data-testid="settings-call-sounds"
               />
               <span className="settings-toggle-body">
-                <span className="settings-toggle-label">Join &amp; leave chimes</span>
+                <span className="settings-toggle-label">Join and leave chimes</span>
                 <span className="fineprint muted">
                   A soft tone when someone enters or leaves the call you’re in.
                 </span>
@@ -343,18 +343,18 @@ export default function Settings({
 
         {/* Account */}
         <section className="settings-section">
-          <h2 className="settings-label">account &amp; identity</h2>
+          <h2 className="settings-label">Account</h2>
           <div className="settings-actions">
             <button className="button" data-testid="settings-identity" onClick={onShowIdentity}>
-              <Key size={14} /> identity key
+              <Key size={14} /> Identity key
             </button>
             <button className="button" data-testid="settings-secure" onClick={onSecure}>
-              <ShieldCheck size={14} /> {secured ? 'account secured' : 'secure account'}
+              <ShieldCheck size={14} /> {secured ? 'Account secured' : 'Secure account'}
             </button>
           </div>
           <p className="fineprint muted">
-            Your identity lives only on your devices. Export the key or add a passkey/password
-            so you can sign in elsewhere — the relay can never recover it for you.
+            Your key lives only on your devices, and the server can&rsquo;t recover it. Export it, or
+            add a passkey or password, so you can sign in elsewhere.
           </p>
         </section>
 
@@ -363,9 +363,9 @@ export default function Settings({
             size or a weight. It used to sit 8px from the settings gear in
             the sidebar, both icon-only, both 14px. */}
         <section className="settings-section">
-          <h2 className="settings-label">this device</h2>
+          <h2 className="settings-label">This device</h2>
           <button className="button danger" data-testid="logout" onClick={onLogout}>
-            <LogOut size={14} /> log out of this device
+            <LogOut size={14} /> Log out of this device
           </button>
         </section>
       </div>

@@ -326,7 +326,7 @@ export class AccountService {
       auth_key: b64.enc(keys.slice(0, 32)),
     });
     return decryptBlob(keys.slice(32), b64.dec(reply.wrapped)).catch(() => {
-      throw new Error('could not decrypt vault — corrupt data');
+      throw new Error('Couldn’t open the saved backup. It may be damaged.');
     });
   }
 
@@ -351,7 +351,7 @@ export class AccountService {
       assertion: serializeAssertion(assertion),
     });
     return decryptBlob(secret, b64.dec(reply.wrapped)).catch(() => {
-      throw new Error('could not decrypt vault — corrupt data');
+      throw new Error('Couldn’t open the saved backup. It may be damaged.');
     });
   }
 
@@ -375,7 +375,7 @@ export class AccountService {
     });
     const secret = prfSecret(assertion);
     if (!secret) {
-      throw new Error('this passkey has no PRF secret — sign in with your handle instead');
+      throw new Error('This passkey can’t unlock your account on its own. Sign in with your handle instead.');
     }
     const reply = await this.fetch('/passkey/discover/login', {
       session,

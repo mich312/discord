@@ -56,13 +56,13 @@ export default function RoomStrip({
       <ul className="room-chips">
         <li>
           <button
-            className={cx('room-chip', onBoard && 'active')}
+            className={cx('room-chip', 'room-chip-board', onBoard && 'active')}
             // §7.9 — the class is decoration; this is the state.
             aria-current={onBoard ? 'page' : undefined}
             data-testid="channel-overview"
             onClick={() => onSelect(null)}
           >
-            board
+            Board
           </button>
         </li>
 
@@ -87,9 +87,9 @@ export default function RoomStrip({
                   // §10.7 — the relay honours this, the mathematics does not,
                   // so the room header states it in words. Here it is only a
                   // marker that the room has one at all.
-                  <span className="room-chip-flag" title={`#${ch} clears itself`}>
+                  <span className="room-chip-flag">
                     <Clock size={14} />
-                    <span className="sr-only">clears itself</span>
+                    <span className="sr-only">deletes old messages</span>
                   </span>
                 ) : null}
                 {unread > 0 && (
@@ -121,21 +121,31 @@ export default function RoomStrip({
                   .join(' ')}
                 aria-current={here ? 'page' : undefined}
                 data-testid={joined ? `voice-open-${ch}` : `voice-join-${ch}`}
-                title={joined ? 'open the call' : live.length ? `join ${ch}` : `start a call in ${ch}`}
+                aria-label={
+                  joined
+                    ? `${ch}, you're in this call, ${live.length} ${live.length === 1 ? 'person' : 'people'}`
+                    : live.length
+                      ? `${ch}, ${live.length} in call. Join`
+                      : `${ch}. Start a call`
+                }
                 onClick={() => (joined ? onOpenStage() : onVoiceJoin(ch))}
               >
                 <Wave size={14} />
                 <span className="room-chip-name">{ch}</span>
-                {/* §1.6 — the green on this chip never stands alone. */}
-                {joined ? (
-                  <span className="room-chip-state" data-testid={`voice-joined-${ch}`}>
-                    in call
+                {/* §1.6 — the green waveform never stands alone: a head count
+                    rides with it. The chip used to add a filled green box and
+                    the caps word IN CALL, the second of four places one
+                    screen said a call was on; the call bar is the one that
+                    says you are in it. */}
+                {live.length > 0 && (
+                  <span
+                    className="room-chip-state"
+                    data-testid={joined ? `voice-joined-${ch}` : `voice-live-${ch}`}
+                    aria-hidden="true"
+                  >
+                    {live.length}
                   </span>
-                ) : live.length > 0 ? (
-                  <span className="room-chip-state" data-testid={`voice-live-${ch}`}>
-                    {live.length} live
-                  </span>
-                ) : null}
+                )}
               </button>
             </li>
           );
@@ -146,7 +156,7 @@ export default function RoomStrip({
             <form onSubmit={submit}>
               {/* §8.7 — a placeholder is a hint, never the name. */}
               <label className="sr-only" htmlFor="room-strip-new">
-                {adding === 'voice' ? 'new voice room name' : 'new room name'}
+                {adding === 'voice' ? 'New voice room name' : 'New room name'}
               </label>
               <input
                 id="room-strip-new"
@@ -160,7 +170,7 @@ export default function RoomStrip({
               {/* §11.9 — no Enter-only submits, and nothing typed here is
                   discarded on blur the way the sidebar's input was. */}
               <button className="room-chip-add-go" data-testid="new-room-create">
-                add
+                Add
               </button>
               <button
                 type="button"
@@ -170,7 +180,7 @@ export default function RoomStrip({
                   setAdding(null);
                 }}
               >
-                cancel
+                Cancel
               </button>
             </form>
           </li>
@@ -187,6 +197,7 @@ export default function RoomStrip({
         {canManage && activeChannel && !onStage && !onGame && (
           <button
             className="ghost"
+            aria-label={`#${activeChannel} settings`}
             title={`#${activeChannel} settings`}
             data-testid={`channel-settings-${activeChannel}`}
             onClick={() => onSettings(activeChannel)}
@@ -197,7 +208,8 @@ export default function RoomStrip({
         {canManage && onStage && voice.active && (
           <button
             className="ghost"
-            title={`${voice.active.channel} voice room settings`}
+            aria-label={`${voice.active.channel} settings`}
+            title={`${voice.active.channel} settings`}
             data-testid={`voice-settings-${voice.active.channel}`}
             onClick={() => onVoiceSettings(voice.active.channel)}
           >
@@ -208,21 +220,21 @@ export default function RoomStrip({
           <>
             <button
               className="ghost"
-              title="new room"
+              title="New room"
               data-testid="new-channel"
               onClick={() => setAdding('room')}
             >
               <Plus size={14} />
-              <span className="sr-only">new room</span>
+              <span className="sr-only">New room</span>
             </button>
             <button
               className="ghost"
-              title="new voice room"
+              title="New voice room"
               data-testid="new-voice"
               onClick={() => setAdding('voice')}
             >
               <Wave size={14} />
-              <span className="sr-only">new voice room</span>
+              <span className="sr-only">New voice room</span>
             </button>
           </>
         )}

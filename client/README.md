@@ -72,9 +72,13 @@ needs about half the alpha of a dark one to read the same.
 Colour is a controlled vocabulary, one meaning each: **coral** for selection,
 the primary action and focus; **green** for a cryptographic fact or someone
 being here right now; **amber** for a guarantee that is reduced or unchecked;
-**red** for broken or irreversible. The monospace carries the system's voice —
-labels, timestamps, counts, epochs, statuses, security lines — but never a
-person's name, body copy, or a button label. Member avatars are **mesh orbs**
+**red** for broken or irreversible. Green appears as a dot, a check or a
+waveform, never as a button. Everything a person reads or presses is sans in
+sentence case; monospace is only for characters that must line up —
+timestamps, sizes, safety numbers, codes, keys — and nothing is set in
+transformed capitals. Buttons climb one ladder (one coral primary per view,
+then outline, quiet, warn, danger, and a neutral "pressed" for toggles that
+are on), there is one badge, and every tab bar uses the same underline. Member avatars are **mesh orbs**
 (`src/lib/avatar.js`): hashed hue blobs blurred into one wash, derived from
 the handle and never uploaded, because identity here is a key. A **circle**
 gets a different shape on purpose (`src/components/CircleMark.jsx`): a flat
@@ -95,8 +99,11 @@ rather than a column beside every room. `Ctrl/⌘-K` opens a command palette
 
 **Mobile** (≤820px): the same components and, now, largely the same floor
 plan — one column at every width, so there are no edge drawers to summon.
-The marker drops the circle name down to its tile, the pane header wraps,
-and the invite action moves into the palette. Touch devices get bigger
+The marker drops the circle name down to its tile, the pane header keeps
+only the signals that are not already in the fascia, the invite action and
+the theme switch move into the palette and Settings, and a running call
+rides in the fascia as a pill (mic state and duration) instead of the call
+bar, which cost the conversation a row. Touch devices get bigger
 targets, surfaced
 hover-affordances, 16px inputs (so iOS doesn't zoom the page on focus),
 `dvh` heights and safe-area insets for notches and home bars. The client

@@ -38,11 +38,11 @@ export default function PhoneTabs({ server, channel, onStage, onGame, onCircles,
   );
 
   return (
-    <nav className="phone-tabs" aria-label="circles, board and rooms">
+    <nav className="phone-tabs" aria-label="Sections">
       <ul>
-        {tab('circles', 'circles', QuorumGlyph, !server, onCircles)}
-        {tab('board', 'board', Users, onBoardNow, onBoard, !server)}
-        {tab('rooms', 'rooms', Hash, inRoom, onRooms, !server)}
+        {tab('circles', 'Circles', QuorumGlyph, !server, onCircles)}
+        {tab('board', 'Board', Users, onBoardNow, onBoard, !server)}
+        {tab('rooms', 'Rooms', Hash, inRoom, onRooms, !server)}
       </ul>
     </nav>
   );

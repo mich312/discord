@@ -4,7 +4,7 @@ import { circlePresence } from '../lib/presence.js';
 import { normalizeThreshold } from '../lib/quorum.js';
 import { describeAgo } from '../lib/overview.js';
 import { memberVtName } from '../lib/viewTransition.js';
-import { Check, Phone, X } from './icons.jsx';
+import { Check, Phone, X, AlertTriangle } from './icons.jsx';
 import { cx } from '../lib/cx.js';
 
 // The roster is the security boundary: it is, exactly, who can read this
@@ -69,95 +69,111 @@ export default function Members({
         style={{ viewTransitionName: memberVtName(m) }}
       >
         {speaking && <span className="sr-only">{m} is speaking</span>}
-        <Seal name={m} size={26} />
+        <Seal name={m} size={32} />
         <span className="member-col">
-          <button
-            className="member-name"
-            data-testid={`member-${m}`}
-            disabled={m === me}
-            title={m === me ? undefined : 'safety number & verification'}
-            onClick={() => onMember(m)}
-          >
-            {m}
-          </button>
+          <span className="member-line">
+            {/* §4.1 — a name is the most human thing in the product, so it is
+                set in the sans, like it is in the transcript. It was mono
+                here, the one place the whole roster is in view. */}
+            <button
+              className="member-name"
+              data-testid={`member-${m}`}
+              disabled={m === me}
+              title={m === me ? undefined : 'Safety number and verification'}
+              onClick={() => onMember(m)}
+            >
+              {m}
+            </button>
+            {m === me && <span className="member-you">(you)</span>}
+            {roles[m] === 'admin' && <span className="badge">Admin</span>}
+            {m !== me && (server.linkJoined ?? []).includes(m) && (
+              <span className="badge" data-testid={`badge-link-${m}`}>
+                Joined by link
+              </span>
+            )}
+            {m !== me && (server.verified ?? []).includes(m) && !server.mismatched?.[m] && (
+              <span
+                className="member-verified"
+                role="img"
+                aria-label="Verified on this device"
+                data-testid={`badge-verified-${m}`}
+              >
+                <Check size={14} />
+              </span>
+            )}
+          </span>
           {p ? (
             <span className="member-presence" data-testid={`member-playing-${m}`}>
-              playing <span className="game">{p.game.name}</span>
+              <span className="live-dot" aria-hidden="true" />
+              Playing <span className="game">{p.game.name}</span>
               {inRoom[m] ? '' : ` · ${describeAgo(p.ts, now).replace(' ago', '')}`}
             </span>
           ) : inRoom[m] ? (
             <span className="member-presence" data-testid={`member-in-call-${m}`}>
-              in {inRoom[m]}
+              <span className="live-dot" aria-hidden="true" />
+              In {inRoom[m]}
             </span>
           ) : null}
         </span>
-        {m !== me && onCall && (
-          <button
-            className="ghost member-call"
-            data-testid={`call-${m}`}
-            title={`call ${m}`}
-            onClick={() => onCall(m)}
-          >
-            <Phone size={13} />
-          </button>
-        )}
         <span className="tag">
-          {roles[m] === 'admin' && (
-            <span className="badge-admin" title="manages membership and invites for this circle">
-              admin
-            </span>
-          )}
-          {m === me ? (
-            <span className="badge-you">you</span>
-          ) : /* A found mismatch outranks every other badge. Losing a ✓ must
-                 render as a loss, not as the absence of a mark — "no badge"
-                 is what an unchecked stranger looks like, and this is not
-                 that. */
+          {m === me ? null : /* A found mismatch outranks every other state.
+                 Losing a ✓ must render as a loss, not as the absence of a
+                 mark — "no badge" is what an unchecked stranger looks like,
+                 and this is not that (§10.9). */
             server.mismatched?.[m] ? (
-            <span
-              className="badge-mismatch"
-              data-testid={`badge-mismatch-${m}`}
-              title="you compared safety numbers and they did not match"
-              aria-label="key mismatch"
-            >
-              key mismatch
-            </span>
-          ) : (server.verified ?? []).includes(m) ? (
-            <span className="badge-verified" title="verified — safety number checked on this device" aria-label="verified">
-              <Check size={11} />
-            </span>
-          ) : (server.linkJoined ?? []).includes(m) ? (
             <button
-              className="badge-unverified"
-              data-testid={`badge-unverified-${m}`}
-              title="joined via an invite link, and nobody here has checked their key — tap to compare"
+              className="button danger badge-mismatch"
+              data-testid={`badge-mismatch-${m}`}
               onClick={() => onMember(m)}
             >
-              via link
+              <AlertTriangle size={14} />
+              Key mismatch
             </button>
-          ) : null}
+          ) : (server.verified ?? []).includes(m) ? null : (
+            // §10.5 — an unverified member carries the control that verifies
+            // them, not only a badge for the ones who came by link. A member
+            // added by hand is equally unchecked.
+            <button
+              className="button warn"
+              data-testid={(server.linkJoined ?? []).includes(m) ? `badge-unverified-${m}` : `verify-${m}`}
+              onClick={() => onMember(m)}
+            >
+              Verify
+            </button>
+          )}
+          {m !== me && onCall && (
+            <button
+              className="ghost member-call"
+              data-testid={`call-${m}`}
+              aria-label={`Call ${m}`}
+              title={`Call ${m}`}
+              onClick={() => onCall(m)}
+            >
+              <Phone size={14} />
+            </button>
+          )}
           {canManage && m !== me && roles[m] && (
             <button
               className="ghost role-toggle"
               data-testid={`role-toggle-${m}`}
-              title={roles[m] === 'admin' ? 'demote to member' : 'promote to admin'}
               onClick={() => onSetRole(m, roles[m] === 'admin' ? 'member' : 'admin')}
             >
-              {roles[m] === 'admin' ? '− admin' : '+ admin'}
+              {roles[m] === 'admin' ? 'Remove admin' : 'Make admin'}
             </button>
           )}
           {canManage && m !== me && onRemoveMember && !(roles[m] === 'admin' && adminCount <= 1) && (
             <button
               className="ghost member-remove danger"
               data-testid={`remove-member-${m}`}
-              title={`remove ${m} from the circle`}
+              aria-label={`Remove ${m} from the circle`}
+              title={`Remove ${m} from the circle`}
               onClick={() => {
-                if (window.confirm(`Remove ${m} from "${server.name}"? They lose access immediately.`)) {
+                if (window.confirm(`Remove ${m} from ${server.name}? They lose access immediately.`)) {
                   onRemoveMember(m);
                 }
               }}
             >
-              <X size={12} />
+              <X size={14} />
             </button>
           )}
         </span>
@@ -166,16 +182,15 @@ export default function Members({
   };
 
   return (
-    <aside className="members" id="roster-drawer" aria-label="roster">
+    <section className="members" id="roster-drawer" aria-labelledby="members-title">
       <div className="section-label">
-        <span className="overline">members</span>
-        {liveCount > 0 ? (
-          <span className="member-count live" title="in a call or in a game right now">
-            {liveCount} live
-          </span>
-        ) : (
-          <span className="member-count">{server.members.length}</span>
-        )}
+        <h3 className="members-title" id="members-title">
+          People
+        </h3>
+        <span className="member-count">
+          {server.members.length} member{server.members.length === 1 ? '' : 's'}
+          {liveCount > 0 && ` · ${liveCount} here now`}
+        </span>
         {/* The product had no surface that ever asked anyone to verify: the
             flow existed and nothing pointed at it, so an unchecked member
             stayed unchecked forever. The count is the prompt, and it is the
@@ -185,10 +200,10 @@ export default function Members({
           <button
             className="member-unchecked"
             data-testid="unchecked-count"
-            title={`nobody on this device has checked ${unchecked.length === 1 ? 'this key' : 'these keys'} yet`}
             onClick={() => onMember(unchecked[0])}
           >
-            {unchecked.length} unchecked
+            <AlertTriangle size={14} />
+            {unchecked.length} not verified
           </button>
         )}
       </div>
@@ -196,8 +211,9 @@ export default function Members({
         const here = server.members.filter((m) => inRoom[m] === room);
         return (
           <React.Fragment key={room}>
-            <div className="section-label member-group live">
-              <span className="overline">in {room} — {here.length}</span>
+            <div className="member-group">
+              <span className="live-dot" aria-hidden="true" />
+              In {room} · {here.length}
             </div>
             {/* Who is in this room right now. The sidebar used to carry a
                 second copy of this as a join card; with the column gone the
@@ -215,8 +231,9 @@ export default function Members({
       })}
       {playingOnly.length > 0 && (
         <>
-          <div className="section-label member-group playing">
-            <span className="overline">playing — {playingOnly.length}</span>
+          <div className="member-group">
+            <span className="live-dot" aria-hidden="true" />
+            Playing · {playingOnly.length}
           </div>
           <ul className="member-list in-call">{playingOnly.map(row)}</ul>
         </>
@@ -239,27 +256,30 @@ export default function Members({
           onPropose(user);
         }}
       >
-        {/* §8.7 — a real name, not a placeholder standing in for one. */}
-        <label className="sr-only" htmlFor="propose-handle">
-          propose someone by handle
+        {/* §8.7 — a real, visible label, not a placeholder standing in. */}
+        <label className="add-member-label" htmlFor="propose-handle">
+          Add someone
         </label>
-        <input
-          id="propose-handle"
-          value={name}
-          onChange={(e) => setName(e.target.value)}
-          placeholder="propose someone by handle…"
-          data-testid="add-member-input"
-        />
-        <button className="button" data-testid="propose-member">
-          {needed > 1 ? `propose · needs ${needed}` : 'add'}
-        </button>
+        <span className="add-member-row">
+          <input
+            id="propose-handle"
+            value={name}
+            onChange={(e) => setName(e.target.value)}
+            placeholder="Their handle"
+            aria-describedby={needed > 1 ? 'propose-help' : undefined}
+            data-testid="add-member-input"
+          />
+          <button className="button" data-testid="propose-member">
+            {needed > 1 ? 'Propose' : 'Add'}
+          </button>
+        </span>
       </form>
       {needed > 1 && (
-        <p className="fineprint muted">
-          {needed} of {server.members.length} sign a new member in. Admins run the circle;
-          they don&rsquo;t decide this on their own.
+        <p className="fineprint muted" id="propose-help">
+          A new member needs {needed} of the {server.members.length} members to sign. Admins
+          can&rsquo;t add people on their own.
         </p>
       )}
-    </aside>
+    </section>
   );
 }

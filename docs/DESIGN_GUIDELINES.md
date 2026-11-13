@@ -13,9 +13,19 @@ the exact ratios that were still failing one token over. Prose does not hold.
 
 The current register is **afterdark**: true-black neutral surfaces, one coral
 signal, green reserved for live presence and cryptographic fact, soft
-geometry (10px radii, round avatars, pills for counts), and monospace as the
-system's speaking voice. Two themes off one token contract — `carbon` (dark,
-default) and `paper` (light).
+geometry (10px radii, round avatars, pills for counts), sans in sentence case
+for everything a person reads or presses, and monospace only where characters
+must line up. Two themes off one token contract — `carbon` (dark, default)
+and `paper` (light).
+
+*A cleanup pass (November 2026) found the screens had drifted from most of
+these rules in ways that made the product read as generated: tracked
+monospace capitals on every label, coral on counts and names, green buttons,
+six badge styles, three tab grammars, an em-dash and a reversal in every
+second sentence — and an onboarding screen promising that "new members see
+nothing from before they joined", which had stopped being true. The rules
+below were tightened where the drift showed a rule was too loose (§4.1,
+§4.4, §5.3, §11.13), and each tightened rule now has a test.*
 
 ---
 
@@ -34,7 +44,11 @@ coral `YOU` (a fact) sat within 40px of each other.*
 right now.** Verification, encryption-in-effect, presence, speaking, live
 rooms. It never means "success", and it never carries connectivity —
 rendering a websocket's health in the same green as a verified key teaches
-"green = safe" and then spends it on a socket.
+"green = safe" and then spends it on a socket. **It appears as a dot, a
+check, a lock or a waveform — never as a button fill or outline.** *Five
+buttons were green at review time (`mic on`, `back to the call`, `open call`,
+`join game`, `you're in`), and the connection dot was green online and coral
+while connecting.* → `scale.test.mjs` (the connection dot)
 
 **1.3 — Amber (`--warn`) means a guarantee is reduced or unchecked.**
 Unverified members, kept-history rooms, degraded encryption claims. Distinct
@@ -141,11 +155,16 @@ background. *Nine `outline: none` rules on inputs out-specified the global
 
 ## 4. Typography
 
-**4.1 — Monospace is the system's voice, and only that.** Labels, timestamps,
-counts, epochs, states, ids, security lines. **It is never used for a person's
-name, for body copy, or for a button label.** *A handle is the most human
-thing in the product; it appeared in four different type specs in one
-session, two of them mono.*
+**4.1 — Monospace is for characters that must line up, and only that.**
+Timestamps, durations, file sizes, safety numbers, recovery codes, keys, ids,
+host addresses, key caps. **It is never used for a person's name, body copy,
+a button or tab label, a field label, a section heading, or a warning.**
+*This rule used to make mono "the system's voice" for labels, counts and
+states too, and the product took it literally: 67 mono declarations, almost
+all of them small tracked capitals, which is the single strongest reason the
+interface read as decoration. A handle is the most human thing in the
+product; it appeared in four different type specs in one session, two of
+them mono.*
 
 **4.2 — One concept, one type spec.** A handle is `600 13px var(--sans)`
 everywhere it appears — roster, transcript, call stage, dock, self-card.
@@ -155,10 +174,13 @@ metadata.** Anything a user must read to make a decision — labels, errors,
 badges that gate an action — is at least 12px. *9px badges with 0.1em tracking
 were carrying trust state.*
 
-**4.4 — All-caps monospace is reserved for machine data.** Ids, codes, key
-strings, timestamps. **It may never carry a warning, a consequence, or
-anything the user must act on** — all-caps mono is the visual language of
-"ignore me", and users read it that way.
+**4.4 — Nothing is set in transformed capitals.** Sentence case is typed, not
+produced by `text-transform`; a code that genuinely is capitals is written
+that way. **Capitals may never carry a warning, a consequence, or anything
+the user must act on** — all-caps mono is the visual language of "ignore
+me", and users read it that way. *The room header's only security
+disclosure — KEPT FOR THE CIRCLE — ANYONE ADDED LATER CAN READ BACK — was set
+exactly so.* → `scale.test.mjs` (asserted at zero)
 
 ---
 
@@ -176,18 +198,30 @@ containers stacked in the same list have the same radius.** No three-sided
 borders. *Six analogous row-cards in one scroll column had six paddings and
 two radii.*
 
-**5.3 — Exactly one filled button per card, per row, and per dialog.**
-Everything else is an outline or a text button. **A live or joinable action
-outranks a copy or launch action for the fill.** *A game with two people in it
-got an outline button; "copy address" next to it got a coral fill.*
+**5.3 — Exactly one filled button per view.** Everything else climbs the same
+ladder: **secondary** (outline), **quiet** (text), **warn** and **danger**
+(outlines in their colour), and **pressed** — a neutral fill — for a toggle
+that is on (RSVP'd, muted, seat taken). A pressed toggle is never green
+(§1.2). A disabled primary waits in neutral, not as faded coral. *The rule
+used to say "per card", and circles home duly drew a coral "open" on every
+card — two or three primaries in one view. A game with two people in it got
+an outline button; "copy address" next to it got a coral fill.*
 
 **5.4 — Dashed borders mean "empty slot awaiting content" and nothing else.**
 A quiet button is quiet through colour, never through a dashed edge.
 
 **5.5 — One tab grammar: text plus a 2px accent underline.** No accent-filled
-pills, no raised-fill segments. *Three tab bars, three grammars.*
+pills, no raised-fill segments, no outlined boxes. The room strip, the
+onboarding tabs, the game dock and the phone tabs all use it. *Three tab bars,
+three grammars; the room strip was the last to move, from a coral-outlined
+box.*
 
-**5.6 — Reach for a primitive before inventing a class.** A new
+**5.6 — Reach for a primitive before inventing a class.** There is one badge
+(`.badge`: neutral, 12px, sentence case); a badge describing a reduced
+guarantee is a `.button.warn` instead, because it is the control that fixes
+it (§10.5). *Six badge styles had accumulated: a filled coral YOU, an
+outlined caps ADMIN, a filled amber VIA LINK, an outlined caps 2 UNCHECKED, a
+sentence-case "2 unchecked", a bare caps IN CALL.* A new
 `*-row`/`*-stack`/`*-chip`/`*-pill` name must justify why the primitive plus a
 modifier does not fit. **A third verbatim copy of a declaration block is a
 refactor, not a paste.**
@@ -204,7 +238,11 @@ rule — use `data-testid` for test hooks. → `vocabulary.test.mjs`
 **6.1 — Icons come from `icons.jsx` at 14, 18 or 24px only**, at stroke width
 1.6 / 1.4 / 1.4. No text characters (`★`, `♞`) standing in for icons, no
 emoji. User-supplied glyphs are desaturated before display. *Seventeen icon
-sizes were in use, seven of them inside a 6px band.*
+sizes were in use, seven of them inside a 6px band. — and when
+this rule was first written down nothing checked it, so a year later there
+were still seventeen, with 106 of 175 call sites off the scale.* →
+`scale.test.mjs` (avatars, circle marks and the brand glyph are identity,
+not icons, and are exempt)
 
 **6.2 — Icon and label agree.** A control labelled `back` uses a directional
 glyph, not an `X`. **Two controls in one view may not have near-synonymous
@@ -476,6 +514,24 @@ exists as visible text or a tappable affordance.
 **11.12 — Nothing truncates silently.** Every clipped value gets an ellipsis
 and a way to see it in full.
 
+**11.13 — Plain sentences, not cadence.** No em-dash pivots ("X — and the
+interface never pretends otherwise"): use two sentences or a comma. No "X,
+not Y" reversals where X alone says it. No slogans where the screen should
+say what the product is (§11.1), no two-tone headlines, no numbered lists
+for facts that are not steps, and no puns on buttons — a button names what
+happens ("Review", not "your call"). *About 130 em-dashes were in the JSX,
+the hero read "Rooms that keep their own counsel", and the primary action on
+a membership request was labelled "your call".* → `copy.test.mjs` (dashes,
+asserted at zero outside the mock-data dev pages)
+
+**11.14 — A product claim is re-checked when the design under it changes.**
+When history moved to the relay, three screens kept describing the old
+design: onboarding ("new members see nothing from before they joined"), the
+sign-in screen ("signing in restores your identity, not old messages") and
+the identity-key dialog ("it restores your account, not your old
+messages"). A design change that alters what is true lists the copy it
+falsifies.
+
 ---
 
 ## 12. Enforcement
@@ -489,7 +545,8 @@ Rules that are only prose drift. These are the checks that hold them.
 | `scale.test.mjs` | spacing, type and motion literals held to today's count; the 10px floor and the z-index scale asserted at zero | 2.6–2.9, 4.3 |
 | `vocabulary.test.mjs` | JSX ↔ CSS class integrity; no base-duplicating ternary; inline-style budget | 5.7 |
 | `theme.test.mjs` | paper block ⇔ media-query mirror parity | 3.4 |
-| `copy.test.mjs` | banned protocol and fear vocabulary in user-facing strings under `client/src/**` | 11.5, 11.6 |
+| `copy.test.mjs` | banned protocol and fear vocabulary in user-facing strings under `client/src/**`; em-dashes in copy at zero | 11.5, 11.6, 11.13 |
+| `scale.test.mjs` (additions) | no `text-transform: uppercase`; the connection dot never uses `--ok` or `--accent`; icons render at 14, 18 or 24 | 1.2, 4.4, 6.1 |
 
 **Allowlists shrink, never grow.** Each linter is seeded with today's
 violation count and the count is a ceiling, so existing debt is visible and

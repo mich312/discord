@@ -23,7 +23,7 @@ function location({ channel, callChannel, game }) {
   // the room without saying a call is in it is the sidebar's old bug.
   if (callChannel) return { glyph: Wave, label: callChannel, what: 'call' };
   if (channel) return { glyph: Hash, label: channel, what: 'room' };
-  return { glyph: null, label: 'board', what: 'board' };
+  return { glyph: null, label: 'Board', what: 'board' };
 }
 
 export default function CircleMarker({
@@ -48,7 +48,6 @@ export default function CircleMarker({
       <button
         className="marker-circle"
         data-testid="marker-circle"
-        title={`${server.name} — open the circle`}
         onClick={onOpenCircle}
       >
         <CircleMark id={server.id} name="" glyph={server.overview?.glyph} size={28} />
@@ -79,7 +78,7 @@ export default function CircleMarker({
       {call && callChannel && (
         <span className="marker-call" data-testid="marker-call">
           {/* §1.6 — green is doing work here, so a word rides with it. */}
-          <span className="marker-call-word">in a call</span>
+          <span className="marker-call-word">In call</span>
           <span className="marker-call-len">{describeCallLength(call.since, now)}</span>
         </span>
       )}

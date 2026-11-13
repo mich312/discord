@@ -56,7 +56,7 @@ function CircleCard({ server, me, voice, unread, now, onOpen }) {
             <span className="circle-card-live" data-testid={`circles-live-${server.id}`}>
               <span className="circle-card-orbs">
                 {live.slice(0, 4).map((m) => (
-                  <Seal key={m} name={m} size={22} title={m === me ? 'you' : m} />
+                  <Seal key={m} name={m} size={22} title={m} />
                 ))}
               </span>
               <span className="circle-card-live-word">
@@ -67,7 +67,7 @@ function CircleCard({ server, me, voice, unread, now, onOpen }) {
                     in <Wave size={14} /> {room}
                   </>
                 ) : (
-                  ' — in a game'
+                  ' · in a game'
                 )}
               </span>
             </span>
@@ -90,14 +90,17 @@ function CircleCard({ server, me, voice, unread, now, onOpen }) {
           <li className="circle-card-catchup" data-testid={`circles-unread-${server.id}`}>
             <Hash size={14} />
             <span>
-              {unread} you haven&rsquo;t read
+              {unread} unread
             </span>
           </li>
         )}
       </ul>
 
-      <button className="button primary" data-testid={`circles-open-${server.id}`} onClick={onOpen}>
-        open
+      {/* Secondary, not coral: with a card per circle, a filled button on each
+          was two or three primaries in one view (§5.3). The one decision
+          waiting on you, when there is one, is the primary here. */}
+      <button className="button" data-testid={`circles-open-${server.id}`} onClick={onOpen}>
+        Open {server.name}
       </button>
     </article>
   );
@@ -120,10 +123,10 @@ export default function CirclesHome({
   const [name, setName] = useState('');
 
   const total = servers.length;
-  // Everyone who can read something of yours, counted once. "Seventeen people
-  // who know you're in them" is the claim worth making on this screen: the
-  // roster *is* the security boundary, and this is the only place the whole
-  // of it is in view.
+  // Everyone who can read something of yours, counted once: the roster is
+  // the security boundary, and this is the only place the whole of it is in
+  // view. It used to be phrased as a riddle ("people who know you're in
+  // them"); the number says it.
   const reach = new Set(servers.flatMap((s) => s.members ?? []).filter((m) => m !== me)).size;
   const decisions = decisionsFor(servers, me);
 
@@ -140,17 +143,16 @@ export default function CirclesHome({
             // "You are in no circles" is a claim, and while they are still
             // being fetched it is one we cannot make.
             <p className="muted" data-testid="circles-loading">
-              They live on the relay, encrypted — fetching them now. Signed in as{' '}
-              <strong>{me}</strong>
+              Loading them from the server. Signed in as <strong>{me}</strong>.
             </p>
           ) : total > 0 ? (
             <p className="muted">
               {total} circle{total === 1 ? '' : 's'}
-              {reach > 0 && ` · ${reach} ${reach === 1 ? 'person' : 'people'} who know you're in them`}
+              {reach > 0 && ` · ${reach} ${reach === 1 ? 'person' : 'people'}`}
             </p>
           ) : (
             <p className="muted">
-              Start one below, follow an invite link, or ask someone to add you — they need
+              Start one below, open an invite link, or ask someone to add you. They&rsquo;ll need
               your handle: <strong>{me}</strong>
             </p>
           )}
@@ -158,18 +160,18 @@ export default function CirclesHome({
         <div className="circles-head-actions">
           <button className="button" data-testid="identity-open-empty" onClick={onIdentity}>
             <Key size={14} />
-            identity key
+            Identity key
           </button>
           <button className="button" data-testid="secure-open-empty" onClick={onSecure}>
             <ShieldCheck size={14} />
-            secure account
+            Secure account
           </button>
         </div>
       </header>
 
       {decisions.length > 0 && (
         <section className="circles-decisions" data-testid="circles-decisions">
-          <span className="overline">waiting on you</span>
+          <h2 className="overline">Needs you</h2>
           {decisions.map(({ server, proposal, signed, threshold }) => {
             const togo = Math.max(0, threshold - signed);
             return (
@@ -188,11 +190,13 @@ export default function CirclesHome({
                   {togo === 0
                     ? 'has the signatures to join'
                     : togo === 1
-                      ? 'is one signature short of joining'
+                      ? 'needs one more signature to join'
                       : `needs ${togo} more signatures to join`}{' '}
                   <span className="decision-circle">{server.name}</span>
                 </span>
-                <span className="mono">read it</span>
+                <span className="button primary decision-go" aria-hidden="true">
+                  Review
+                </span>
               </button>
             );
           })}
@@ -232,7 +236,7 @@ export default function CirclesHome({
           >
             {/* §8.7 — a real label, not a placeholder standing in for one. */}
             <label className="field">
-              <span>circle name</span>
+              <span>Circle name</span>
               <input
                 autoFocus
                 value={name}
@@ -241,7 +245,7 @@ export default function CirclesHome({
               />
             </label>
             <button className="button primary" data-testid="new-server-create">
-              start it
+              Create circle
             </button>
             <button
               type="button"
@@ -251,7 +255,7 @@ export default function CirclesHome({
                 setAdding(false);
               }}
             >
-              cancel
+              Cancel
             </button>
           </form>
         ) : (
@@ -261,7 +265,7 @@ export default function CirclesHome({
               <strong>Start a circle</strong>
               {/* §11.10 — an empty state names the next action and who can
                   take it. You can; nobody has to approve it. */}
-              <span className="muted">you pick who is in it, and it is yours to invite to</span>
+              <span className="muted">Create a group and invite people to it.</span>
             </span>
           </button>
         )}
