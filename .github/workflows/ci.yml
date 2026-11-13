@@ -17,8 +17,18 @@ on:
   workflow_call:
   workflow_dispatch:
 
+# Keyed by the workflow that is running, not just the ref.
+#
+# deploy.yml calls this file as its test gate, and a called workflow keeps
+# this concurrency block. A merge to main starts two runs of it at once — the
+# `ci` push run and the copy inside `deploy` — and with one shared group they
+# cancelled each other. Which one lost was a race: when it was `ci`, nobody
+# noticed; when it was the copy inside `deploy`, the deploy was cancelled two
+# seconds in and main sat merged and undeployed with no failure to look at.
+# `github.workflow` is the CALLER's name inside a called workflow, so the two
+# runs now land in different groups and neither can cancel the other.
 concurrency:
-  group: ci-${{ github.ref }}
+  group: ci-${{ github.workflow }}-${{ github.ref }}
   cancel-in-progress: true
 
 env:
