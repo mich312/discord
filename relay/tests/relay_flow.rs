@@ -1389,3 +1389,141 @@ async fn nothing_is_lost_across_a_disconnect() {
     let msg = bob.recv_until(|m| m["t"] == "msg").await;
     assert_eq!(msg["seq"].as_u64().unwrap(), cursor + 1, "only the new one");
 }
+
+// --- one account, several connections ---------------------------------------
+//
+// The hub was keyed by handle, so a second connection for the same account
+// replaced the first one's subscription: a laptop and a phone, or two tabs,
+// and only whichever subscribed last received anything. These go through the
+// relay with opaque payloads — it never looks inside one, and what is being
+// pinned here is who it hands them to.
+
+impl TestClient {
+    /// A second connection for the same account: same handle, same key.
+    async fn another_device(&self, addr: SocketAddr) -> TestClient {
+        let mls = ChatClient::import_identity(&self.mls.export_identity().unwrap()).unwrap();
+        TestClient::connect(addr, mls, &self.name).await.unwrap()
+    }
+
+    async fn send_opaque(&mut self, group: &str, bytes: &[u8]) -> u64 {
+        let reply = self
+            .request(json!({"t": "send", "group": group, "epoch": 0, "payload": B64.encode(bytes)}))
+            .await;
+        assert_eq!(reply["t"], "ok", "send failed: {reply}");
+        reply["seq"].as_u64().unwrap()
+    }
+
+    /// The payload of the next `msg`, decoded.
+    async fn next_payload(&mut self) -> Vec<u8> {
+        let msg = self.recv_until(|m| m["t"] == "msg").await;
+        B64.decode(msg["payload"].as_str().unwrap()).unwrap()
+    }
+
+    /// Assert nothing of kind `t` arrives for a moment.
+    async fn expect_none(&mut self, t: &str) {
+        assert!(!self.buffered.iter().any(|m| m["t"] == t), "an unexpected {t} was already buffered");
+        let until = tokio::time::Instant::now() + Duration::from_millis(250);
+        while let Ok(Some(Ok(frame))) = tokio::time::timeout_at(until, self.ws.next()).await {
+            if let Message::Text(text) = frame {
+                let v: Value = serde_json::from_str(&text).unwrap();
+                assert_ne!(v["t"], t, "unexpected {t}: {v}");
+                self.buffered.push_back(v);
+            }
+        }
+    }
+}
+
+/// alice (who owns "g1") on two connections, and bob as a second member.
+async fn two_devices_and_a_friend(addr: SocketAddr) -> (TestClient, TestClient, TestClient) {
+    let mut alice =
+        TestClient::connect(addr, ChatClient::new("alice").unwrap(), "alice").await.unwrap();
+    alice.request(json!({"t": "create_group", "group": "g1"})).await;
+    let mut bob = TestClient::connect(addr, ChatClient::new("bob").unwrap(), "bob").await.unwrap();
+    alice.request(json!({"t": "allow", "group": "g1", "user": "bob"})).await;
+    let mut phone = alice.another_device(addr).await;
+    for c in [&mut bob, &mut phone] {
+        let reply = c.request(json!({"t": "subscribe", "group": "g1", "after": 0})).await;
+        assert_eq!(reply["t"], "ok", "{reply}");
+    }
+    (alice, phone, bob)
+}
+
+#[tokio::test]
+async fn every_connection_of_an_account_receives_the_circle() {
+    let addr = spawn_relay().await;
+    let (mut laptop, mut phone, mut bob) = two_devices_and_a_friend(addr).await;
+
+    // The phone subscribed after the laptop. The laptop must not have been
+    // cut off by that.
+    bob.send_opaque("g1", b"from bob").await;
+    assert_eq!(laptop.next_payload().await, b"from bob");
+    assert_eq!(phone.next_payload().await, b"from bob");
+}
+
+#[tokio::test]
+async fn an_accounts_other_devices_see_what_one_of_them_sent() {
+    let addr = spawn_relay().await;
+    let (mut laptop, mut phone, mut bob) = two_devices_and_a_friend(addr).await;
+
+    laptop.send_opaque("g1", b"from the laptop").await;
+    assert_eq!(bob.next_payload().await, b"from the laptop");
+    // News to the phone, which did not write it…
+    assert_eq!(phone.next_payload().await, b"from the laptop");
+    // …and not echoed to the connection that did.
+    laptop.expect_none("msg").await;
+}
+
+#[tokio::test]
+async fn closing_one_device_leaves_the_others_subscribed() {
+    let addr = spawn_relay().await;
+    let (mut laptop, phone, mut bob) = two_devices_and_a_friend(addr).await;
+
+    drop(phone);
+    // Give the relay a moment to run the closed socket's teardown, which is
+    // where a by-handle removal would take the laptop down with it.
+    tokio::time::sleep(Duration::from_millis(150)).await;
+    bob.send_opaque("g1", b"after the phone left").await;
+    assert_eq!(laptop.next_payload().await, b"after the phone left");
+}
+
+#[tokio::test]
+async fn a_welcome_reaches_every_connection_of_its_recipient() {
+    // It opens only on the device whose KeyPackage it was built for, and the
+    // relay cannot know which that is.
+    let addr = spawn_relay().await;
+    let (mut laptop, mut phone, mut bob) = two_devices_and_a_friend(addr).await;
+    bob.request(json!({"t": "create_group", "group": "g2"})).await;
+    bob.request(json!({"t": "allow", "group": "g2", "user": "alice"})).await;
+    let reply = bob
+        .request(json!({"t": "welcome", "to": "alice", "group": "g2", "after": 0, "payload": B64.encode(b"w")}))
+        .await;
+    assert_eq!(reply["t"], "ok", "{reply}");
+    for device in [&mut laptop, &mut phone] {
+        let welcome = device.recv_until(|m| m["t"] == "welcome").await;
+        assert_eq!(welcome["group"], "g2");
+    }
+}
+
+#[tokio::test]
+async fn an_ephemeral_is_not_echoed_to_the_senders_other_devices() {
+    // Presence, typing and call signaling describe the sender to other
+    // people; the sender's own phone has no use for "alice is typing".
+    let addr = spawn_relay().await;
+    let (mut laptop, mut phone, mut bob) = two_devices_and_a_friend(addr).await;
+    laptop.request(json!({"t": "ephemeral", "group": "g1", "payload": B64.encode(b"typing")})).await;
+    bob.recv_until(|m| m["t"] == "eph").await;
+    phone.expect_none("eph").await;
+}
+
+#[tokio::test]
+async fn removing_a_member_unsubscribes_every_device_of_theirs() {
+    let addr = spawn_relay().await;
+    let (mut laptop, mut phone, mut bob) = two_devices_and_a_friend(addr).await;
+    // alice is the admin; make bob one too so alice can be removed.
+    laptop.request(json!({"t": "set_role", "group": "g1", "user": "bob", "role": "admin"})).await;
+    let reply = bob.request(json!({"t": "disallow", "group": "g1", "user": "alice"})).await;
+    assert_eq!(reply["t"], "ok", "{reply}");
+    bob.send_opaque("g1", b"alice is gone").await;
+    laptop.expect_none("msg").await;
+    phone.expect_none("msg").await;
+}

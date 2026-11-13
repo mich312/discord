@@ -222,18 +222,34 @@ impl Outbound {
         }
         self.send(msg)
     }
+}
 
-    fn same_channel(&self, other: &Self) -> bool {
-        self.tx.same_channel(&other.tx)
-    }
+/// One connection's identity inside the hub. Process-local and never sent
+/// anywhere: it exists so two sockets authenticated as the same handle are
+/// two entries rather than one overwriting the other.
+pub type ConnId = u64;
+
+static NEXT_CONN: std::sync::atomic::AtomicU64 = std::sync::atomic::AtomicU64::new(1);
+
+/// A live subscription: which handle it speaks for, and where to send.
+struct Subscriber {
+    user: String,
+    out: Outbound,
 }
 
 #[derive(Default)]
 pub struct Hub {
-    /// group -> (user -> outbound channel)
-    subscribers: HashMap<String, HashMap<String, Outbound>>,
-    /// user -> outbound channel (for Welcome delivery)
-    online: HashMap<String, Outbound>,
+    /// group -> (connection -> subscriber).
+    ///
+    /// Keyed by CONNECTION, not by handle. It was keyed by handle, on the
+    /// assumption that an account is one socket — and an account is a
+    /// laptop, a phone, and the second tab somebody forgot was open. Each
+    /// new subscribe replaced the last one's entry, so whichever device
+    /// connected most recently received everything and the others received
+    /// nothing, with their sockets open and their dots green.
+    subscribers: HashMap<String, HashMap<ConnId, Subscriber>>,
+    /// user -> (connection -> outbound channel), for Welcome delivery.
+    online: HashMap<String, HashMap<ConnId, Outbound>>,
     /// group -> send lock. Ordering only has to hold WITHIN a group, so
     /// serializing per group rather than globally lets unrelated circles
     /// append concurrently. See the Send arm.
@@ -497,6 +513,7 @@ pub async fn handle_socket(mut socket: WebSocket, app: Arc<App>) {
     let Some(user) = authenticate(&mut socket, &app).await else { return };
 
     let (tx, mut rx, depth) = Outbound::new();
+    let conn: ConnId = NEXT_CONN.fetch_add(1, std::sync::atomic::Ordering::Relaxed);
     {
         // Register as online AND drain Welcomes queued while offline under a
         // single hold of the hub lock. This serializes against the Welcome
@@ -504,7 +521,7 @@ pub async fn handle_socket(mut socket: WebSocket, app: Arc<App>) {
         // Welcome that saw us offline could store *just after* we drained,
         // stranding it until our next reconnect.
         let mut hub = app.hub.lock().await;
-        hub.online.insert(user.clone(), tx.clone());
+        hub.online.entry(user.clone()).or_default().insert(conn, tx.clone());
         // Connect/disconnect is the single most useful line an operator has
         // when someone reports "messages aren't arriving": it answers
         // whether the client is even here. The handle is metadata the relay
@@ -573,7 +590,7 @@ pub async fn handle_socket(mut socket: WebSocket, app: Arc<App>) {
                 continue;
             }
         };
-        let reply = handle_request(&app, &user, &tx, msg).await;
+        let reply = handle_request(&app, &user, conn, &tx, msg).await;
         if let Some(reply) = reply {
             if !tx.send(reply) {
                 break;
@@ -582,18 +599,18 @@ pub async fn handle_socket(mut socket: WebSocket, app: Arc<App>) {
     }
 
     let mut hub = app.hub.lock().await;
-    // Same guard as `online` below: only remove entries this connection
-    // owns. A half-open socket can outlive its replacement by minutes —
-    // an unguarded removal here would delete the *reconnected* socket's
-    // live subscriptions, leaving the user online-but-subscribed-to-nothing
-    // (no live delivery, and no push either since push skips online users).
+    // Only this connection's entries. A half-open socket can outlive its
+    // replacement by minutes, and the same account may be connected from
+    // several devices at once — removing by handle here would cut all of
+    // them off when any one of them closed.
     for subs in hub.subscribers.values_mut() {
-        if subs.get(&user).is_some_and(|t| t.same_channel(&tx)) {
-            subs.remove(&user);
-        }
+        subs.remove(&conn);
     }
-    if hub.online.get(&user).is_some_and(|t| t.same_channel(&tx)) {
-        hub.online.remove(&user);
+    if let Some(conns) = hub.online.get_mut(&user) {
+        conns.remove(&conn);
+        if conns.is_empty() {
+            hub.online.remove(&user);
+        }
     }
     tracing::info!(user = %user, online = hub.online.len(), "client disconnected");
     drop(hub);
@@ -607,6 +624,7 @@ fn err(rid: u64, e: impl std::fmt::Display) -> Option<ServerMsg> {
 async fn handle_request(
     app: &Arc<App>,
     user: &str,
+    conn: ConnId,
     tx: &Outbound,
     msg: ClientMsg,
 ) -> Option<ServerMsg> {
@@ -662,7 +680,10 @@ async fn handle_request(
             match app.store.create_group(&group, user).await {
                 Ok(()) => {
                     let mut hub = app.hub.lock().await;
-                    hub.subscribers.entry(group.clone()).or_default().insert(user.to_string(), tx.clone());
+                    hub.subscribers
+                .entry(group.clone())
+                .or_default()
+                .insert(conn, Subscriber { user: user.to_string(), out: tx.clone() });
             tracing::debug!(user = %user, %group, "subscribed");
                     Some(ServerMsg::Ok { rid, seq: None })
                 }
@@ -732,7 +753,8 @@ async fn handle_request(
                     // Drop their live subscription so the fan-out stops at once.
                     let mut hub = app.hub.lock().await;
                     if let Some(subs) = hub.subscribers.get_mut(&group) {
-                        subs.remove(&target);
+                        // Every device of theirs, not just one.
+                        subs.retain(|_, s| s.user != target);
                     }
                     Some(ServerMsg::Ok { rid, seq: None })
                 }
@@ -807,7 +829,10 @@ async fn handle_request(
                 Ok(b) => b,
                 Err(e) => return err(rid, e),
             };
-            hub.subscribers.entry(group.clone()).or_default().insert(user.to_string(), tx.clone());
+            hub.subscribers
+                .entry(group.clone())
+                .or_default()
+                .insert(conn, Subscriber { user: user.to_string(), out: tx.clone() });
             tracing::debug!(user = %user, %group, "subscribed");
             // The seq the backlog ends at. A subscriber replaying history it
             // has already moved past cannot decrypt it — MLS deletes the
@@ -881,11 +906,15 @@ async fn handle_request(
                         sender: user.to_string(),
                         payload: B64.encode(&payload),
                     };
-                    subs.retain(|peer, ch| {
-                        if peer == user {
+                    // Everyone but the connection that sent it — which is not
+                    // the same as everyone but the sender. The account's
+                    // other devices are subscribers like any other, and a
+                    // message one of them wrote is news to the rest.
+                    subs.retain(|id, sub| {
+                        if *id == conn {
                             return true;
                         }
-                        let kept = ch.offer(out.clone());
+                        let kept = sub.out.offer(out.clone());
                         if !kept {
                             app.metrics.subscribers_dropped.inc();
                         }
@@ -913,7 +942,7 @@ async fn handle_request(
                                 && !hub
                                     .subscribers
                                     .get(&group)
-                                    .is_some_and(|subs| subs.contains_key(m))
+                                    .is_some_and(|subs| subs.values().any(|s| &s.user == m))
                         })
                         .collect()
                 }
@@ -962,7 +991,13 @@ async fn handle_request(
             // connect+drain (see handle_socket) — which would otherwise let a
             // Welcome be neither delivered nor drained.
             let hub = app.hub.lock().await;
-            let delivered = hub.online.get(&to).is_some_and(|ch| ch.offer(out.clone()));
+            // To every connection the recipient has open. A Welcome opens
+            // only on the device whose KeyPackage it was built for, and the
+            // relay cannot tell which that is, so all of them get it and the
+            // ones it is not for set it aside.
+            let delivered = hub.online.get(&to).is_some_and(|conns| {
+                conns.values().fold(false, |any, ch| ch.offer(out.clone()) || any)
+            });
             if delivered {
                 app.metrics.welcomes_delivered.inc();
             } else {
@@ -1065,11 +1100,15 @@ async fn handle_request(
                     sender: user.to_string(),
                     payload,
                 };
-                subs.retain(|peer, ch| {
-                    if peer == user {
+                // By handle here, unlike `Send`: an ephemeral is presence,
+                // typing and call signaling, all of which describe the
+                // sender to other people. Echoing them to the sender's own
+                // other devices would show you yourself typing.
+                subs.retain(|_, sub| {
+                    if sub.user == user {
                         return true;
                     }
-                    let kept = ch.offer(out.clone());
+                    let kept = sub.out.offer(out.clone());
                     if !kept {
                         app.metrics.subscribers_dropped.inc();
                     }
@@ -1087,7 +1126,7 @@ async fn handle_request(
                     let subscribed: HashSet<String> = hub
                         .subscribers
                         .get(&group)
-                        .map(|s| s.keys().cloned().collect())
+                        .map(|s| s.values().map(|sub| sub.user.clone()).collect())
                         .unwrap_or_default();
                     drop(hub);
                     match app.store.group_members(&group).await {
@@ -1462,7 +1501,7 @@ mod outbound_tests {
             assert!(tx.offer(msg(i as u64)));
         }
         assert!(!clone.offer(msg(1)), "the cap is per connection, not per subscription");
-        assert!(tx.same_channel(&clone));
+        assert!(tx.tx.same_channel(&clone.tx));
     }
 }
 
