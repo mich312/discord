@@ -1616,3 +1616,192 @@ test('being the first into a voice room starts a call rather than throwing', asy
     'the room says who opened the call',
   );
 });
+
+/* ------------------------------------------- what survives a bad moment -- */
+// The relay's blob is where circles live, but the write to it is debounced
+// and needs a socket. Everything below is about the window before it lands:
+// a reload inside it used to cost a device a room key, or a whole circle,
+// with nothing to say so.
+
+/** A database that actually keeps what it is given. */
+function memoryDb(initial = {}) {
+  const kv = new Map(Object.entries(initial));
+  return {
+    kv,
+    kvPut: async (key, value) => void kv.set(key, value),
+    kvGet: async (key) => kv.get(key) ?? null,
+  };
+}
+
+const KEY_A = b64.enc(new Uint8Array(32).fill(1));
+const KEY_B = b64.enc(new Uint8Array(32).fill(2));
+
+test('a change is written down on the device before the relay has it', async () => {
+  const { c } = makeController();
+  c.db = memoryDb();
+  c.identityBytes = () => new Uint8Array(32).fill(7);
+  c.circlesLoaded = true;
+  c.servers.set('srv', record({ chanMeta: { general: { hid: 'h', hkey: KEY_A } } }));
+  c.scheduleBackup();
+  await Promise.resolve();
+  const staged = c.db.kv.get('pendingCircles');
+  assert.equal(staged.servers[0].chanMeta.general.hkey, KEY_A, 'the room key is staged');
+
+  // …and the note goes once the relay has acknowledged a blob holding it.
+  await runPendingBackup(c);
+  assert.equal(c.db.kv.get('pendingCircles'), null);
+  clearTimeout(c.backupTimer);
+});
+
+test('a failed upload leaves the note in place', async () => {
+  const { c } = makeController({
+    relayHandler: (msg) =>
+      msg.t === 'backup_set' ? Promise.reject(new Error('the connection dropped')) : Promise.resolve({ seq: 1 }),
+  });
+  c.db = memoryDb();
+  c.identityBytes = () => new Uint8Array(32).fill(7);
+  c.circlesLoaded = true;
+  c.servers.set('srv', record());
+  c.scheduleBackup();
+  await runPendingBackup(c);
+  assert.ok(c.db.kv.get('pendingCircles')?.servers?.length, 'still staged after the relay refused');
+  clearTimeout(c.backupTimer);
+});
+
+test('a later change is not cleared by an earlier upload landing', async () => {
+  let release;
+  const { c } = makeController({
+    relayHandler: (msg) =>
+      msg.t === 'backup_set'
+        ? new Promise((resolve) => (release = () => resolve({ version: 1 })))
+        : Promise.resolve({ seq: 1 }),
+  });
+  c.db = memoryDb();
+  c.identityBytes = () => new Uint8Array(32).fill(7);
+  c.circlesLoaded = true;
+  c.servers.set('srv', record());
+  const first = c.flushBackup();
+  // Arrives while the first upload is in the air, so that blob lacks it.
+  await new Promise((r) => setTimeout(r, 5));
+  c.servers.get('srv').chanMeta = { general: { hid: 'h', hkey: KEY_A } };
+  c.scheduleBackup();
+  release();
+  await first;
+  assert.equal(
+    c.db.kv.get('pendingCircles')?.servers?.[0]?.chanMeta?.general?.hkey,
+    KEY_A,
+    'the key the upload did not carry is still staged'
+  );
+  clearTimeout(c.backupTimer);
+});
+
+test('a reload inside the window gets back what was staged, folded into the blob', async () => {
+  // Last session: the room key for #general arrived and the tab reloaded
+  // before it was parked. The relay's blob still has the circle without it.
+  const identity = new Uint8Array(32).fill(7);
+  const parked = await sealBackup(identity, {
+    v: 2,
+    servers: [
+      { id: 'srv', name: 'Race Team', channels: ['general'], chanMeta: {} },
+      { id: 'other', name: 'Photo Club', channels: ['general'], chanMeta: { general: { hid: 'o', hkey: KEY_B } } },
+    ],
+  });
+  const { c } = makeController({
+    relayHandler: (msg) =>
+      Promise.resolve(msg.t === 'backup_get' ? { payload: parked, version: 3 } : { seq: 1, version: 4 }),
+  });
+  c.db = memoryDb({
+    pendingCircles: {
+      rev: 9,
+      servers: [{ id: 'srv', name: 'Race Team', channels: ['general'], chanMeta: { general: { hid: 'h', hkey: KEY_A } } }],
+      left: [],
+    },
+  });
+  c.identityBytes = () => identity;
+  await c.loadDeviceState();
+  await c.readCircles();
+  assert.equal(c.servers.get('srv').chanMeta.general.hkey, KEY_A, 'the staged key is back');
+  assert.ok(c.servers.has('other'), 'and nothing the relay had is lost to it');
+  assert.ok(c.backupDirty, 'the merged result is on its way to the relay');
+  clearTimeout(c.backupTimer);
+});
+
+test('a circle left in that window stays left', async () => {
+  const identity = new Uint8Array(32).fill(7);
+  const parked = await sealBackup(identity, { v: 2, servers: [{ id: 'gone', name: 'Left', channels: ['general'] }] });
+  const { c } = makeController({
+    relayHandler: (msg) =>
+      Promise.resolve(msg.t === 'backup_get' ? { payload: parked, version: 1 } : { seq: 1, version: 2 }),
+  });
+  c.db = memoryDb({ pendingCircles: { rev: 2, servers: [], left: ['gone'] } });
+  c.identityBytes = () => identity;
+  await c.loadDeviceState();
+  await c.readCircles();
+  assert.ok(!c.servers.has('gone'), 'a blob that predates the leave does not bring it back');
+  clearTimeout(c.backupTimer);
+});
+
+test('a reconnect folds in room keys another device parked', async () => {
+  const identity = new Uint8Array(32).fill(7);
+  const parked = await sealBackup(identity, {
+    v: 2,
+    servers: [{ id: 'srv', name: 'circle', channels: ['general'], chanMeta: { general: { hid: 'h', hkey: KEY_B, hkeys: [KEY_A], kv: 1 } } }],
+  });
+  const { c } = makeController({
+    relayHandler: (msg) =>
+      Promise.resolve(msg.t === 'backup_get' ? { payload: parked, version: 5 } : { seq: 1, version: 6 }),
+  });
+  c.db = memoryDb();
+  c.identityBytes = () => identity;
+  c.mlsGroups = new Set(['srv']);
+  // Held in memory from before the socket dropped, with the pre-rotation key.
+  c.servers.set('srv', record({ chanMeta: { general: { hid: 'h', hkey: KEY_A } } }));
+  await c.readCircles();
+  assert.equal(c.servers.get('srv').chanMeta.general.hkey, KEY_B);
+  assert.deepEqual(c.servers.get('srv').chanMeta.general.hkeys, [KEY_A]);
+  clearTimeout(c.backupTimer);
+});
+
+test('a ratchet with no circle record is rebuilt as a stub, and asks', async () => {
+  // The known failure: added to a circle, reloaded before the blob was
+  // written, and the circle was simply absent afterwards — still a member,
+  // still holding the ratchet, with nothing on screen.
+  const { c } = makeController({
+    relayHandler: (msg) => Promise.resolve(msg.t === 'backup_get' ? { payload: null, version: 0 } : { seq: 1, version: 1 }),
+  });
+  c.db = memoryDb();
+  c.identityBytes = () => new Uint8Array(32).fill(7);
+  c.mlsGroups = new Set(['race-team-x1']);
+  await c.readCircles();
+  const stub = c.servers.get('race-team-x1');
+  assert.ok(stub, 'the circle is back');
+  assert.ok(!stub.restored, 'and it can send — the ratchet is what says so');
+  assert.equal(c.needsMeta(stub), true);
+
+  c.crypto = async (cmd) =>
+    cmd === 'memberKeys' ? { alice: new Uint8Array(32), bob: new Uint8Array(32) } : { blob: new Uint8Array(1), epoch: 1 };
+  const sent = [];
+  c.sendContent = async (_id, content) => void sent.push(content);
+  await c.requestMeta(stub);
+  assert.deepEqual(sent, [{ k: 'meta-req' }]);
+  clearTimeout(c.backupTimer);
+});
+
+test('a metadata request is answered once, and not after someone else answers', async () => {
+  const { c } = makeController();
+  const r = record({ chanMeta: { general: { hid: 'h', hkey: KEY_A } } });
+  c.servers.set('srv', r);
+  await c.onContent(r, 'bob', JSON.stringify({ k: 'meta-req' }));
+  await c.onContent(r, 'bob', JSON.stringify({ k: 'meta-req' }));
+  assert.equal(c.metaReplies.size, 1, 'one pending answer however many times it is asked');
+
+  // carol's snapshot arrives first: ours would be a repeat.
+  await c.onContent(r, 'carol', JSON.stringify({ k: 'meta', name: 'circle', channels: ['general'] }));
+  assert.equal(c.metaReplies.size, 0);
+
+  // A device still waiting on its own first snapshot has nothing to offer.
+  r.pendingMetaSync = true;
+  await c.onContent(r, 'bob', JSON.stringify({ k: 'meta-req' }));
+  assert.equal(c.metaReplies.size, 0);
+  clearTimeout(c.backupTimer);
+});

@@ -100,7 +100,7 @@ import {
   renderLog,
 } from './log.js';
 import { keyDirectory, mergeKeyDirectory } from './keys.js';
-import { deviceHalf, hydrate, mergeBackups, sharedHalf } from './circles.js';
+import { deviceHalf, hydrate, mergeBackups, mergeCircle, sharedHalf } from './circles.js';
 import { applyTake, normalizeOffer, upsertOffer } from './offers.js';
 import {
   admitter,
@@ -143,6 +143,7 @@ import {
   describeRetention,
   ensureChannel,
   isCallChat,
+  keyVersion,
   markChannelDeleted,
   markVoiceDeleted,
   messageTs,
@@ -233,6 +234,27 @@ export class Controller {
     this.backupDirty = false;
     this.backupInFlight = false;
     this.backupRetry = false;
+    // Circle changes this device has made and not yet seen the relay accept.
+    // `pendingCarry` is what a previous session left behind in that state
+    // (read at boot, folded into the next load); `pendingLeft` is the half a
+    // snapshot cannot express — circles this device walked out of. See
+    // `stagePending`.
+    this.pendingRev = 0;
+    this.pendingCarry = null;
+    this.pendingLeft = new Set();
+    // circle id -> timer for an answer to somebody's `meta-req`.
+    this.metaReplies = new Map();
+    // Park what is unsaved the moment the page stops being looked at: a
+    // phone backgrounds a tab without warning and freezes its timers, and
+    // the debounce is exactly the kind of work that never then runs.
+    if (typeof document !== 'undefined' && document.addEventListener) {
+      document.addEventListener('visibilitychange', () => {
+        if (document.visibilityState !== 'hidden') return;
+        if (!this.backupDirty || this.backupInFlight) return;
+        clearTimeout(this.backupTimer);
+        this.flushBackup();
+      });
+    }
     // group id -> the seq the relay's catch-up backlog ended at. Blobs at or
     // below it are history being replayed, which cannot decrypt once the
     // group has re-keyed past them; see fork.js.
@@ -411,6 +433,13 @@ export class Controller {
       verifications) — the half of a record that is not in the backup. */
   async loadDeviceState() {
     this.deviceState = (await this.db.kvGet('deviceState')) ?? {};
+    // Whatever the last session changed and never got onto the relay. Read
+    // once, here, before anything can stage over it.
+    const carry = await this.db.kvGet('pendingCircles');
+    if (carry?.servers) {
+      this.pendingCarry = { servers: carry.servers, left: carry.left ?? [] };
+      for (const id of this.pendingCarry.left) this.pendingLeft.add(id);
+    }
     return this.deviceState;
   }
 
@@ -607,6 +636,12 @@ export class Controller {
               console.warn(`meta heal ${record.id}: ${e.message}`)
             );
           }
+        }
+        // The other direction: where this device is the one missing
+        // something, ask instead of waiting for whoever reconnects next.
+        for (const record of this.servers.values()) {
+          if (!this.needsMeta(record)) continue;
+          this.requestMeta(record).catch((e) => console.warn(`meta request ${record.id}: ${e.message}`));
         }
         this.checkVault();
         // Refresh the push subscription silently if permission was already
@@ -854,6 +889,12 @@ export class Controller {
   async onContent(record, sender, raw) {
     const content = parseEnvelope(raw);
 
+    // Another member's snapshot already went out: ours would be a repeat.
+    if (content?.k === 'meta' && sender !== this.me && this.metaReplies.has(record.id)) {
+      clearTimeout(this.metaReplies.get(record.id));
+      this.metaReplies.delete(record.id);
+    }
+
     // The admin answer is resolved here rather than inside the reducer:
     // `senderIsAdmin` can consult the relay's ACL, and an async reducer is
     // not a reducer. Resolved only for the kinds that need it, so ordinary
@@ -963,6 +1004,9 @@ export class Controller {
           break;
         case 'backup':
           this.scheduleBackup();
+          break;
+        case 'metaRequested':
+          this.answerMetaRequest(record);
           break;
         case 'quorumCheck':
           // Fire-and-forget: a re-key must never hold up applying the rest
@@ -2210,7 +2254,9 @@ export class Controller {
       const archive = [meta.hkey, ...(meta.hkeys ?? [])];
       record.chanMeta = {
         ...record.chanMeta,
-        [channel]: { ...meta, hkey: generateHistoryKey(), hkeys: archive },
+        // `kv` is what makes this key win every merge against the one it
+        // replaces — see `mergeChanKeys`.
+        [channel]: { ...meta, hkey: generateHistoryKey(), hkeys: archive, kv: keyVersion(meta) + 1 },
       };
       rotated.push(channel);
     }
@@ -2383,6 +2429,8 @@ export class Controller {
     const wasActiveCall = this.voice?.active?.server === serverId;
     this.servers.delete(serverId);
     this.mlsGroups.delete(serverId);
+    // A snapshot cannot say "and not this one", so say it beside it.
+    this.pendingLeft.add(serverId);
     // A rejoin must start from a clean slate, or the old branch's evidence
     // would immediately re-condemn the new membership.
     this.forks.clear(serverId);
@@ -2515,6 +2563,44 @@ export class Controller {
   }
 
   /**
+   * Write down, on this device, what has changed and not yet been parked.
+   *
+   * The relay's blob is where circles live, and that stays true. But the
+   * write to it is asynchronous, debounced, and needs a connection — and
+   * until it lands, the only copy of whatever just changed is a JavaScript
+   * object. A reload, a closed tab, a backgrounded phone or a dropped socket
+   * inside that window lost it: a room key that had just arrived, a circle
+   * just joined. The device then came back from the blob without it and sat
+   * in front of a room it could no longer open, with nothing to say why.
+   *
+   * So the change is staged in IndexedDB first, and cleared only when the
+   * relay has acknowledged a blob that contains it. This is a write-ahead
+   * note, not a second copy of the circles: it exists only while a write is
+   * outstanding, and the next load folds it into what the relay has (see
+   * `readCircles`) rather than believing it over the relay.
+   */
+  stagePending() {
+    if (!this.db?.kvPut) return;
+    this.pendingRev += 1;
+    const mine = [...this.servers.values()].map(sharedHalf);
+    // Until the relay's blob has been read, memory is only part of the
+    // picture — keep whatever the last session staged alongside it.
+    const servers = this.pendingCarry ? mergeBackups(mine, this.pendingCarry.servers) : mine;
+    const left = [...this.pendingLeft];
+    this.db
+      .kvPut('pendingCircles', { rev: this.pendingRev, servers: servers.filter((c) => !left.includes(c.id)), left })
+      .catch((e) => console.warn(`staging circle changes: ${e.message}`));
+  }
+
+  /** The relay holds everything staged up to `rev`: drop the note. */
+  async clearPending(rev) {
+    if (this.pendingRev !== rev) return; // something newer is still unsaved
+    this.pendingCarry = null;
+    this.pendingLeft.clear();
+    await this.db?.kvPut?.('pendingCircles', null);
+  }
+
+  /**
    * Park the circles: at once when the shape changed, debounced otherwise.
    *
    * This was a plain 3s debounce, and it had two holes that between them
@@ -2546,6 +2632,7 @@ export class Controller {
    */
   scheduleBackup() {
     this.backupDirty = true;
+    this.stagePending();
     // An upload is running; its completion re-schedules for whatever landed
     // while it was in the air.
     if (this.backupInFlight) return;
@@ -2572,12 +2659,16 @@ export class Controller {
     this.backupInFlight = true;
     // Snapshot before the await: what this upload is about to seal.
     const shape = this.circleShape();
+    const rev = this.pendingRev;
     try {
       // `false` means it declined to write (no relay, or no load has
       // succeeded yet) rather than failed — still dirty, but nothing to
       // retry against until something changes.
       if ((await this.uploadBackup()) === false) this.backupDirty = true;
-      else this.parkedShape = shape;
+      else {
+        this.parkedShape = shape;
+        await this.clearPending(rev);
+      }
       this.backupRetry = false;
     } catch (e) {
       console.warn(`backup upload: ${e.message}`);
@@ -2675,15 +2766,26 @@ export class Controller {
   }
 
   async readCircles() {
-    const { servers, version } = await this.fetchBackup();
+    const { servers: parked, version } = await this.fetchBackup();
     this.backupVersion = version;
+    // Fold in what a previous session changed and never got parked. The
+    // relay's copy is not overruled — `mergeBackups` keeps every circle and
+    // every key either side has — it is completed.
+    const carry = this.pendingCarry;
+    const servers = carry
+      ? mergeBackups(carry.servers, parked).filter((c) => !carry.left.includes(c.id))
+      : parked;
     // Set before adopting: a circle arriving here can trigger a write (a
     // freshly minted room key, a meta heal), and that write must be
     // allowed to proceed rather than being caught by the no-load guard.
     this.circlesLoaded = true;
     const fresh = this.adoptCircles(servers);
+    const orphans = this.adoptOrphans();
     await this.persistCircleNames();
-    if (fresh.length) {
+    // Anything carried over, or rebuilt from the ratchet alone, is by
+    // definition not on the relay yet.
+    if (carry || orphans.length) this.scheduleBackup();
+    if (fresh.length || orphans.length) {
       for (const record of fresh) {
         if (record.restored) {
           this.addSystemMessage(
@@ -2703,7 +2805,18 @@ export class Controller {
   adoptCircles(servers) {
     const fresh = [];
     for (const s of servers ?? []) {
-      if (!s?.id || this.servers.has(s.id)) continue;
+      if (!s?.id) continue;
+      const held = this.servers.get(s.id);
+      if (held) {
+        // Already in memory — this is a reconnect, or a Welcome that beat
+        // the load. The record stays as it is, but the blob may carry room
+        // keys another device of this account parked since, and a key is
+        // never something to decline.
+        const merged = mergeCircle(sharedHalf(held), s);
+        held.chanMeta = merged.chanMeta;
+        held.keys = merged.keys;
+        continue;
+      }
       const record = hydrate(s, this.deviceState?.[s.id], {
         live: this.mlsGroups.has(s.id),
       });
@@ -2718,6 +2831,67 @@ export class Controller {
       fresh.push(record);
     }
     return fresh;
+  }
+
+  /**
+   * Circles this device holds a ratchet for and no record of.
+   *
+   * It should not happen, and it did: a device was added to a circle, the
+   * page reloaded before the blob was written, and the circle was simply
+   * not there afterwards — still a member, still able to decrypt, with
+   * nothing on screen. The ratchet is proof of membership that does not
+   * depend on any blob, so a missing record is rebuilt from it as a stub and
+   * the circle is asked for the rest (`requestMeta`), exactly as a joiner's
+   * placeholder is filled in.
+   */
+  adoptOrphans() {
+    const orphans = [];
+    for (const id of this.mlsGroups) {
+      if (this.servers.has(id) || this.pendingLeft.has(id)) continue;
+      const record = hydrate({ id }, this.deviceState?.[id], { live: true });
+      record.pendingMetaSync = true;
+      this.servers.set(id, record);
+      orphans.push(record);
+    }
+    return orphans;
+  }
+
+  /** Whether this device is missing something only another member can
+      supply: the circle's shape, or the key to one of its rooms. */
+  needsMeta(record) {
+    if (record.restored) return false; // cannot send the request
+    if (record.pendingMetaSync) return true;
+    return (record.channels ?? []).some((ch) => !record.chanMeta?.[ch]?.hkey);
+  }
+
+  /** Ask the circle to rebroadcast its metadata. Any member may answer;
+      see the `metaRequested` effect for how they avoid all answering. */
+  async requestMeta(record) {
+    // A circle of one has nobody to ask, and mints its own keys on first
+    // use. Asked of the ratchet rather than read off the record: this runs
+    // on connect, before the record's derived roster has been refilled.
+    const roster = await this.crypto('memberKeys', { group: record.id });
+    if (!Object.keys(roster ?? {}).some((m) => m !== this.me)) return;
+    await this.sendContent(record.id, { k: 'meta-req' });
+  }
+
+  /** Somebody asked for the circle's metadata. Answer after a random pause,
+      and not at all if another member's answer arrives first — otherwise a
+      circle of thirty sends thirty copies of the same snapshot. */
+  answerMetaRequest(record) {
+    // A device still waiting on its own first snapshot has only a
+    // placeholder to offer, and the asker would adopt it.
+    if (record.restored || record.pendingMetaSync) return;
+    if (this.metaReplies.has(record.id)) return;
+    const timer = setTimeout(() => {
+      this.metaReplies.delete(record.id);
+      const current = this.servers.get(record.id);
+      if (!current || current.restored) return;
+      this.sendContent(current.id, this.metaContent(current)).catch((e) =>
+        console.warn(`meta reply ${current.id}: ${e.message}`)
+      );
+    }, 150 + Math.random() * 1500);
+    this.metaReplies.set(record.id, timer);
   }
 
   // === account vaults =====================================================

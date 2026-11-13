@@ -507,3 +507,100 @@ test('presence, rally and typing never touch the record', () => {
     assert.equal(JSON.stringify(r), before, `${k} must leave the record untouched`);
   }
 });
+
+/* ------------------------------------------------------- key rotation -- */
+//
+// Removing a member mints a new room key and rebroadcasts it in a `meta`.
+// Two things went wrong with that, and neither had a test, because both
+// only show once the envelope has been through a merge on someone else's
+// device.
+
+const OLD_KEY = 'zzzz-the-key-the-removed-member-holds';
+const NEW_KEY = 'aaaa-the-key-minted-by-the-removal';
+
+test('a rotated key outranks the key it replaced, whichever sorts first', () => {
+  // The winner used to be picked by sorting the two keys as strings, so a
+  // rotation survived only when the new key happened to sort lower — half
+  // the time. Both orders here, so neither can pass by luck.
+  for (const [older, newer] of [[OLD_KEY, NEW_KEY], [NEW_KEY, OLD_KEY]]) {
+    const receiver = circle({ chanMeta: { general: { hid: 'log', hkey: older } } });
+    apply(receiver, {
+      k: 'meta',
+      channels: ['general'],
+      chanMeta: { general: { hid: 'log', hkey: newer, hkeys: [older], kv: 1 } },
+    });
+    assert.equal(receiver.chanMeta.general.hkey, newer, 'the receiver writes under the new key');
+    assert.equal(receiver.chanMeta.general.kv, 1);
+    assert.deepEqual(receiver.chanMeta.general.hkeys, [older], 'and still reads with the old one');
+  }
+});
+
+test('a stale rebroadcast cannot roll a rotation back', () => {
+  // Every device rebroadcasts its own view once per connect, so the member
+  // who rotated hears the pre-rotation key again from whoever reconnects
+  // next. It must stay a key to read with, never become the key to write
+  // with again.
+  for (const [older, newer] of [[OLD_KEY, NEW_KEY], [NEW_KEY, OLD_KEY]]) {
+    const rotator = circle({
+      chanMeta: { general: { hid: 'log', hkey: newer, hkeys: [older], kv: 1 } },
+    });
+    apply(rotator, {
+      k: 'meta',
+      channels: ['general'],
+      chanMeta: { general: { hid: 'log', hkey: older } },
+    });
+    assert.equal(rotator.chanMeta.general.hkey, newer);
+    assert.equal(rotator.chanMeta.general.kv, 1);
+  }
+});
+
+test('two rotations of the same version settle on one key everywhere', () => {
+  // Two admins removing someone in the same moment. Neither is "later", so
+  // the only requirement is that both devices pick the same key.
+  const a = { hid: 'log', hkey: 'key-a', hkeys: [OLD_KEY], kv: 1 };
+  const b = { hid: 'log', hkey: 'key-b', hkeys: [OLD_KEY], kv: 1 };
+  const first = circle({ chanMeta: { general: { ...a } } });
+  const second = circle({ chanMeta: { general: { ...b } } });
+  apply(first, { k: 'meta', channels: ['general'], chanMeta: { general: b } });
+  apply(second, { k: 'meta', channels: ['general'], chanMeta: { general: a } });
+  assert.equal(first.chanMeta.general.hkey, second.chanMeta.general.hkey);
+  // Nothing either side knew is dropped: both rotations' keys stay readable.
+  for (const r of [first, second]) {
+    const known = [r.chanMeta.general.hkey, ...r.chanMeta.general.hkeys];
+    assert.ok(['key-a', 'key-b', OLD_KEY].every((k) => known.includes(k)));
+  }
+});
+
+test('a key version off the wire is bounded', () => {
+  const r = circle({ chanMeta: { general: { hid: 'log', hkey: NEW_KEY, kv: 2 } } });
+  for (const kv of [-5, 1.5, 'lots', Number.MAX_VALUE, null]) {
+    apply(r, { k: 'meta', channels: ['general'], chanMeta: { general: { hid: 'log', hkey: OLD_KEY, kv } } });
+    assert.equal(r.chanMeta.general.hkey, NEW_KEY, `kv ${kv} must not outrank a real rotation`);
+  }
+});
+
+test('a rebroadcast that changes what the circle is gets parked', () => {
+  // The record is rebuilt from the relay's blob on every load. A rotated key
+  // that arrived in a `meta` and was never written back was gone after a
+  // reload, and with it everything written after the removal.
+  const r = circle({ chanMeta: { general: { hid: 'log', hkey: OLD_KEY } } });
+  const rotated = apply(r, {
+    k: 'meta',
+    channels: ['general'],
+    chanMeta: { general: { hid: 'log', hkey: NEW_KEY, hkeys: [OLD_KEY], kv: 1 } },
+  });
+  assert.ok(kinds(rotated.effects).includes('backup'), 'a new room key must be parked');
+
+  const room = apply(r, { k: 'meta', channels: ['general', 'pits'], chanMeta: {} });
+  assert.ok(kinds(room.effects).includes('backup'), 'so must a room this device was missing');
+});
+
+test('a rebroadcast that changes nothing parks nothing', () => {
+  // One arrives from every member on every connect; writing the blob for
+  // each would turn a reconnect storm into a write storm.
+  const r = circle({ chanMeta: { general: { hid: 'log', hkey: NEW_KEY, kv: 1 } } });
+  const same = { k: 'meta', name: r.name, channels: ['general'], voiceChannels: ['lounge'], chanMeta: r.chanMeta };
+  apply(r, same); // the first may normalise shapes
+  const { effects } = apply(r, JSON.parse(JSON.stringify(same)));
+  assert.ok(!kinds(effects).includes('backup'));
+});

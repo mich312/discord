@@ -210,6 +210,14 @@ export function adminRequirement(content) {
 
 /* ---------------------------------------------------------- the parse -- */
 
+/** Which rotation of a channel's room key this is. Absent on every key
+    minted before rotations were counted, which reads as zero — so the first
+    counted rotation outranks all of them. Bounded: it arrives off the wire. */
+export function keyVersion(meta) {
+  const v = Number(meta?.kv);
+  return Number.isSafeInteger(v) && v > 0 ? v : 0;
+}
+
 /**
  * Merge two views of one channel's settings without ever losing a key.
  *
@@ -237,8 +245,8 @@ export function adminRequirement(content) {
  * rebroadcast (which only ever gap-fills).
  */
 export function mergeChanKeys(mine = {}, theirs = {}, { mineWins = false } = {}) {
-  const { hid: _mh, hkey: _mk, hkeys: _mks, alts: _ma, ...mySettings } = mine ?? {};
-  const { hid: _th, hkey: _tk, hkeys: _tks, alts: _ta, ...theirSettings } = theirs ?? {};
+  const { hid: _mh, hkey: _mk, hkeys: _mks, alts: _ma, kv: _mv, ...mySettings } = mine ?? {};
+  const { hid: _th, hkey: _tk, hkeys: _tks, alts: _ta, kv: _tv, ...theirSettings } = theirs ?? {};
   const settings = mineWins
     ? { ...theirSettings, ...mySettings }
     : { ...mySettings, ...theirSettings };
@@ -266,11 +274,21 @@ export function mergeChanKeys(mine = {}, theirs = {}, { mineWins = false } = {})
 
   const hids = [...logs.keys()].sort();
   const primary = hids[0];
-  // Prefer a current key someone is actually writing under.
-  const preferred = [mine?.hid === primary && mine.hkey, theirs?.hid === primary && theirs.hkey]
-    .filter(Boolean)
-    .sort();
-  const hkey = preferred[0] ?? [...logs.get(primary)][0];
+  // Prefer a current key someone is actually writing under — and of two,
+  // the one minted later. A removal rotates the key and bumps `kv`, so the
+  // rotated key outranks the one the removed member still holds no matter
+  // which side of the merge it arrives on. This used to be decided by
+  // sorting the two keys as strings, which undid a rotation half the time:
+  // the circle went back to writing under the key it had just retired.
+  // The string order survives only as the tie-break for two keys of the
+  // same version (two admins rotating at once), where any rule works as
+  // long as every device applies the same one.
+  const preferred = [mine, theirs]
+    .filter((side) => side?.hid === primary && side.hkey)
+    .map((side) => ({ hkey: side.hkey, kv: keyVersion(side) }))
+    .sort((a, b) => b.kv - a.kv || (a.hkey < b.hkey ? -1 : a.hkey > b.hkey ? 1 : 0));
+  const hkey = preferred[0]?.hkey ?? [...logs.get(primary)][0];
+  const kv = preferred[0]?.kv ?? 0;
   const hkeys = [...new Set([...logs.values()].flatMap((s) => [...s]))].filter(
     (k) => k && k !== hkey
   );
@@ -283,6 +301,7 @@ export function mergeChanKeys(mine = {}, theirs = {}, { mineWins = false } = {})
     ...settings,
     hid: primary,
     ...(hkey ? { hkey } : {}),
+    ...(kv ? { kv } : {}),
     ...(hkeys.length ? { hkeys } : {}),
     ...(alts.length ? { alts } : {}),
   };
@@ -468,6 +487,15 @@ export function applyEnvelope(record, sender, content, ctx = {}) {
 
     case 'meta':
       applyMeta(record, content, emit);
+      break;
+
+    case 'meta-req':
+      // A member's device is missing the circle's shape or a room key — it
+      // reloaded before what it had been sent was saved, or it is rebuilding
+      // from its ratchet alone. Nothing in the record changes; whoever can
+      // answer rebroadcasts. Any member may ask: the answer is the same
+      // snapshot every connect already sends unprompted.
+      emit({ t: 'metaRequested' });
       break;
 
     case 'chanset': {
@@ -738,6 +766,16 @@ function applyMeta(record, content, emit) {
     return;
   }
 
+  // What the circle *is*, before the union below touches it. Anything that
+  // differs afterwards has to be parked: this record is rebuilt from the
+  // relay's blob on the next load, so a room or a room key that arrived
+  // here and was never written back is gone after a reload. That is not
+  // hypothetical — a rotated key travels only in this envelope, and every
+  // member who received one lost the ability to read what followed.
+  const shapeOf = () =>
+    JSON.stringify([record.name, record.channels, record.voiceChannels, record.chanMeta, record.rsvps]);
+  const before = shapeOf();
+
   // Union gap-fill: adopt rooms this device is missing, but never a room it
   // has seen deleted — otherwise a peer that missed the deletion would
   // resurrect it on every meta rebroadcast (now one per connect).
@@ -827,4 +865,6 @@ function applyMeta(record, content, emit) {
     record.chanMeta = mine;
     emit({ t: 'backfillHistory' });
   }
+
+  if (shapeOf() !== before) emit({ t: 'backup' });
 }
