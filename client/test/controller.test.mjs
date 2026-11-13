@@ -1805,3 +1805,71 @@ test('a metadata request is answered once, and not after someone else answers', 
   assert.equal(c.metaReplies.size, 0);
   clearTimeout(c.backupTimer);
 });
+
+test('deleting a circle removes every member, one accepted commit at a time', async () => {
+  // It used to publish the first removal without marking it a commit and
+  // never merge it — so the second removal was refused for the pending one,
+  // and everyone past the first member kept a working ratchet.
+  const calls = [];
+  const { c } = makeController({
+    relayHandler: (msg) => {
+      calls.push(msg.t === 'send' ? `send${msg.commit ? ':commit' : ''}` : msg.t);
+      return Promise.resolve({ seq: calls.length });
+    },
+  });
+  let epoch = 3;
+  c.crypto = async (cmd, args) => {
+    calls.push(cmd === 'removeMember' ? `remove:${args.name}` : cmd);
+    if (cmd === 'removeMember') return { commit: new Uint8Array([1]), epoch: epoch + 1, state: null };
+    if (cmd === 'mergeStagedCommit') return { epoch: ++epoch, members: ['alice'], state: null };
+    return { state: null };
+  };
+  c.servers.set('srv', record({ members: ['alice', 'bob', 'carol'], epoch }));
+  await c.deleteServer('srv');
+  assert.deepEqual(calls.slice(0, 7), [
+    'remove:bob',
+    'send:commit',
+    'mergeStagedCommit',
+    'remove:carol',
+    'send:commit',
+    'mergeStagedCommit',
+    'delete_group',
+  ]);
+  assert.ok(!c.servers.has('srv'));
+  clearTimeout(c.backupTimer);
+});
+
+test('blobs are applied in order, so the newest ratchet is the one left on disk', async () => {
+  // The first blob's handler needs the relay (an admin check) and so
+  // finishes after the second's. Each ends by writing the ratchet snapshot
+  // it was handed; unqueued, the first — older — snapshot was written last.
+  let releaseRoles;
+  const { c } = makeController({
+    relayHandler: (msg) =>
+      msg.t === 'members'
+        ? new Promise((resolve) => (releaseRoles = () => resolve({ members: [{ user: 'bob', role: 'admin' }] })))
+        : Promise.resolve({ seq: 1 }),
+  });
+  const written = [];
+  c.db = { kvGet: async () => null, kvPut: async (k, v) => void (k === 'mlsState' && written.push(v)) };
+  const opened = [];
+  c.crypto = async (cmd, args) => {
+    if (cmd !== 'receive') return {};
+    const n = args.bytes[0];
+    opened.push(n);
+    const text = n === 1
+      ? JSON.stringify({ k: 'overview', ov: { blurb: 'slow: needs an admin check' } })
+      : JSON.stringify({ k: 'chat', ch: 'general', text: 'fast', ts: 5 });
+    return { event: { kind: 'message', sender: 'bob', text }, state: `ratchet-after-${n}` };
+  };
+  c.servers.set('srv', record({ roles: {} }));
+  const first = c.onGroupMessage({ group: 'srv', seq: 1, epoch: 1, sender: 'bob', payload: b64.enc(new Uint8Array([1])) });
+  const second = c.onGroupMessage({ group: 'srv', seq: 2, epoch: 1, sender: 'bob', payload: b64.enc(new Uint8Array([2])) });
+  assert.deepEqual(opened, [1, 2], 'decryption starts at once, in arrival order');
+  await new Promise((r) => setTimeout(r, 10));
+  assert.deepEqual(written, [], 'the second does not overtake the first');
+  releaseRoles();
+  await Promise.all([first, second]);
+  assert.deepEqual(written, ['ratchet-after-1', 'ratchet-after-2']);
+  clearTimeout(c.backupTimer);
+});

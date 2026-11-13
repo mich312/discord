@@ -662,9 +662,14 @@ export class Controller {
         if (this.pendingInvite) await this.redeemPendingInvite();
         break;
       }
-      case 'welcome':
-        await this.onWelcome(msg);
+      case 'welcome': {
+        // In the same queue as the log: a Welcome and the blobs that follow
+        // it must not interleave their ratchet writes either.
+        const join = () => this.onWelcome(msg);
+        this.inbox = (this.inbox ?? Promise.resolve()).then(join, join);
+        await this.inbox;
         break;
+      }
       case 'msg':
         await this.onGroupMessage(msg);
         break;
@@ -780,13 +785,43 @@ export class Controller {
     this.catchUpLogs(record).catch((e) => console.warn(`log catch-up: ${e.message}`));
   }
 
-  async onGroupMessage(msg) {
+  /**
+   * One blob from a circle's ordered log.
+   *
+   * Two halves with different ordering needs. *Decryption* is started here,
+   * synchronously, in the order blobs arrive — the worker runs requests in
+   * the order it is handed them, and an ephemeral that arrives after a
+   * commit has to be opened after it. *Applying* the result is queued
+   * behind every earlier blob's.
+   *
+   * It was not queued. Each blob's handler ran to completion on its own
+   * schedule, and they finish in whatever order their awaits resolve: one
+   * that needs the relay (an admin check) finishes after a later one that
+   * does not. Each ends by writing "the" ratchet snapshot, so the slower,
+   * earlier handler wrote its older snapshot last. If that later blob was a
+   * commit, the device was left with a cursor past the commit and a ratchet
+   * from before it — an epoch behind the circle, with nothing left to
+   * replay that would catch it up.
+   */
+  onGroupMessage(msg) {
     const record = this.servers.get(msg.group);
-    if (!record) return;
+    if (!record) return Promise.resolve();
     if (record.restored) {
       this.nudgeReadOnly(record);
-      return;
+      return Promise.resolve();
     }
+    const opening = this.crypto('receive', { bytes: b64.dec(msg.payload) });
+    opening.catch(() => {}); // handled in turn, below — not an unhandled rejection
+    const apply = () => this.applyGroupMessage(msg, opening);
+    this.inbox = (this.inbox ?? Promise.resolve()).then(apply, apply);
+    return this.inbox;
+  }
+
+  async applyGroupMessage(msg, opening) {
+    // Looked up again: an earlier blob in the queue may have been the one
+    // that removed us, and then there is nothing to apply this to.
+    const record = this.servers.get(msg.group);
+    if (!record || record.restored) return;
     // Every stored blob advances the resume point — even ones we can't
     // process (our own commits echoed by catch-up, stale epochs). A blob
     // that wedges the cursor would wedge the client forever.
@@ -811,7 +846,7 @@ export class Controller {
     // failures were invisible.
     let event = null;
     try {
-      const decrypted = await this.crypto('receive', { bytes: b64.dec(msg.payload) });
+      const decrypted = await opening;
       event = decrypted.event;
       ratchet = decrypted.state;
       // Proof the ratchet is still shared with this sender, which is what
@@ -2216,7 +2251,11 @@ export class Controller {
     });
     await this.persistState(state);
     const sent = await this.publishCommit(record, epoch, commit);
-    const { members } = await this.crypto('mergeStagedCommit', { group: serverId });
+    const { members, state: merged } = await this.crypto('mergeStagedCommit', { group: serverId });
+    // The snapshot above was taken with the commit still staged. Without
+    // this one, a reload before the next ratchet turn comes back a commit
+    // behind a group the relay has already moved on.
+    await this.persistState(merged);
     record.lastSeq = Math.max(record.lastSeq, sent.seq);
     await this.relay.request({ t: 'allow', group: serverId, user });
     await this.relay.request({
@@ -2371,7 +2410,11 @@ export class Controller {
     });
     await this.persistState(state);
     const sent = await this.publishCommit(record, epoch, commit);
-    const { members } = await this.crypto('mergeStagedCommit', { group: serverId });
+    const { members, state: merged } = await this.crypto('mergeStagedCommit', { group: serverId });
+    // The snapshot above was taken with the commit still staged. Without
+    // this one, a reload before the next ratchet turn comes back a commit
+    // behind a group the relay has already moved on.
+    await this.persistState(merged);
     record.lastSeq = Math.max(record.lastSeq, sent.seq);
     record.members = members;
     record.epoch = epoch;
@@ -2432,19 +2475,22 @@ export class Controller {
     if (!record) return;
     for (const user of (record.members ?? []).filter((m) => m !== this.me)) {
       try {
-        const { commit, epoch, members, state } = await this.crypto('removeMember', {
+        // The same three steps as `removeMember`: stage, let the relay
+        // accept it as the next epoch, merge. This loop used to stop after
+        // the first: it published without marking the blob as a commit and
+        // never merged, so the second removal was refused for the pending
+        // one and every member past the first kept a working ratchet for a
+        // circle that had been "deleted".
+        const { commit, epoch, state } = await this.crypto('removeMember', {
           group: serverId,
           name: user,
         });
         await this.persistState(state);
-        const sent = await this.relay.request({
-          t: 'send',
-          group: serverId,
-          epoch,
-          payload: b64.enc(commit),
-        });
+        const sent = await this.publishCommit(record, epoch, commit);
+        const merged = await this.crypto('mergeStagedCommit', { group: serverId });
+        await this.persistState(merged.state);
         record.lastSeq = Math.max(record.lastSeq, sent.seq);
-        record.members = members;
+        record.members = merged.members ?? record.members;
         record.epoch = epoch;
       } catch (e) {
         console.warn(`delete: removing ${user}: ${e.message}`);
