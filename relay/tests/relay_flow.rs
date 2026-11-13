@@ -788,6 +788,29 @@ async fn global_admin_manages_any_group_and_lists_everything() {
     // Non-members (even non-admin members elsewhere) can't read rosters.
     let reply = alice.request(json!({"t": "members", "group": "does-not-exist"})).await;
     assert_eq!(reply["t"], "error");
+
+    // Deleting a circle: its own admin can, a global admin can for any
+    // circle (including one whose members can no longer open it), and
+    // nobody else. alice makes a second group and a log to purge with it.
+    alice.request(json!({"t": "create_group", "group": "g2"})).await;
+    alice.send_opaque("g2", b"something said").await;
+    let mut carol =
+        TestClient::connect(addr, ChatClient::new("carol").unwrap(), "carol").await.unwrap();
+    let reply = carol.request(json!({"t": "delete_group", "group": "g2"})).await;
+    assert_eq!(reply["t"], "error", "a stranger cannot delete a circle: {reply}");
+    let reply = root.request(json!({"t": "delete_group", "group": "g2"})).await;
+    assert_eq!(reply["t"], "ok", "{reply}");
+
+    // Gone from the overview, and gone for its members: the next subscribe
+    // is how a client learns to forget it.
+    let reply = root.request(json!({"t": "admin_list"})).await;
+    assert_eq!(reply["groups"], json!([{"group": "g1", "created_by": "alice"}]));
+    let reply = alice.request(json!({"t": "subscribe", "group": "g2", "after": 0})).await;
+    assert_eq!(reply["t"], "error");
+    // The roster went with the group, so the refusal is the membership one.
+    // The client forgets a circle on either wording.
+    let why = reply["message"].as_str().unwrap();
+    assert!(why.contains("not a member") || why.contains("no such group"), "{reply}");
 }
 
 #[tokio::test]

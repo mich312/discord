@@ -800,7 +800,14 @@ export default function App() {
       const reply = await controllerRef.current.adminList();
       dispatch({
         type: 'modal',
-        modal: { type: 'admin', users: reply.users, groups: reply.groups },
+        modal: {
+          type: 'admin',
+          users: reply.users,
+          groups: reply.groups,
+          // The relay knows circles by id only. Where this account is in
+          // one, say which it is by the name this device knows it under.
+          names: Object.fromEntries(stateRef.current.servers.map((s) => [s.id, s.name])),
+        },
       });
     } catch (e) {
       dispatch({ type: 'toast', text: e.message });
@@ -1367,6 +1374,10 @@ export default function App() {
             onSetThreshold={(srv, n) => controllerRef.current.setThreshold(srv, n)}
             onLeaveServer={(srv) => controllerRef.current.leaveServer(srv)}
             onDeleteServer={(srv) => controllerRef.current.deleteServer(srv)}
+            onAdminDeleteGroup={async (group) => {
+              await controllerRef.current.adminDeleteGroup(group);
+              await openAdminOverview(); // the list, as the relay now has it
+            }}
             identityKey={controllerRef.current?.identityKeyString()}
           />
         )}
