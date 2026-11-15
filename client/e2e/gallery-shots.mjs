@@ -75,7 +75,7 @@ for (const vp of VIEWPORTS) {
   for (const theme of ['carbon', 'paper']) {
     for (const view of vp.views) {
       await page.goto(`${base}?view=${view}&theme=${theme}`, { timeout: 20000 });
-      // Mesh-orb avatars and the speaking meters settle a frame or two late.
+      // The speaking meters and view transitions settle a frame or two late.
       await page.waitForTimeout(800);
       await page.screenshot({ path: `${out}/${vp.name}-${theme}-${view}.png` });
       n++;

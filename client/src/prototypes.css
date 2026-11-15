@@ -12,8 +12,7 @@
 }
 .p-head { margin-bottom: 36px; }
 .p-head h1 {
-  font: 800 var(--text-xl) var(--sans);
-  letter-spacing: -0.02em;
+  font: 700 var(--text-xl) var(--sans);
   color: var(--ink);
   margin: 0 0 8px;
 }
@@ -38,7 +37,7 @@
   border-top: 1px solid var(--hairline);
 }
 .p-foot code, .p-lede code {
-  font: 500 var(--text-sm) var(--mono);
+  font: 400 var(--text-sm) var(--sans);
   color: var(--ink-dim);
 }
 
@@ -48,7 +47,7 @@
 .p-tiles { display: flex; flex-wrap: wrap; gap: 22px; }
 .p-tile { margin: 0; width: 92px; text-align: center; }
 .p-tile figcaption {
-  font: 500 var(--text-xs) var(--mono);
+  font: 400 var(--text-sm) var(--sans);
   color: var(--ink-mute);
   margin-top: 8px;
   line-height: 1.35;
@@ -69,9 +68,8 @@
   height: 44px;
   margin: 0 auto;
   border-radius: 12px;
-  font: 700 var(--text-sm) var(--mono);
+  font: 700 var(--text-sm) var(--sans);
   color: #fff;
-  letter-spacing: 0.04em;
 }
 
 /* the rail, as you would scan it */
@@ -120,11 +118,11 @@
 }
 .p-room-head strong {
   display: block;
-  font: 650 var(--text-md) var(--sans);
+  font: 600 var(--text-lg) var(--sans);
   color: var(--ink);
 }
 .p-sub {
-  font: 500 var(--text-xs) var(--mono);
+  font: 400 var(--text-sm) var(--sans);
   color: var(--ink-mute);
 }
 .p-room-body { padding: 14px 16px 18px; }
@@ -136,7 +134,7 @@
   gap: 7px;
   padding: 7px 9px;
   border-radius: var(--r-sm);
-  font: 500 var(--text-base) var(--sans);
+  font: 400 var(--text-base) var(--sans);
   color: var(--ink-dim);
 }
 .p-roomrow.on {
@@ -162,7 +160,7 @@
   border-bottom: 1px solid var(--circle-edge);
 }
 .p-home-head h2 {
-  font: 650 var(--text-lg) var(--sans);
+  font: 600 var(--text-lg) var(--sans);
   color: var(--ink);
   margin: 0;
 }
@@ -181,11 +179,11 @@
   color: var(--ink-dim);
   line-height: 1.5;
 }
-.p-band strong { color: var(--ink); font-weight: 650; }
+.p-band strong { color: var(--ink); font-weight: 600; }
 .p-band.live .overline { color: var(--ok); }
 .p-when {
   display: block;
-  font: 500 var(--text-xs) var(--mono);
+  font: 400 var(--text-sm) var(--sans);
   color: var(--ink-mute);
   margin-top: 3px;
 }
@@ -201,7 +199,7 @@
   display: inline-flex;
   align-items: center;
   gap: 4px;
-  font: 500 var(--text-sm) var(--mono);
+  font: 400 var(--text-sm) var(--sans);
   color: var(--ink-dim);
   flex: 0 0 auto;
   min-width: 84px;
@@ -230,29 +228,27 @@
   margin-bottom: 5px;
 }
 .p-shelf-card strong {
-  font: 650 var(--text-sm) var(--sans);
+  font: 600 var(--text-sm) var(--sans);
   color: var(--ink);
   flex: 1 1 auto;
   min-width: 0;
 }
 .p-kind {
-  font: 600 var(--text-xs) var(--mono);
-  text-transform: uppercase;
-  letter-spacing: 0.08em;
+  font: 600 var(--text-sm) var(--sans);
   color: var(--ink-mute);
   border: 1px solid var(--hairline);
   border-radius: var(--r-pill);
   padding: 1px 7px;
 }
 .p-host {
-  font: 500 var(--text-xs) var(--mono) !important;
+  font: 400 var(--text-sm) var(--sans) !important;
   color: var(--ink-mute) !important;
   overflow: hidden;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
 .p-shelf-note {
-  font: 400 var(--text-xs) var(--sans) !important;
+  font: 400 var(--text-sm) var(--sans) !important;
   color: var(--ink-mute) !important;
   margin-top: 4px !important;
   line-height: 1.4 !important;
@@ -281,9 +277,7 @@
   position: absolute;
   top: -9px;
   left: 14px;
-  font: 600 var(--text-xs) var(--mono);
-  letter-spacing: 0.08em;
-  text-transform: uppercase;
+  font: 600 var(--text-sm) var(--sans);
   padding: 1px 8px;
   border-radius: var(--r-pill);
   background: var(--well);
@@ -300,7 +294,7 @@
   margin-bottom: 10px;
   border-bottom: 1px solid var(--hairline);
   color: var(--ink);
-  font: 650 var(--text-md) var(--sans);
+  font: 600 var(--text-lg) var(--sans);
 }
 .p-fauxhead.mob { padding: 10px 12px; margin: 0; }
 .p-fauxcomposer {
@@ -317,9 +311,7 @@
   align-items: center;
   gap: 6px;
   margin-top: 8px;
-  font: 500 var(--text-xs) var(--mono);
-  letter-spacing: 0.04em;
-  text-transform: uppercase;
+  font: 400 var(--text-sm) var(--sans);
   color: var(--ink-mute);
 }
 .p-fauxnote.mob { padding: 0 12px 10px; margin-top: 8px; }
@@ -327,7 +319,7 @@
 .p-fauxnote.off, .p-fauxnote.bad { color: var(--danger); text-transform: none; letter-spacing: 0; font-family: var(--sans); font-size: var(--text-sm); }
 .p-fauxnote.empty { color: var(--ink-mute); opacity: 0.5; font-style: italic; text-transform: none; letter-spacing: 0; }
 .p-why { font: 400 var(--text-sm) var(--sans); color: var(--ink-mute); margin: 12px 0 0; max-width: 78ch; line-height: 1.55; }
-.p-why code { font: 500 var(--text-xs) var(--mono); }
+.p-why code { font: 400 var(--text-sm) var(--sans); }
 
 /* the padlock, carrying state */
 .p-seal { position: relative; display: inline-grid; place-items: center; color: var(--ink-mute); }
@@ -357,7 +349,7 @@
   box-shadow: var(--overlay-shadow);
 }
 .p-panel-head { display: flex; align-items: center; gap: 9px; margin-bottom: 10px; }
-.p-panel-head strong { font: 650 var(--text-lg) var(--sans); color: var(--ink); flex: 1; }
+.p-panel-head strong { font: 600 var(--text-lg) var(--sans); color: var(--ink); flex: 1; }
 .p-panel-x {
   background: none; border: 1px solid var(--hairline); border-radius: var(--r-sm);
   color: var(--ink-mute); display: grid; place-items: center; width: 26px; height: 26px;
@@ -371,21 +363,20 @@
 .p-person { display: flex; align-items: center; gap: 9px; padding: 5px 0; }
 .p-person-name { font: 600 var(--text-base) var(--sans); color: var(--ink); flex: 0 0 auto; }
 .p-person-state {
-  font: 500 var(--text-xs) var(--mono);
+  font: 400 var(--text-sm) var(--sans);
   color: var(--ink-mute);
   display: inline-flex; align-items: center; gap: 4px;
   margin-left: auto;
 }
 .p-person-state.ok { color: var(--ok); }
 .p-person-state.warn { color: var(--warn); margin-left: auto; }
-.p-check { padding: 3px 10px; font-size: var(--text-xs); }
+.p-check { padding: 3px 10px; font-size: var(--text-sm); }
 
 /* phones */
 .p-phones { display: grid; grid-template-columns: repeat(3, 1fr); gap: 22px; align-items: start; }
 .p-phone { margin: 0; }
 .p-phone figcaption {
-  font: 600 var(--text-xs) var(--mono);
-  text-transform: uppercase; letter-spacing: 0.08em;
+  font: 600 var(--text-sm) var(--sans);
   color: var(--ink-mute); margin-bottom: 8px;
 }
 .p-screen {
@@ -403,8 +394,7 @@
 .p-chips { display: flex; flex-wrap: wrap; gap: 6px; padding: 0 12px 8px; }
 .p-chip {
   display: inline-flex; align-items: center; gap: 4px;
-  font: 600 var(--text-xs) var(--mono);
-  letter-spacing: 0.04em;
+  font: 600 var(--text-sm) var(--sans);
   color: var(--ink-mute);
   background: none;
   border: 1px solid var(--hairline);

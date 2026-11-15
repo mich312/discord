@@ -6,24 +6,9 @@ import { circlePresence } from '../lib/presence.js';
 import { describeUntil, soonestEvent } from '../lib/overview.js';
 import { decisionsFor } from '../lib/quorum.js';
 
-// What replaces the rail.
-//
-// The rail was sixty pixels of monogram tiles carrying, per circle, one fact:
-// whether it had unread messages. It was permanent chrome for a decision
-// people make a few times a day, and the decision it supported was the wrong
-// one — "which circle" is not "which tile", it is "which of these has
-// something I should look at".
-//
-// So crossing between circles gets a screen instead of a strip, and the
-// screen has room to answer the real question: who is in there right now,
-// what is next, and what has moved since you last looked. Three circles fit
-// on it without scrolling, which is the number a person is actually in.
-//
-// Above the cards sits the one thing on this screen that is not "pick a
-// room to go to": the decisions waiting on you. A proposal to let somebody
-// into a circle is the only irreversible thing the product does, and it can
-// sit unanswered in a circle you had no other reason to open today — so it
-// comes to the screen you land on rather than waiting to be found.
+// Every circle you are in: who is there now, what is next, what moved since
+// you last looked. Proposals waiting on you sit above the cards, because
+// letting somebody in is the one irreversible thing the product does.
 
 function memberLine(n) {
   return `${n} member${n === 1 ? '' : 's'}`;
@@ -41,9 +26,18 @@ function CircleCard({ server, me, voice, unread, now, onOpen }) {
       <header className="circle-card-head">
         <CircleMark id={server.id} name="" glyph={server.overview?.glyph} size={44} />
         <div className="circle-card-id">
-          <h3>{server.name}</h3>
-          {/* No fallback here. The facts row below already carries the member
-              count, and a card that says "2 members" twice reads as a bug. */}
+          {/* The whole card opens the circle: this button's hit area is
+              stretched over the card (.circle-card-open::after). */}
+          <h3>
+            <button
+              type="button"
+              className="circle-card-open"
+              data-testid={`circles-open-${server.id}`}
+              onClick={onOpen}
+            >
+              {server.name}
+            </button>
+          </h3>
           {blurb ? <p className="circle-card-blurb">{blurb}</p> : null}
         </div>
       </header>
@@ -60,20 +54,18 @@ function CircleCard({ server, me, voice, unread, now, onOpen }) {
                 ))}
               </span>
               <span className="circle-card-live-word">
-                {live.length} of {server.members?.length ?? 0} here now
                 {room ? (
                   <>
-                    {' '}
-                    in <Wave size={14} /> {room}
+                    {live.length} in <Wave size={14} /> {room}
                   </>
                 ) : (
-                  ' · in a game'
+                  `${live.length} playing`
                 )}
               </span>
             </span>
           ) : (
             <span className="circle-card-quiet">
-              {memberLine(server.members?.length ?? 0)} · nobody here right now
+              {memberLine(server.members?.length ?? 0)}
             </span>
           )}
         </li>
@@ -95,13 +87,6 @@ function CircleCard({ server, me, voice, unread, now, onOpen }) {
           </li>
         )}
       </ul>
-
-      {/* Secondary, not coral: with a card per circle, a filled button on each
-          was two or three primaries in one view (§5.3). The one decision
-          waiting on you, when there is one, is the primary here. */}
-      <button className="button" data-testid={`circles-open-${server.id}`} onClick={onOpen}>
-        Open {server.name}
-      </button>
     </article>
   );
 }
@@ -118,55 +103,42 @@ export default function CirclesHome({
   onOpenProposal,
   onIdentity,
   onSecure,
+  // False while the unsecured banner is up: it already offers the fix.
+  showAccountActions = true,
 }) {
   const [adding, setAdding] = useState(false);
   const [name, setName] = useState('');
 
   const total = servers.length;
-  // Everyone who can read something of yours, counted once: the roster is
-  // the security boundary, and this is the only place the whole of it is in
-  // view. It used to be phrased as a riddle ("people who know you're in
-  // them"); the number says it.
-  const reach = new Set(servers.flatMap((s) => s.members ?? []).filter((m) => m !== me)).size;
+  // "No circles yet" is a claim we cannot make while they are still loading.
+  const empty = !loading && total === 0;
   const decisions = decisionsFor(servers, me);
 
   return (
     <div className="circles-home" data-testid="circles-home">
       <header className="circles-head">
-        <Seal name={me} size={44} title={me} />
         <div className="circles-head-id">
-          {/* §8.8 — the document has exactly one h1 at a time, and with no
-              circle open the marker that usually carries it is not on screen.
-              This page had no h1 at all. */}
+          {/* §8.8 — the one h1 while no circle is open. */}
           <h1>Your circles</h1>
-          {loading ? (
-            // "You are in no circles" is a claim, and while they are still
-            // being fetched it is one we cannot make.
-            <p className="muted" data-testid="circles-loading">
-              Loading them from the server. Signed in as <strong>{me}</strong>.
-            </p>
-          ) : total > 0 ? (
+          {empty && (
             <p className="muted">
-              {total} circle{total === 1 ? '' : 's'}
-              {reach > 0 && ` · ${reach} ${reach === 1 ? 'person' : 'people'}`}
-            </p>
-          ) : (
-            <p className="muted">
-              Start one below, open an invite link, or ask someone to add you. They&rsquo;ll need
-              your handle: <strong>{me}</strong>
+              No circles yet. Share your handle: <strong>{me}</strong>
             </p>
           )}
         </div>
-        <div className="circles-head-actions">
-          <button className="button" data-testid="identity-open-empty" onClick={onIdentity}>
-            <Key size={14} />
-            Identity key
-          </button>
-          <button className="button" data-testid="secure-open-empty" onClick={onSecure}>
-            <ShieldCheck size={14} />
-            Secure account
-          </button>
-        </div>
+        {/* Settings has both; here only for an empty account. */}
+        {empty && showAccountActions && (
+          <div className="circles-head-actions">
+            <button className="button" data-testid="identity-open-empty" onClick={onIdentity}>
+              <Key size={14} />
+              Identity key
+            </button>
+            <button className="button" data-testid="secure-open-empty" onClick={onSecure}>
+              <ShieldCheck size={14} />
+              Back up account
+            </button>
+          </div>
+        )}
       </header>
 
       {decisions.length > 0 && (
@@ -205,7 +177,7 @@ export default function CirclesHome({
 
       {loading && total === 0 ? (
         <p className="circles-placeholder" role="status" data-testid="circles-loading-row">
-          Loading your circles…
+          Loading…
         </p>
       ) : (
         <div className="circle-cards">
@@ -245,7 +217,7 @@ export default function CirclesHome({
               />
             </label>
             <button className="button primary" data-testid="new-server-create">
-              Create circle
+              Create
             </button>
             <button
               type="button"
@@ -261,12 +233,7 @@ export default function CirclesHome({
         ) : (
           <button className="circles-new-btn" data-testid="new-server" onClick={() => setAdding(true)}>
             <Plus size={18} />
-            <span>
-              <strong>Start a circle</strong>
-              {/* §11.10 — an empty state names the next action and who can
-                  take it. You can; nobody has to approve it. */}
-              <span className="muted">Create a group and invite people to it.</span>
-            </span>
+            <strong>New circle</strong>
           </button>
         )}
       </footer>

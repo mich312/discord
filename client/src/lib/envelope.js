@@ -102,18 +102,6 @@ export function describeRetention(seconds) {
   return `${seconds}s`;
 }
 
-/** Human-readable summary of a channel's settings for system messages. */
-export function describeChanMeta(meta = {}) {
-  const parts = [];
-  // History is no longer a switch — every channel keeps one, because the
-  // relay's log is where messages live. Retention is what varies, and it is
-  // the setting worth announcing: it is what bounds how far back the room
-  // key ever reaches.
-  parts.push(meta.retention ? `auto-delete: ${describeRetention(meta.retention)}` : 'auto-delete: off');
-  if (meta.topic) parts.push(`topic: “${meta.topic}”`);
-  return ` (${parts.join(', ')})`;
-}
-
 /* -------------------------------------------------- record tombstones -- */
 
 /** How many removed channel/room names a record remembers. Tombstones exist
@@ -532,6 +520,7 @@ export function applyEnvelope(record, sender, content, ctx = {}) {
       // change: refused whole, exactly as it was before keys could pass.
       if (!admin && !Object.keys(incoming).length) break;
       ensureChannel(record, content.ch);
+      const wasRetention = record.chanMeta?.[content.ch]?.retention ?? null;
       record.chanMeta = {
         ...(record.chanMeta ?? {}),
         // From a non-admin this is a key announcement and nothing more, so
@@ -539,12 +528,19 @@ export function applyEnvelope(record, sender, content, ctx = {}) {
         [content.ch]: mergeChanKeys(record.chanMeta?.[content.ch], incoming, { mineWins: !admin }),
       };
       if (admin) {
-        emit({
-          t: 'systemMessage',
-          server: record.id,
-          text: `#${content.ch} settings changed by ${sender}${describeChanMeta(content.meta)}`,
-          channel: content.ch,
-        });
+        // Auto-delete is the one setting worth a line: it bounds how far
+        // back the room reads. A topic edit says nothing.
+        const retention = record.chanMeta[content.ch]?.retention ?? null;
+        if (retention !== wasRetention) {
+          emit({
+            t: 'systemMessage',
+            server: record.id,
+            text: retention
+              ? `${sender} set auto-delete to ${describeRetention(retention)}`
+              : `${sender} turned off auto-delete`,
+            channel: content.ch,
+          });
+        }
         emit({ t: 'applyRetention', channel: content.ch });
       }
       emit({ t: 'backfillHistory' });
@@ -554,7 +550,6 @@ export function applyEnvelope(record, sender, content, ctx = {}) {
 
     case 'overview': {
       record.overview = normalizeOverview(content.ov);
-      emit({ t: 'systemMessage', server: record.id, text: `home base updated by ${sender}` });
       emit({ t: 'backup' });
       break;
     }
@@ -640,7 +635,7 @@ export function applyEnvelope(record, sender, content, ctx = {}) {
       emit({
         t: 'systemMessage',
         server: record.id,
-        text: `${sender} set the signatures a new member needs to ${record.threshold}`,
+        text: `${sender} set the signatures needed to join to ${record.threshold}`,
       });
       emit({ t: 'backup' });
       break;
@@ -650,12 +645,6 @@ export function applyEnvelope(record, sender, content, ctx = {}) {
       clearChannelDeleted(record, content.ch);
       if (!record.channels.includes(content.ch)) {
         record.channels.push(content.ch);
-        emit({
-          t: 'systemMessage',
-          server: record.id,
-          text: `#${content.ch} created by ${sender}`,
-          channel: content.ch,
-        });
         emit({ t: 'backup' });
       }
       break;
@@ -666,11 +655,6 @@ export function applyEnvelope(record, sender, content, ctx = {}) {
       const rooms = record.voiceChannels ?? ['lounge'];
       if (!rooms.includes(content.ch)) {
         record.voiceChannels = [...rooms, content.ch];
-        emit({
-          t: 'systemMessage',
-          server: record.id,
-          text: `voice room "${content.ch}" created by ${sender}`,
-        });
       }
       break;
     }
@@ -685,12 +669,6 @@ export function applyEnvelope(record, sender, content, ctx = {}) {
           delete record.chanMeta[content.ch];
         }
         emit({ t: 'renameMessages', server: record.id, from: content.ch, to: content.to });
-        emit({
-          t: 'systemMessage',
-          server: record.id,
-          text: `#${content.ch} renamed to #${content.to}`,
-          channel: content.to,
-        });
         emit({ t: 'refreshMessages' });
         emit({ t: 'backup' });
       }
@@ -707,7 +685,6 @@ export function applyEnvelope(record, sender, content, ctx = {}) {
           delete record.chanMeta[content.ch];
         }
         emit({ t: 'deleteMessages', server: record.id, channel: content.ch });
-        emit({ t: 'systemMessage', server: record.id, text: `#${content.ch} deleted by ${sender}` });
         emit({ t: 'backup' });
       }
       break;
@@ -720,11 +697,6 @@ export function applyEnvelope(record, sender, content, ctx = {}) {
         markVoiceDeleted(record, content.ch);
         clearVoiceDeleted(record, content.to);
         if (inThisCall(content.ch)) emit({ t: 'leaveVoice' });
-        emit({
-          t: 'systemMessage',
-          server: record.id,
-          text: `voice room "${content.ch}" renamed to "${content.to}"`,
-        });
         emit({ t: 'backup' });
       }
       break;
@@ -736,11 +708,6 @@ export function applyEnvelope(record, sender, content, ctx = {}) {
         record.voiceChannels = rooms.filter((c) => c !== content.ch);
         markVoiceDeleted(record, content.ch);
         if (inThisCall(content.ch)) emit({ t: 'leaveVoice' });
-        emit({
-          t: 'systemMessage',
-          server: record.id,
-          text: `voice room "${content.ch}" deleted by ${sender}`,
-        });
         emit({ t: 'backup' });
       }
       break;
@@ -748,12 +715,7 @@ export function applyEnvelope(record, sender, content, ctx = {}) {
 
     case 'role': {
       // Roles live in the relay's ACL; this envelope just tells everyone to
-      // re-read them and leaves a trace in the channel.
-      emit({
-        t: 'systemMessage',
-        server: record.id,
-        text: `${content.user} is now ${content.role === 'admin' ? 'an admin' : 'a regular member'} (changed by ${sender})`,
-      });
+      // re-read them.
       emit({ t: 'refreshRoles', server: record.id });
       break;
     }

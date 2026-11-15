@@ -97,7 +97,9 @@ import {
   createChannelLog,
   messageId,
   pruneLog,
+  reattribute,
   renderLog,
+  unverifiedEntries,
 } from './log.js';
 import { keyDirectory, mergeKeyDirectory } from './keys.js';
 import { deviceHalf, hydrate, mergeBackups, mergeCircle, sharedHalf } from './circles.js';
@@ -139,7 +141,6 @@ import {
   callChatChannel,
   clearChannelDeleted,
   clearVoiceDeleted,
-  describeChanMeta,
   describeRetention,
   ensureChannel,
   isCallChat,
@@ -323,9 +324,7 @@ export class Controller {
       // is not a request to create an account.
       await this.restoreIdentity(b64.dec(storedIdentity), { explicit: false });
       await this.completeOnboarding();
-      this.toast(
-        'storage was cleared: your identity and your circles survived, but this device cannot send until someone re-adds you'
-      );
+      this.toast('Storage on this device was cleared. Read-only until another member is online.');
       return;
     }
     this.dispatch({ type: 'phase', phase: 'onboarding' });
@@ -531,7 +530,6 @@ export class Controller {
       onState: (state) => this.dispatch({ type: 'voice', state }),
       onNotify: (text) => this.dispatch({ type: 'toast', text }),
       onAnnounce: (text) => this.dispatch({ type: 'announce', text }),
-      onCallStarted: (server, channel, name) => this.announceCallStarted(server, channel, name),
     });
     this.relay = new Relay({
       url: this.relayUrl,
@@ -547,7 +545,7 @@ export class Controller {
         this.onAuthRejected(message).catch((e) => console.warn(`auth rejection: ${e.message}`));
       },
       onStatus: (status) => this.dispatch({ type: 'connection', status }),
-      onEvent: (msg) => this.onRelayEvent(msg).catch((e) => this.toast(e.message)),
+      onEvent: (msg) => this.onRelayEvent(msg).catch((e) => console.error(`relay event: ${e.message}`)),
     });
     this.relay.connect();
   }
@@ -570,7 +568,7 @@ export class Controller {
     // there is the explicit act that creates an account.
     if (/unknown account/.test(message)) {
       const who = this.me ? `"${this.me}"` : 'this device';
-      message = `this server has no account for ${who} — it may have been reset. Create the account again, or restore it from its recovery file.`;
+      message = `This server has no account for ${who}. Sign up again or restore from your recovery file.`;
     }
     this.authError = message;
     this.dispatch({ type: 'phase', phase: 'onboarding' });
@@ -608,7 +606,7 @@ export class Controller {
           // that is up enough to talk but not to serve the backup cannot
           // get us to overwrite it with nothing.
           console.warn(`loading circles: ${e.message}`);
-          this.toast(`your circles could not be loaded: ${e.message}`);
+          this.toast('Couldn’t load your circles. Try reloading.');
         });
         // Re-subscribe everything from where we left off, then top up
         // the KeyPackage store so others can add us while we're away.
@@ -631,7 +629,7 @@ export class Controller {
                 // is no longer in, is forgotten rather than kept as a ghost
                 // that can be read and never updated.
                 if (/not a member|no such group/i.test(e.message)) {
-                  this.toast(`you no longer have access to "${record.name}"`);
+                  this.toast(`You no longer have access to ${record.name}`);
                   this.forgetServerLocal(record.id).catch(() => {});
                 } else {
                   console.warn(`subscribe (read-only) ${record.id}: ${e.message}`);
@@ -646,10 +644,11 @@ export class Controller {
               // the group is gone (deleted): forget it here instead of
               // retrying forever against a circle we can no longer see.
               if (/not a member|no such group/i.test(e.message)) {
-                this.toast(`you no longer have access to "${record.name}"`);
+                this.toast(`You no longer have access to ${record.name}`);
                 this.forgetServerLocal(record.id).catch(() => {});
               } else {
-                this.toast(`subscribe ${record.id}: ${e.message}`);
+                console.warn(`subscribe ${record.id}: ${e.message}`);
+                this.toast(`Couldn’t load ${record.name}. Try reloading.`);
               }
               return null;
             });
@@ -722,7 +721,7 @@ export class Controller {
         if (typeof Notification !== 'undefined' && Notification.permission === 'granted') {
           this.enableNotifications().catch((e) => console.warn(`push resubscribe: ${e.message}`));
         }
-        if (this.pendingInvite) await this.redeemPendingInvite();
+        if (this.pendingInvite) await this.redeemPendingInvite().catch((e) => this.toast(e.message));
         break;
       }
       case 'welcome': {
@@ -845,13 +844,11 @@ export class Controller {
     delete record.outOfSync;
     this.mlsGroups.add(group);
     this.servers.set(group, record);
+    // Who holds which key, before the first page of history is verified:
+    // read without it, every line would show as sender not confirmed.
+    await this.refreshKeyDirectory(record);
     await this.persistCircle(record);
-    await this.addSystemMessage(
-      group,
-      prior?.restored
-        ? `this device was let into the circle — it can send now`
-        : `you joined — history before this point does not exist for you`
-    );
+    await this.addSystemMessage(group, prior?.restored ? 'This device can send again' : 'You joined');
     this.dispatch({ type: 'servers', servers: this.snapshotServers() });
     await this.relay.request({ t: 'subscribe', group, after: msg.after });
     this.refreshRoles(group);
@@ -955,7 +952,7 @@ export class Controller {
         // here and stop — the record is gone, so don't fall through to the
         // serverPut below, which would resurrect it.
         if (!event.members.includes(this.me)) {
-          this.toast(`you were removed from "${record.name}"`);
+          this.toast(`You were removed from ${record.name}`);
           await this.forgetServerLocal(record.id);
           // Early return, but the ratchet still moved and covers every other
           // group in this snapshot — persist before leaving.
@@ -981,21 +978,25 @@ export class Controller {
           // A stranger appearing in the member list is an event, and they
           // are unverified until someone checks their safety number.
           record.linkJoined = [...new Set([...(record.linkJoined ?? []), event.sender])];
-          await this.addSystemMessage(
-            record.id,
-            `${event.sender} joined via invite link. They show as not verified until someone checks their safety number.`
-          );
+          await this.addSystemMessage(record.id, `${event.sender} joined with an invite link`);
           // Link joiners have no scrollback; whoever owns invites for this
           // group rebroadcasts the metadata they missed (including channel
           // history keys — sharing them with the roster is their design).
           if (record.invites?.length) {
             await this.sendContent(record.id, this.metaContent(record));
           }
-        } else if (added.length || before.size !== event.members.length) {
-          await this.addSystemMessage(
-            record.id,
-            `members now: ${event.members.join(', ')} (epoch ${event.epoch})`
-          );
+        } else {
+          // Membership only: who came and who went, never the roster.
+          const removed = [...before].filter((m) => !event.members.includes(m));
+          if (added.length) {
+            await this.addSystemMessage(record.id, `${joinNames(added)} joined`);
+          }
+          if (removed.length) {
+            await this.addSystemMessage(
+              record.id,
+              `${joinNames(removed)} ${removed.length === 1 ? 'was' : 'were'} removed`
+            );
+          }
         }
         // Otherwise the same people, on a different set of devices — one of
         // them signed in somewhere new. Not an event for the room.
@@ -1015,7 +1016,7 @@ export class Controller {
       // the same as an undecryptable blob: the likely causes are storage
       // (quota, eviction) or a defect in a content handler. Surface it.
       console.error(`failed to apply seq ${msg.seq} in ${msg.group}: ${e.message}`);
-      this.toast(`a message could not be saved: ${e.message}`);
+      this.toast('A message couldn’t be saved on this device.');
     }
     // Cursor first, ratchet second — see the note above.
     await this.persistDevice(record);
@@ -1310,11 +1311,14 @@ export class Controller {
 
     record.chanMeta = { ...(record.chanMeta ?? {}), [channel]: meta };
     await this.sendContent(serverId, { k: 'chanset', ch: channel, meta });
-    await this.addSystemMessage(
-      serverId,
-      `#${channel} settings changed by you${describeChanMeta(meta)}`,
-      channel
-    );
+    // Only auto-delete is worth a line: it changes how far back the room reads.
+    if ((meta.retention ?? null) !== (prev.retention ?? null)) {
+      await this.addSystemMessage(
+        serverId,
+        meta.retention ? `You set auto-delete to ${describeRetention(meta.retention)}` : 'You turned off auto-delete',
+        channel
+      );
+    }
     // Retention shrank (or appeared): prune the relay log now — new
     // entries carry their own expiry, this covers the ones that predate
     // the change.
@@ -1342,7 +1346,6 @@ export class Controller {
     const record = this.servers.get(serverId);
     record.overview = normalizeOverview(overview);
     await this.sendContent(serverId, { k: 'overview', ov: record.overview });
-    await this.addSystemMessage(serverId, 'home base updated by you');
     await this.persistCircle(record);
     this.dispatch({ type: 'servers', servers: this.snapshotServers() });
   }
@@ -1478,7 +1481,7 @@ export class Controller {
       }
       // Leave the proposal standing: it carried, and the circle should see
       // that it did even when the add itself could not go through.
-      this.dispatch({ type: 'toast', text: `could not add ${proposal.handle}: ${e.message}` });
+      this.dispatch({ type: 'toast', text: `Couldn’t add ${proposal.handle}. ${e.message}` });
     }
   }
 
@@ -1601,7 +1604,13 @@ export class Controller {
         last: last
           ? {
               sender: last.sender,
-              text: last.file ? `sent ${last.file.name}` : last.text,
+              text: last.deleted
+                ? 'deleted a message'
+                : last.file
+                  ? `sent ${last.file.name}`
+                  : last.game
+                    ? `started ${last.game.name ?? 'a game'}`
+                    : (last.text ?? ''),
               ts: last.ts,
             }
           : null,
@@ -1699,7 +1708,6 @@ export class Controller {
     }
     this.renameChannelLog(serverId, from, ch);
     await this.sendContent(serverId, { k: 'chan-ren', ch: from, to: ch });
-    await this.addSystemMessage(serverId, `#${from} renamed to #${ch}`, ch);
     await this.persistCircle(record);
     this.dispatch({ type: 'servers', servers: this.snapshotServers() });
     this.dispatch({ type: 'refreshMessages' });
@@ -1709,7 +1717,7 @@ export class Controller {
   async deleteChannel(serverId, channel) {
     const record = this.servers.get(serverId);
     if (!record.channels.includes(channel)) return;
-    if (record.channels.length <= 1) throw new Error('a server needs at least one channel');
+    if (record.channels.length <= 1) throw new Error('A circle needs at least one room.');
     record.channels = record.channels.filter((c) => c !== channel);
     this.markChannelDeleted(record, channel);
     if (record.chanMeta?.[channel]) {
@@ -1734,7 +1742,6 @@ export class Controller {
       await this.voice.leave();
     }
     await this.sendContent(serverId, { k: 'vchan-ren', ch: from, to: ch });
-    await this.addSystemMessage(serverId, `voice room "${from}" renamed to "${ch}"`);
     await this.persistCircle(record);
     this.dispatch({ type: 'servers', servers: this.snapshotServers() });
   }
@@ -1749,7 +1756,6 @@ export class Controller {
       await this.voice.leave();
     }
     await this.sendContent(serverId, { k: 'vchan-del', ch: channel });
-    await this.addSystemMessage(serverId, `voice room "${channel}" deleted`);
     await this.persistCircle(record);
     this.dispatch({ type: 'servers', servers: this.snapshotServers() });
   }
@@ -1777,7 +1783,7 @@ export class Controller {
       ...(quote ? { reply: quote } : {}),
     });
     this.markLocalState(serverId, channel, ts, { failed: seq === null });
-    if (seq === null) throw new Error('the message could not be written to the circle');
+    if (seq === null) throw new Error('Message not sent.');
     await this.sendContent(serverId, {
       k: 'chat',
       ch: channel,
@@ -2093,10 +2099,9 @@ export class Controller {
       });
       return sent.seq;
     } catch (e) {
-      // The line is on screen but not in the log, which means it is not in
-      // the conversation. Say so rather than letting it look delivered.
+      // The line is on screen but not in the log: the caller marks it
+      // failed, and the line itself offers the retry.
       console.warn(`log append #${channel}: ${e.message}`);
-      this.toast(`a message could not be saved to the circle: ${e.message}`);
       return null;
     }
   }
@@ -2131,14 +2136,44 @@ export class Controller {
       }
       if (entry) opened.push({ seq: e.seq, entry });
     }
+    const logId = hid ?? meta.hid;
     const auths = await verifyEntries(
       record.id,
-      hid ?? meta.hid,
+      logId,
       opened.map((o) => o.entry),
       keyDirectory(record),
       this.verifyBatch
     );
-    return opened.map((o, i) => ({ ...o, auth: auths[i] }));
+    return opened.map((o, i) => ({ ...o, auth: auths[i], hid: logId }));
+  }
+
+  /**
+   * Check again the lines of one room read as 'unknown' whose author the
+   * key directory now has a key for. Returns how many changed.
+   *
+   * Without this a line read before the directory was built stayed
+   * "sender not confirmed" for the session, though its author was known.
+   */
+  async reverifyLog(record, channel) {
+    const log = this.logs.get(logKey(record.id, channel));
+    const keys = keyDirectory(record);
+    const due = unverifiedEntries(log).filter((u) => u.hid && keys[u.entry?.sender]);
+    if (!due.length) return 0;
+    // Each log id signs different bytes, so verify per log.
+    const byLog = new Map();
+    for (const u of due) byLog.set(u.hid, [...(byLog.get(u.hid) ?? []), u]);
+    let changed = 0;
+    for (const [hid, items] of byLog) {
+      const auths = await verifyEntries(
+        record.id,
+        hid,
+        items.map((u) => u.entry),
+        keys,
+        this.verifyBatch
+      );
+      changed += reattribute(log, items.map((u, i) => ({ ...u, auth: auths[i] })));
+    }
+    return changed;
   }
 
   /** One page of a channel, folded into the working copy. Returns how many
@@ -2163,6 +2198,7 @@ export class Controller {
     }
     const opened = await this.openPage(record, channel, reply.entries ?? []);
     const added = addEntries(log, opened, { server: record.id, channel });
+    await this.reverifyLog(record, channel);
     if (before !== undefined && reply.complete) log.complete = true;
     return { added, complete: !!reply.complete };
   }
@@ -2211,6 +2247,7 @@ export class Controller {
         after = entries.at(-1).seq;
       }
     }
+    await this.reverifyLog(record, channel);
   }
 
   /**
@@ -2306,6 +2343,12 @@ export class Controller {
       }
       if (changed) {
         await this.persistCircle(record);
+        let reattributed = 0;
+        for (const key of this.logs.keys()) {
+          if (!key.startsWith(`${record.id}${LOG_SEP}`)) continue;
+          reattributed += await this.reverifyLog(record, key.slice(record.id.length + LOG_SEP.length));
+        }
+        if (reattributed) this.dispatch({ type: 'refreshMessages' });
       }
     } catch (e) {
       console.warn(`key directory ${record.id}: ${e.message}`);
@@ -2359,7 +2402,7 @@ export class Controller {
       // §11.5 names this exact string as the reason the rule exists. What
       // the organiser needs is the handle they typed and the one thing that
       // would fix it, not the name of the artefact that was missing.
-      throw new Error(`No account called ${user} on this server. Check the spelling, or ask them to sign up.`);
+      throw new Error(`No account called ${user}. Check the spelling or ask them to sign up.`);
     }
     // The relay serves both halves, so make it commit to a consistent story:
     // every KeyPackage's credential must name `user` and be certified by the
@@ -2368,9 +2411,7 @@ export class Controller {
     // Refuse outright if the relay declines to state a key — an add is not
     // urgent enough to do blind.
     if (!pubkey) {
-      throw new Error(
-        `the relay didn't give an identity key for ${user}, so they can't be added yet — try again in a moment`
-      );
+      throw new Error(`Couldn’t add ${user} right now. Try again in a moment.`);
     }
     // All of their devices in one commit: it is one decision, and every
     // commit re-keys the whole circle.
@@ -2392,7 +2433,7 @@ export class Controller {
     await this.sendWelcomes(serverId, user, packages, welcome, sent.seq);
     record.members = members;
     record.epoch = epoch;
-    await this.addSystemMessage(serverId, `${user} was added. They show as not verified until you check their safety number.`);
+    await this.addSystemMessage(serverId, `You added ${user}`);
     // Joiners have no scrollback: rebroadcast name + channels (and channel
     // settings, incl. history keys) so their placeholder record fills in.
     await this.sendContent(serverId, this.metaContent(record));
@@ -2522,7 +2563,6 @@ export class Controller {
     if (!record || !next || next === record.name) return;
     record.name = next;
     await this.sendContent(serverId, this.metaContent(record));
-    await this.addSystemMessage(serverId, `circle renamed to "${next}" by you`);
     await this.persistCircle(record);
     this.dispatch({ type: 'servers', servers: this.snapshotServers() });
   }
@@ -2566,7 +2606,7 @@ export class Controller {
       }
       throw new Error(
         conflict
-          ? 'someone else changed this circle at the same moment — nothing was applied, try again'
+          ? 'Someone else changed the circle at the same moment. Try again.'
           : e.message
       );
     }
@@ -2663,7 +2703,7 @@ export class Controller {
     await this.relay
       .request({ t: 'disallow', group: serverId, user })
       .catch((e) => console.warn(`disallow ${user}: ${e.message}`));
-    await this.addSystemMessage(serverId, `${user} was removed from the circle by you`);
+    await this.addSystemMessage(serverId, `You removed ${user}`);
 
     // Removal has to close every door, not just the MLS one.
     const rotated = this.rotateHistoryKeys(record);
@@ -2675,18 +2715,9 @@ export class Controller {
       // rotation happened at all.
       await this.sendContent(serverId, this.metaContent(record));
     }
-    if (rotated.length) {
-      await this.addSystemMessage(
-        serverId,
-        `new history key for ${rotated.map((c) => `#${c}`).join(', ')} — ${user} cannot read anything kept from here on`
-      );
-    }
-    if (revoked) {
-      await this.addSystemMessage(
-        serverId,
-        `${revoked} invite link${revoked === 1 ? '' : 's'} revoked, in case ${user} still held one — share a new link to invite anyone else`
-      );
-    }
+    // Told to the admin once, not written into the room: the transcript
+    // carries joins, leaves and removals only.
+    if (revoked) this.toast('Old invite links no longer work.');
     await this.persistCircle(record);
     this.dispatch({ type: 'servers', servers: this.snapshotServers() });
   }
@@ -2769,7 +2800,7 @@ export class Controller {
   noteImpersonation(record, msg, error) {
     const match = /identity conflict: (\S+)/.exec(error?.message ?? '');
     if (!match) return;
-    const text = `someone tried to join as ${match[1]} with a different key and was refused — revoke this circle's invite links`;
+    const text = `Someone used a different key to join as ${match[1]} and was blocked.`;
     console.error(`impersonation refused in ${record.id} (relay sender ${msg.sender}): ${error.message}`);
     this.toast(text);
     this.addSystemMessage(record.id, text);
@@ -2792,7 +2823,7 @@ export class Controller {
     record.outOfSync = false;
     this.forks.clear(record.id);
     if (wasActiveCall) await this.voice.leave().catch(() => {});
-    const text = `this account joined "${record.name}" from another device — only one device can send at a time, so this one is now read-only. Open an invite link here to move sending back.`;
+    const text = `Read-only: ${record.name} is active on another device. Open an invite link to switch.`;
     this.toast(text);
     this.addSystemMessage(record.id, text);
     await this.persistDevice(record);
@@ -2910,10 +2941,6 @@ export class Controller {
   async setRole(serverId, user, role) {
     await this.relay.request({ t: 'set_role', group: serverId, user, role });
     await this.sendContent(serverId, { k: 'role', user, role });
-    await this.addSystemMessage(
-      serverId,
-      `${user} is now ${role === 'admin' ? 'an admin' : 'a regular member'} (changed by you)`
-    );
     await this.refreshRoles(serverId);
   }
 
@@ -3160,7 +3187,7 @@ export class Controller {
     // writing over it would destroy whatever it knows that this does not.
     if (backup.v > BACKUP_VERSION) {
       throw new Error(
-        `These circles were saved by a newer version of quorum. Reload before changing anything.`
+        'Saved by a newer version of quorum. Reload the page.'
       );
     }
     return { servers: backup.servers ?? [], version };
@@ -3207,14 +3234,6 @@ export class Controller {
     // while there was no blob to write against.
     if (carry || orphans.length || this.backupDirty) this.scheduleBackup();
     if (fresh.length || orphans.length) {
-      for (const record of fresh) {
-        if (record.restored) {
-          this.addSystemMessage(
-            record.id,
-            `Loaded from your circles on the server. You can read the messages; ask to be re-added before you can send.`
-          );
-        }
-      }
       this.dispatch({ type: 'servers', servers: this.snapshotServers() });
     }
     return fresh;
@@ -3338,7 +3357,7 @@ export class Controller {
 
   identityBytes() {
     const stored = this.identityKeyString();
-    if (!stored) throw new Error('no identity on this device');
+    if (!stored) throw new Error('This device isn’t signed in.');
     return b64.dec(stored);
   }
 
@@ -3404,7 +3423,7 @@ export class Controller {
   async linkPoll(blobId) {
     const res = await fetch(`${this.httpBase()}/blobs/${encodeURIComponent(blobId)}`);
     if (res.status === 404) return null;
-    if (!res.ok) throw new Error(`link fetch failed: HTTP ${res.status}`);
+    if (!res.ok) throw new Error('Couldn’t reach the other device. Try again.');
     return new Uint8Array(await res.arrayBuffer());
   }
 
@@ -3416,12 +3435,12 @@ export class Controller {
       method: 'PUT',
       body: payload,
     });
-    if (!res.ok) throw new Error(`link send failed: HTTP ${res.status}`);
+    if (!res.ok) throw new Error('Couldn’t send to the other device. Try again.');
     return code;
   }
 
   async sendFile(serverId, channel, fileHandle) {
-    if (fileHandle.size > 20 * 1024 * 1024) throw new Error('attachment too large (20 MB max)');
+    if (fileHandle.size > 20 * 1024 * 1024) throw new Error('File too large (20 MB max).');
     const data = new Uint8Array(await fileHandle.arrayBuffer());
     // Random AES-GCM key per file; the relay sees only ciphertext under a
     // random capability id. The key rides inside the MLS message.
@@ -3437,7 +3456,7 @@ export class Controller {
       headers: { 'x-upload-ticket': ticket },
       body: encrypted,
     });
-    if (!res.ok) throw new Error(`upload failed: ${await res.text()}`);
+    if (!res.ok) throw new Error('Upload failed. Try again.');
     const file = {
       name: fileHandle.name,
       size: fileHandle.size,
@@ -3452,7 +3471,7 @@ export class Controller {
 
   async fetchFile(file) {
     const res = await fetch(`${this.httpBase()}/blobs/${file.blob}`);
-    if (!res.ok) throw new Error('attachment no longer available on the relay');
+    if (!res.ok) throw new Error('File no longer available.');
     const encrypted = new Uint8Array(await res.arrayBuffer());
     return decryptBlob(b64.dec(file.key), encrypted);
   }
@@ -3519,7 +3538,7 @@ export class Controller {
       record.verified = [];
       await this.addSystemMessage(
         record.id,
-        'Verification badges were reset. Safety numbers are now checked against the key that was verified, so re-check the members you trust.'
+        'Verification badges were reset. Verify members again.'
       );
       return true;
     }
@@ -3539,7 +3558,7 @@ export class Controller {
         changed = true;
         await this.addSystemMessage(
           record.id,
-          `${peer}'s key changed since you found a mismatch — the warning is cleared, but nothing has been verified. Compare again before trusting them.`
+          `${peer}’s key changed. Verify ${peer}.`
         );
       }
     }
@@ -3562,7 +3581,7 @@ export class Controller {
         changed = true;
         await this.addSystemMessage(
           record.id,
-          `${peer}'s safety number changed — verification cleared. Check it again before trusting this device.`
+          `${peer}’s key changed. Verify ${peer}.`
         );
       }
     }
@@ -3610,9 +3629,9 @@ export class Controller {
       subscription to the relay so it can nudge this device when offline. */
   async enableNotifications() {
     if (!this.swReg) await this.setupServiceWorker();
-    if (!this.swReg) throw new Error('service workers unavailable in this browser');
+    if (!this.swReg) throw new Error('Notifications aren’t supported in this browser.');
     const permission = await Notification.requestPermission();
-    if (permission !== 'granted') throw new Error('notification permission denied');
+    if (permission !== 'granted') throw new Error('Notifications are blocked. Allow them in your browser settings.');
     const info = await this.relay.request({ t: 'push_info' });
     const appKey = b64url.dec(info.pubkey);
     const subscribe = () =>
@@ -3686,7 +3705,8 @@ export class Controller {
     const { id, key } = this.pendingInvite;
     this.pendingInvite = null;
     const reply = await this.relay.request({ t: 'redeem_invite', invite: id }).catch((e) => {
-      throw new Error(`invite not usable: ${e.message}`);
+      console.warn(`redeem invite: ${e.message}`);
+      throw new Error('This invite link no longer works. Ask for a new one.');
     });
     // Already a live member -> nothing to do. A restored (read-only) stub
     // is NOT membership — the invite link is exactly how it comes back to
@@ -3707,10 +3727,11 @@ export class Controller {
       .request({ t: 'send', group, epoch, payload: b64.enc(commit), commit: true })
       .catch(async (e) => {
         await this.crypto('forgetGroup', { group }).catch(() => {});
+        console.warn(`join by link: ${e.message}`);
         throw new Error(
           /epoch conflict/i.test(e.message ?? '')
-            ? 'the circle changed while you were joining — open the invite link again'
-            : e.message
+            ? 'The circle changed while you were joining. Open the link again.'
+            : 'Couldn’t join. Open the link again.'
         );
       });
     // Merge over a restored stub the same way onWelcome does.
@@ -3740,11 +3761,10 @@ export class Controller {
     delete record.outOfSync;
     this.mlsGroups.add(group);
     this.servers.set(group, record);
+    // As in onWelcome: the key directory first, then any history.
+    await this.refreshKeyDirectory(record);
     await this.persistCircle(record);
-    await this.addSystemMessage(
-      group,
-      `You joined with an invite link, so you can read each room’s history. You show as not verified until someone checks your safety number.`
-    );
+    await this.addSystemMessage(group, 'You joined');
     this.dispatch({ type: 'servers', servers: this.snapshotServers() });
     await this.relay.request({ t: 'subscribe', group, after: sent.seq });
     this.refreshRoles(group);
@@ -3774,30 +3794,6 @@ export class Controller {
   /** A device-local notice in a room's stream. Session-lived: it is derived
       from something this device watched happen, and writing it to the log
       would give every member their own copy of the same line. */
-  /**
-   * First joiner into an empty room = a call started; say so in the room's
-   * first text channel so it reads like the event it is.
-   *
-   * A method rather than a closure in the VoiceManager options because it
-   * runs inside `track()`, inside `join()`, and anything that throws here
-   * takes the call down with it. That is not hypothetical: `addSystemMessage`
-   * is synchronous and returns nothing, and this used to end in
-   * `.catch(() => {})` — which threw a TypeError rather than swallowing one.
-   * The first person into a voice room got a toast and no call, and every
-   * call in the product starts with somebody being first. Out here it is
-   * reachable from a test.
-   */
-  announceCallStarted(server, channel, name) {
-    const record = this.servers.get(server);
-    if (!record) return;
-    const who = name === this.me ? 'you' : name;
-    this.addSystemMessage(
-      server,
-      `${who} started a call in ${channel}`,
-      record.channels[0] ?? 'general',
-    );
-  }
-
   addSystemMessage(serverId, text, channel = 'general') {
     const message = {
       server: serverId,
@@ -3956,7 +3952,13 @@ export class Controller {
 }
 
 
-export const UPDATE_TEXT = 'a new version is ready — reload when you get a moment';
+export const UPDATE_TEXT = 'New version available. Reload when ready.';
+
+/** "alice", "alice and bob", "alice, bob and carol", for system lines. */
+export function joinNames(names) {
+  if (names.length <= 1) return names.join('');
+  return `${names.slice(0, -1).join(', ')} and ${names.at(-1)}`;
+}
 
 /**
  * Should a controller change be announced as an update?

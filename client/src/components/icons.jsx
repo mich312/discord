@@ -104,10 +104,11 @@ export const Plus = (p) => (
   </Svg>
 );
 
+// A toothed cog, so it never reads as the sun (brightness) beside it.
 export const Gear = (p) => (
   <Svg {...p}>
     <circle cx="8" cy="8" r="2.1" />
-    <path d="M8 1.6v1.5M8 12.9v1.5M3.5 3.5l1.1 1.1M11.4 11.4l1.1 1.1M1.6 8h1.5M12.9 8h1.5M3.5 12.5l1.1-1.1M11.4 4.6l1.1-1.1" />
+    <path d="M6.7 3.1 7 1.2h2l.3 1.9 1.2.5 1.6-1.1 1.4 1.4-1.1 1.6.5 1.2 1.9.3v2l-1.9.3-.5 1.2 1.1 1.6-1.4 1.4-1.6-1.1-1.2.5-.3 1.9H7l-.3-1.9-1.2-.5-1.6 1.1-1.4-1.4 1.1-1.6-.5-1.2-1.9-.3V7l1.9-.3.5-1.2-1.1-1.6 1.4-1.4 1.6 1.1Z" />
   </Svg>
 );
 
@@ -287,6 +288,11 @@ export const ArrowUp = (p) => (
     <path d="M8 13.5v-11M4 6.5l4-4 4 4" />
   </Svg>
 );
+export const ArrowDown = (p) => (
+  <Svg {...p}>
+    <path d="M8 2.5v11M4 9.5l4 4 4-4" />
+  </Svg>
+);
 export const ChevronDown = (p) => (
   <Svg {...p}>
     <path d="M4 6l4 4 4-4" />
@@ -333,5 +339,24 @@ export const Seal8 = (p) => (
     <circle cx="8" cy="8" r="5.8" />
     <circle cx="8" cy="8" r="2.6" />
     <path d="M8 2.2v2M8 11.8v2M2.2 8h2M11.8 8h2" strokeWidth="1.1" />
+  </Svg>
+);
+
+// "Add reaction". A plus here read as "new" next to Reply.
+export const Smile = (p) => (
+  <Svg {...p}>
+    <circle cx="8" cy="8" r="6" />
+    <path d="M5.6 9.6c.6.9 1.4 1.3 2.4 1.3s1.8-.4 2.4-1.3" />
+    <circle cx="6" cy="6.4" r=".6" fill="currentColor" stroke="none" />
+    <circle cx="10" cy="6.4" r=".6" fill="currentColor" stroke="none" />
+  </Svg>
+);
+
+// "More actions" for a row: three dots.
+export const More = (p) => (
+  <Svg {...p}>
+    <circle cx="3.5" cy="8" r="1.2" fill="currentColor" stroke="none" />
+    <circle cx="8" cy="8" r="1.2" fill="currentColor" stroke="none" />
+    <circle cx="12.5" cy="8" r="1.2" fill="currentColor" stroke="none" />
   </Svg>
 );

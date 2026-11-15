@@ -1,52 +1,49 @@
 import React from 'react';
-import { Lock } from './icons.jsx';
+import { Lock, AlertTriangle } from './icons.jsx';
+import { encryptionNote } from '../lib/encryption-note.js';
 import { cx } from '../lib/cx.js';
 
-/** Members of a circle whose safety number nobody has compared on this
-    device. Same definition everywhere the count is shown — the room header,
-    the board and this line — so they cannot disagree. A mismatched member
-    is not "unchecked": they were checked and failed, and say so elsewhere. */
-export function uncheckedMembers(server, me) {
-  return (server.members ?? []).filter(
-    (m) => m !== me && !(server.verified ?? []).includes(m) && !server.mismatched?.[m]
-  );
-}
-
-/** The one encryption line on a surface that carries a conversation.
- *
- *  §10.1 — the claim is a function of state, not a static string. It read
- *  "End-to-end encrypted · 4 members" with two of the four unverified, which
- *  is precisely the case that needed qualifying.
- *  §10.3 — it says whom it covers.
- *  §10.5 — the qualification is the control that resolves it.
- */
+/** The one encryption line under a conversation. It says whom it covers and,
+    when something is outstanding, links to the fix. A key mismatch outranks
+    everything and is shown in the danger colour, never as verified. */
 export default function EncryptionNote({ server, me, onVerify, className }) {
-  const members = (server.members ?? []).length;
-  const unchecked = uncheckedMembers(server, me).length;
+  const note = encryptionNote(server, me);
+  const mismatch = note.state === 'mismatch';
+  const unchecked = note.state === 'unverified';
+  const alone = note.state === 'alone';
+  const Glyph = mismatch ? AlertTriangle : Lock;
   return (
     <div
-      className={cx('composer-note', unchecked > 0 && 'unchecked', className)}
-      data-testid="composer-note"
-    >
-      <Lock size={14} />
-      {unchecked > 0 ? (
-        <span>
-          Encrypted for {members} member{members === 1 ? '' : 's'}.{' '}
-          {onVerify ? (
-            <button className="linkish" data-testid="composer-unchecked" onClick={onVerify}>
-              {unchecked} {unchecked === 1 ? 'isn’t' : 'aren’t'} verified yet
-            </button>
-          ) : (
-            <>
-              {unchecked} {unchecked === 1 ? 'isn’t' : 'aren’t'} verified yet
-            </>
-          )}
-        </span>
-      ) : members > 1 ? (
-        <span>Encrypted for {members} verified members</span>
-      ) : (
-        <span>Encrypted on this device. Nobody else is in {server.name} yet.</span>
+      className={cx(
+        'composer-note',
+        unchecked && 'unchecked',
+        mismatch && 'mismatch',
+        alone && 'alone',
+        className
       )}
+      data-testid="composer-note"
+      data-state={note.state}
+    >
+      <Glyph size={14} />
+      <span>
+        {note.text}
+        {note.action && (
+          <>
+            {' · '}
+            {onVerify ? (
+              <button
+                className="linkish"
+                data-testid={mismatch ? 'composer-mismatch' : 'composer-unchecked'}
+                onClick={onVerify}
+              >
+                {note.action}
+              </button>
+            ) : (
+              note.action
+            )}
+          </>
+        )}
+      </span>
     </div>
   );
 }

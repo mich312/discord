@@ -2,6 +2,7 @@ import React from 'react';
 import Seal from './Seal.jsx';
 import { Wave, Mic, MicOff, ArrowRight } from './icons.jsx';
 import { describeCallLength } from '../lib/overview.js';
+import { callName } from '../lib/voice.js';
 import { cx } from '../lib/cx.js';
 
 // The call you are still in, following you out of the room it is in.
@@ -34,9 +35,8 @@ export default function CallBar({ voice, me, now, onOpen, onToggleMute }) {
         <Wave size={14} />
       </span>
       <span className="call-bar-where">
-        {/* §1.6 — green is doing the "live" work here, and the sentence is
-            what carries it if the colour does not arrive. */}
-        You&rsquo;re in the <strong>{call.channel}</strong> call
+        {/* §1.6: the words carry "live" if the green does not arrive. */}
+        In call: <strong>{callName(call.channel, me)}</strong>
       </span>
 
       <span className="call-bar-who">
@@ -51,17 +51,25 @@ export default function CallBar({ voice, me, now, onOpen, onToggleMute }) {
       </span>
 
       <div className="call-bar-actions">
-        <button
-          className={cx('call-bar-mic', muted && 'muted')}
-          data-testid="call-bar-mute"
-          // §1.6 again — "mic on" is not conveyed by the glyph alone, and
-          // §7.9: this is a toggle, so it says which way it is set.
-          aria-pressed={muted}
-          onClick={onToggleMute}
-        >
-          {muted ? <MicOff size={14} /> : <Mic size={14} />}
-          {muted ? 'Mic off' : 'Mic on'}
-        </button>
+        {voice.listenOnly ? (
+          // Joined without a microphone: there is nothing to toggle.
+          <button className="call-bar-mic muted" data-testid="call-bar-mute" disabled>
+            <MicOff size={14} />
+            No mic
+          </button>
+        ) : (
+          <button
+            className={cx('call-bar-mic', muted && 'muted')}
+            data-testid="call-bar-mute"
+            // §1.6 again — "mic on" is not conveyed by the glyph alone, and
+            // §7.9: this is a toggle, so it says which way it is set.
+            aria-pressed={muted}
+            onClick={onToggleMute}
+          >
+            {muted ? <MicOff size={14} /> : <Mic size={14} />}
+            {muted ? 'Mic off' : 'Mic on'}
+          </button>
+        )}
         <button className="call-bar-back" data-testid="call-bar-open" onClick={onOpen}>
           Open call
           <ArrowRight size={14} />

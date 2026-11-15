@@ -2,6 +2,15 @@ import { useDialog } from '../lib/useDialog.js';
 import React, { useEffect, useState } from 'react';
 import Seal from './Seal.jsx';
 import { X, Bell, Sun, Moon, Key, ShieldCheck, Wave, Check, LogOut } from './icons.jsx';
+import { cx } from '../lib/cx.js';
+import { failText } from '../lib/fail-text.js';
+
+// Theme choices: [testid key, label, stored preference (null = system)].
+const THEME_OPTIONS = [
+  ['system', 'System', null],
+  ['light', 'Light', 'paper'],
+  ['dark', 'Dark', 'carbon'],
+];
 
 // User settings: profile, notifications, appearance, audio devices, and
 // account/identity actions — the scattered chrome (theme toggle, bell,
@@ -12,8 +21,7 @@ export default function Settings({
   // 'paper' | 'carbon' | null, where null means the theme is following the
   // operating system. `theme` above is the resolved one either way.
   themePref = null,
-  onTheme,
-  onSystemTheme,
+  onThemePref,
   onEnableNotifications,
   voice,
   // Device preference: route my media through TURN so peers never see my
@@ -89,9 +97,9 @@ export default function Settings({
     try {
       await onEnableNotifications();
       setPerm(typeof Notification !== 'undefined' ? Notification.permission : 'unsupported');
-      setNotifMsg({ ok: true, text: 'notifications enabled for this device' });
+      setNotifMsg({ ok: true, text: 'Notifications on' });
     } catch (e) {
-      setNotifMsg({ ok: false, text: e.message });
+      setNotifMsg({ ok: false, text: failText(e, 'Couldn’t turn on notifications.') });
       setPerm(typeof Notification !== 'undefined' ? Notification.permission : 'unsupported');
     } finally {
       setNotifBusy(false);
@@ -118,9 +126,9 @@ export default function Settings({
   }
 
   const dspOptions = [
-    ['noiseSuppression', 'Noise suppression', 'Filters steady background noise: keyboards, fans, hum.'],
-    ['echoCancellation', 'Echo cancellation', 'Stops your speakers bleeding back into your mic.'],
-    ['autoGainControl', 'Auto gain', 'Even out your level so you are not too quiet or clipping.'],
+    ['noiseSuppression', 'Noise suppression'],
+    ['echoCancellation', 'Echo cancellation'],
+    ['autoGainControl', 'Auto volume'],
   ];
 
   const dialog = useDialog(onClose, { label: 'Settings' });
@@ -134,7 +142,6 @@ export default function Settings({
         onClick={(e) => e.stopPropagation()}
       >
         <div className="dialog-head">
-          <span className="dialog-glyph"><ShieldCheck /></span>
           <h1>Settings</h1>
           <button className="icon-btn dialog-close" data-testid="settings-close" aria-label="Close" title="Close" onClick={onClose}>
             <X size={18} />
@@ -146,12 +153,7 @@ export default function Settings({
           <h2 className="settings-label">Profile</h2>
           <div className="settings-profile">
             <Seal name={me} size={40} title={me} />
-            <div>
-              <div className="settings-handle">{me}</div>
-              <div className="fineprint muted">
-                Your handle is tied to your identity key and can’t be changed.
-              </div>
-            </div>
+            <div className="settings-handle">{me}</div>
           </div>
         </section>
 
@@ -162,13 +164,9 @@ export default function Settings({
             <span className="settings-row-glyph"><Bell size={14} /></span>
             <div className="settings-row-body">
               <div>Push notifications</div>
-              <div className="fineprint muted">
-                A nudge when a message arrives while you’re offline.
-              </div>
               {perm === 'denied' && (
                 <div className="fineprint warn">
-                  Blocked in this browser. Re-allow notifications for this site in your
-                  browser settings, then try again.
+                  Blocked. Allow notifications for this site in browser settings.
                 </div>
               )}
               {notifMsg && (
@@ -178,12 +176,12 @@ export default function Settings({
             <button
               className="button"
               data-testid="settings-enable-notifications"
-              disabled={notifBusy || perm === 'unsupported'}
+              disabled={notifBusy || perm === 'unsupported' || perm === 'denied'}
               onClick={enableNotifs}
             >
               {perm === 'granted' ? (
                 <>
-                  <Check size={14} /> Re-register
+                  <Check size={14} /> Refresh
                 </>
               ) : (
                 'Turn on'
@@ -197,25 +195,22 @@ export default function Settings({
           <h2 className="settings-label">Appearance</h2>
           <div className="settings-row">
             <span className="settings-row-glyph">{theme === 'paper' ? <Sun size={14} /> : <Moon size={14} />}</span>
-            <div className="settings-row-body">
-              <div>Theme</div>
-              {/* Say which of the two states you are in. Without this, a
-                  system-following install and a pinned one look identical,
-                  and there is no way to tell that the theme is about to
-                  change by itself at sunset. */}
-              <div className="fineprint muted">
-                {theme === 'paper' ? 'Light' : 'Dark'}
-                {themePref === null ? ' · following your system' : ''}
-              </div>
+            <div className="settings-row-body" id="settings-theme-label">Theme</div>
+            {/* One three-way control; the filled option is the state. */}
+            <div className="segmented" role="group" aria-labelledby="settings-theme-label">
+              {THEME_OPTIONS.map(([key, label, pref]) => (
+                <button
+                  key={key}
+                  type="button"
+                  className={cx('segment', themePref === pref && 'on')}
+                  aria-pressed={themePref === pref}
+                  data-testid={`settings-theme-${key}`}
+                  onClick={() => onThemePref(pref)}
+                >
+                  {label}
+                </button>
+              ))}
             </div>
-            {themePref !== null && (
-              <button className="button ghost" data-testid="settings-theme-system" onClick={onSystemTheme}>
-                Use system
-              </button>
-            )}
-            <button className="button" data-testid="settings-theme" onClick={onTheme}>
-              Switch to {theme === 'paper' ? 'dark' : 'light'}
-            </button>
           </div>
         </section>
 
@@ -226,7 +221,7 @@ export default function Settings({
             <div className="settings-row">
               <span className="settings-row-glyph"><Wave size={14} /></span>
               <div className="settings-row-body fineprint muted">
-                Allow microphone access to name your devices.
+                Allow mic access to see device names.
               </div>
               <button className="button" data-testid="settings-grant-mic" onClick={grantMic}>
                 Allow
@@ -256,18 +251,13 @@ export default function Settings({
                 ))}
               </select>
             ) : (
-              <span className="fineprint muted">
-                This browser can&rsquo;t pick an output, so sound follows the system default.
-              </span>
+              <span className="fineprint muted">Uses system default</span>
             )}
           </label>
-          <p className="fineprint muted">
-            Output changes apply at once, and a new microphone switches live if you&rsquo;re in a call.
-          </p>
 
           <div className="settings-dsp">
             <div className="settings-dsp-head">Mic processing</div>
-            {dspOptions.map(([key, label, hint]) => (
+            {dspOptions.map(([key, label]) => (
               <label className="settings-toggle" key={key}>
                 <input
                   type="checkbox"
@@ -277,19 +267,13 @@ export default function Settings({
                 />
                 <span className="settings-toggle-body">
                   <span className="settings-toggle-label">{label}</span>
-                  <span className="fineprint muted">{hint}</span>
                 </span>
               </label>
             ))}
-            <p className="fineprint muted">
-              On by default. Turn them off for raw capture, for example with good hardware or when
-              sharing music. Changes apply to a live call at once.
-            </p>
           </div>
 
-          {/* The one privacy fact about calls that the app never stated:
-              media is peer-to-peer, so everyone in a call learns everyone
-              else's IP address. */}
+          {/* Calls are peer-to-peer, so everyone in a call learns everyone
+              else's IP address unless media goes through the relay. */}
           <div className="settings-dsp">
             <div className="settings-dsp-head">Call privacy</div>
             <label className="settings-toggle">
@@ -300,26 +284,18 @@ export default function Settings({
                 data-testid="settings-relay-only"
               />
               <span className="settings-toggle-body">
-                <span className="settings-toggle-label">Hide my IP address from people in a call</span>
-                <span className="fineprint muted">
-                  Calls are peer-to-peer, so by default everyone in a call can see your address.
-                  This routes your audio and video through the server&rsquo;s relay instead. It hides{' '}
-                  <em>your</em> address; theirs stays visible unless they turn this on too.
-                </span>
+                <span className="settings-toggle-label">Hide my IP address in calls</span>
+                <span className="fineprint muted">Otherwise people in a call can see it.</span>
+                <span className="fineprint muted">Applies from your next call.</span>
               </span>
             </label>
             {relayOnly && !turnAvailable && (
-              // Said plainly rather than silently ignoring the setting: a
-              // privacy switch that quietly does nothing is worse than one
-              // that visibly does not work.
+              // Said plainly: a privacy switch that quietly does nothing is
+              // worse than one that visibly does not work.
               <p className="fineprint warn" data-testid="settings-relay-no-turn">
-                This server has no call relay set up, so calls won&rsquo;t connect while this is on.
-                Ask whoever runs it to set <code>TURN_URLS</code>, or turn this off.
+                This server has no call relay, so calls won&rsquo;t connect. Turn this off.
               </p>
             )}
-            <p className="fineprint muted">
-              Applies to calls you join from now on, not one you are already in.
-            </p>
           </div>
 
           <div className="settings-dsp">
@@ -332,10 +308,7 @@ export default function Settings({
                 data-testid="settings-call-sounds"
               />
               <span className="settings-toggle-body">
-                <span className="settings-toggle-label">Join and leave chimes</span>
-                <span className="fineprint muted">
-                  A soft tone when someone enters or leaves the call you’re in.
-                </span>
+                <span className="settings-toggle-label">Join and leave sounds</span>
               </span>
             </label>
           </div>
@@ -344,28 +317,29 @@ export default function Settings({
         {/* Account */}
         <section className="settings-section">
           <h2 className="settings-label">Account</h2>
+          {/* The backup's state as text; the button is what you can do. */}
+          <div className="settings-row">
+            <span className="settings-row-glyph"><ShieldCheck size={14} /></span>
+            <div className="settings-row-body">
+              <div>Backup</div>
+              <div className="fineprint muted">{secured ? 'Backed up' : 'Only on this device'}</div>
+            </div>
+            <button className="button" data-testid="settings-secure" onClick={onSecure}>
+              {secured ? 'Manage' : 'Back up'}
+            </button>
+          </div>
           <div className="settings-actions">
             <button className="button" data-testid="settings-identity" onClick={onShowIdentity}>
               <Key size={14} /> Identity key
             </button>
-            <button className="button" data-testid="settings-secure" onClick={onSecure}>
-              <ShieldCheck size={14} /> {secured ? 'Account secured' : 'Secure account'}
-            </button>
           </div>
-          <p className="fineprint muted">
-            Your key lives only on your devices, and the server can&rsquo;t recover it. Export it, or
-            add a passkey or password, so you can sign in elsewhere.
-          </p>
         </section>
 
-        {/* Signing out. Its own section, at the end, with nothing beside it:
-            §7.3 — reversible and irreversible actions never share a row, a
-            size or a weight. It used to sit 8px from the settings gear in
-            the sidebar, both icon-only, both 14px. */}
+        {/* Signing out: its own section, at the end, with nothing beside it (§7.3). */}
         <section className="settings-section">
           <h2 className="settings-label">This device</h2>
           <button className="button danger" data-testid="logout" onClick={onLogout}>
-            <LogOut size={14} /> Log out of this device
+            <LogOut size={14} /> Log out
           </button>
         </section>
       </div>

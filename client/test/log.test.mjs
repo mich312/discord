@@ -12,7 +12,9 @@ import {
   entryToMessage,
   messageId,
   pruneLog,
+  reattribute,
   renderLog,
+  unverifiedEntries,
 } from '../src/lib/log.js';
 
 const ctx = { server: 'srv', channel: 'general' };
@@ -149,6 +151,31 @@ test('an unverified mutation never takes effect', () => {
     assert.equal(shown[0].text, 'original', `${auth} mutations are inert`);
     assert.equal(shown[0].deleted, undefined);
   }
+});
+
+test('an unattributable line is held for a second check, and settles on it', () => {
+  const log = createChannelLog();
+  const edit = { v: 1, k: 'edit', sender: 'bob', ts: 200, to: { ts: 100 }, text: 'final' };
+  addEntries(
+    log,
+    [
+      { seq: 1, entry: chat('bob', 100, 'draft'), auth: 'unknown', hid: 'h1' },
+      { seq: 2, entry: edit, auth: 'unknown', hid: 'h1' },
+      { seq: 3, entry: chat('bob', 300, 'in his name'), auth: 'unknown', hid: 'h1' },
+      { seq: 4, entry: chat('alice', 400, 'mine'), auth: 'signed', hid: 'h1' },
+    ],
+    ctx
+  );
+  const held = unverifiedEntries(log);
+  assert.equal(held.length, 3, 'only the unknown ones are held');
+  assert.ok(held.every((u) => u.hid === 'h1'), 'with the log they came from');
+
+  const verdicts = { 100: 'signed', 200: 'signed', 300: 'forged' };
+  const changed = reattribute(log, held.map((u) => ({ ...u, auth: verdicts[u.entry.ts] })));
+  assert.equal(changed, 3);
+  const shown = renderLog(log);
+  assert.deepEqual(shown.map((m) => [m.text, m.auth]), [['final', 'signed'], ['mine', 'signed']]);
+  assert.equal(unverifiedEntries(log).length, 0, 'nothing is checked twice');
 });
 
 test('the relay copy supersedes the local echo, never the other way round', () => {

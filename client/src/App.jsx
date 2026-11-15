@@ -29,12 +29,14 @@ import {
   markNotifPrompted,
 } from './lib/notify-prompt.js';
 import BootLoader from './components/BootLoader.jsx';
-import { Key, ShieldCheck, LinkGlyph, Sun, Gear } from './components/icons.jsx';
+import { Key, ShieldCheck, LinkGlyph, Sun, Gear, X } from './components/icons.jsx';
 import { markPlayed, bumpPlayCount } from './lib/games.js';
 import { withViewTransition } from './lib/viewTransition.js';
 import { useMinuteClock } from './lib/clock.js';
 import { hasTurn, loadRelayOnly, saveRelayOnly } from './lib/voice.js';
 import { deviceLabel } from './lib/account.js';
+import { failText, cancelled, TRY_AGAIN } from './lib/fail-text.js';
+import { cx } from './lib/cx.js';
 import {
   readPref,
   writePref,
@@ -208,6 +210,31 @@ function reducer(state, action) {
 /** Set just before a superseded tab reloads to take the session back. */
 const TAKE_SESSION_KEY = 'quorum-take-session';
 
+// Toast copy for a failed action, and "the user closed the picker": see
+// lib/fail-text.js, shared with the gate and the dialogs.
+
+// "Not now" on a banner hides it on this device for a week. Where the
+// browser may clear this site's storage within a week (WebKit, not
+// installed), the backup banner comes back the next day: the key it is
+// about could be cleared while it is hidden.
+const DAY_MS = 24 * 60 * 60 * 1000;
+const SNOOZE_MS = 7 * DAY_MS;
+const SNOOZE_KEYS = { secure: 'quorum-snooze-secure', storage: 'quorum-snooze-storage' };
+function snoozed(which) {
+  try {
+    return Number(localStorage.getItem(SNOOZE_KEYS[which])) > Date.now();
+  } catch {
+    return false;
+  }
+}
+function snooze(which, ms = SNOOZE_MS) {
+  try {
+    localStorage.setItem(SNOOZE_KEYS[which], String(Date.now() + ms));
+  } catch {
+    /* storage blocked: hidden until the next load */
+  }
+}
+
 export default function App() {
   const [state, rawDispatch] = useReducer(reducer, initial);
   const takeSessionRef = useRef(() => {});
@@ -226,6 +253,8 @@ export default function App() {
     }
     rawDispatch(action);
   }, []);
+  // Every failed action reaches the toast through here (see failText).
+  const fail = (fallback) => (e) => dispatch({ type: 'toast', text: failText(e, fallback) });
   // Theme is a device preference, not account state — plain localStorage.
   // `themePref` is 'paper' | 'carbon' | null, where null means "follow the
   // system"; `theme` is what is actually on screen. Everything downstream
@@ -233,6 +262,52 @@ export default function App() {
   const [themePref, setThemePref] = useState(readPref);
   const [systemLight, setSystemLight] = useState(prefersLight);
   useEffect(() => watchSystem(setSystemLight), []);
+  // Which composer has focus: 'room', 'other' (a call or game chat) or null.
+  // On a touch screen CSS folds chrome away while you type (the keyboard
+  // leaves 200 to 350px). Losing focus is applied a moment late, so the tap
+  // that blurred the field lands where it was aimed before the chrome
+  // comes back and moves things.
+  const [typing, setTyping] = useState(null);
+  useEffect(() => {
+    let later = null;
+    const kind = (el) =>
+      !el?.matches?.('input, textarea')
+        ? null
+        : el.closest('.composer-dock')
+          ? 'room'
+          : el.closest('.stage-composer, .game-dock')
+            ? 'other'
+            : null;
+    const settle = () => {
+      clearTimeout(later);
+      later = setTimeout(() => setTyping(kind(document.activeElement)), 300);
+    };
+    const onIn = (e) => {
+      const k = kind(e.target);
+      if (!k) return settle();
+      clearTimeout(later);
+      setTyping(k);
+    };
+    document.addEventListener('focusin', onIn);
+    document.addEventListener('focusout', settle);
+    return () => {
+      clearTimeout(later);
+      document.removeEventListener('focusin', onIn);
+      document.removeEventListener('focusout', settle);
+    };
+  }, []);
+  const typingRoom = typing === 'room';
+  // A short visible area (keyboard up where only the visual viewport
+  // shrinks, as on iOS): CSS folds the room chrome away while you type.
+  useEffect(() => {
+    const vv = window.visualViewport;
+    if (!vv) return undefined;
+    const update = () =>
+      document.documentElement.classList.toggle('vv-short', vv.scale <= 1.01 && vv.height < 500);
+    update();
+    vv.addEventListener('resize', update);
+    return () => vv.removeEventListener('resize', update);
+  }, []);
   const theme = resolveTheme(themePref, systemLight);
   // Pin whichever theme is *not* showing, regardless of how the current one
   // was arrived at — a toggle that did nothing on its first press because the
@@ -263,6 +338,16 @@ export default function App() {
   // landing in the app (see effect below). The popup routes through the same
   // enableNotifications() as Settings.
   const [notifPrompt, setNotifPrompt] = useState(false);
+  // Banners the user put off with "Not now" (per device, for a week).
+  const [snoozedBanners, setSnoozedBanners] = useState(() => ({
+    secure: snoozed('secure'),
+    storage: snoozed('storage'),
+  }));
+  const hideBanner = (which) => {
+    snooze(which, which === 'secure' && stateRef.current.storageEvicts ? DAY_MS : SNOOZE_MS);
+    setSnoozedBanners((b) => ({ ...b, [which]: true }));
+  };
+  const [storageHow, setStorageHow] = useState(false);
 
   useEffect(() => {
     // Leaving the attribute *off* is what hands first paint to the CSS
@@ -322,15 +407,13 @@ export default function App() {
       openDb()
         .then((db) => {
           controller.db = db;
-          controller.boot().catch((e) => dispatch({ type: 'toast', text: e.message }));
+          controller.boot().catch(fail('Couldn’t start. Reload to try again.'));
         })
         // Private browsing and locked-down profiles reject openDb outright.
-        // This had no catch, so the rejection went unhandled and the app sat
-        // on the boot splash forever with nothing on screen to explain it.
-        .catch((e) =>
+        .catch(() =>
           dispatch({
             type: 'fatal',
-            text: `This browser won’t let quorum store data (${e.message}). Private browsing usually causes this, so try a normal window.`,
+            text: 'This browser won’t let quorum save data. Try a normal, non-private window.',
           })
         );
     // One tab at a time runs the session: two would share one ratchet, and
@@ -347,7 +430,7 @@ export default function App() {
       dispatch({ type: 'phase', phase: 'loading' });
       lock.takeOver().then(start);
     };
-    // "Use it here" on a tab that was superseded reloads into a clean
+    // "Open here" on a tab that was superseded reloads into a clean
     // controller, and this flag carries the intent across the reload.
     let wanted = false;
     try {
@@ -453,7 +536,7 @@ export default function App() {
     setLoadingOlder(true);
     controllerRef.current
       ?.loadOlderMessages(server, channel)
-      .catch((e) => dispatch({ type: 'toast', text: `Couldn’t load earlier messages: ${e.message}` }))
+      .catch(fail('Couldn’t load earlier messages.'))
       .finally(() => setLoadingOlder(false));
   }, [server, channel]);
 
@@ -566,12 +649,11 @@ export default function App() {
     });
   };
 
-  // Launch a game from the shelf: the game takes the main pane, and the
-  // circle's first room docks beside it so the conversation rides along.
-  // Launching also drops a join card into that room — late arrivals get
-  // a one-tap way in, which is the whole point of a shared shelf.
+  // Launch a game from the shelf: the game takes the main pane, and a text
+  // room docks beside it so the conversation rides along (never a call's
+  // own thread). Launching also drops a join card into that room.
   const launchGame = (g, { announce = true } = {}) => {
-    const ch = channel ?? activeServer?.channels[0];
+    const ch = channel && !isCallChat(channel) ? channel : activeServer?.channels[0];
     if (!ch) return;
     dispatch({ type: 'select', server, channel: ch });
     setStage(false);
@@ -637,13 +719,7 @@ export default function App() {
         <div className="card" data-testid="insecure-context">
           <h1>Needs a secure connection</h1>
           <p className="muted lede">
-            quorum generates and unlocks your keys with the browser's Web Crypto
-            API, which browsers only expose over a secure connection. This page
-            is being served over plain <strong>http://</strong>.
-          </p>
-          <p className="muted">
-            Serve it over <strong>https://</strong> (terminate TLS in front of
-            the relay), or use <strong>http://localhost</strong> for local
+            Open quorum over <strong>https://</strong>, or <strong>http://localhost</strong> for
             testing.
           </p>
         </div>
@@ -666,10 +742,6 @@ export default function App() {
     return (
       <div className="boot-fatal" data-testid={moved ? 'session-superseded' : 'session-elsewhere'}>
         <h1>{moved ? 'quorum moved to another tab' : 'quorum is open in another tab'}</h1>
-        <p>
-          One tab at a time: your encryption keys advance with every message, and two tabs
-          advancing them separately would break both. Switching keeps everything.
-        </p>
         <button
           className="button"
           data-testid="session-take"
@@ -683,7 +755,7 @@ export default function App() {
             location.reload();
           }}
         >
-          Use it here
+          Open here
         </button>
       </div>
     );
@@ -696,6 +768,11 @@ export default function App() {
   }
 
   const unsecured = state.vault.kind === null && !state.vault.securedLocal;
+  const showSecureBanner = unsecured && !snoozedBanners.secure;
+  // Only where it is a real countdown (WebKit, not installed), and never
+  // stacked on the secure banner.
+  const showStorageBanner =
+    state.storageAtRisk && state.storageEvicts && !unsecured && !snoozedBanners.storage;
   // Admin of the active circle (or a global admin): may add members,
   // create invites, and change roles. Relay-enforced; this only gates UI.
   const canManage =
@@ -721,7 +798,7 @@ export default function App() {
         },
       });
     } catch (e) {
-      dispatch({ type: 'toast', text: e.message });
+      fail('Couldn’t load the safety number.')(e);
     }
   };
 
@@ -738,22 +815,22 @@ export default function App() {
         controllerRef.current.voice
           .callUser(server, peer)
           .then(() => openStage())
-          .catch((e) => dispatch({ type: 'toast', text: `Couldn’t start the call: ${e.message}` }));
+          .catch(fail('Couldn’t start the call.'));
       }}
       onPropose={(user) =>
         controllerRef.current
           .proposeMember(server, user)
-          .catch((e) => dispatch({ type: 'toast', text: e.message }))
+          .catch(fail('Couldn’t propose them.'))
       }
       onSetRole={(user, role) =>
         controllerRef.current
           .setRole(server, user, role)
-          .catch((e) => dispatch({ type: 'toast', text: e.message }))
+          .catch(fail('Couldn’t change their role.'))
       }
       onRemoveMember={(user) =>
         controllerRef.current
           .removeMember(server, user)
-          .catch((e) => dispatch({ type: 'toast', text: `Couldn’t remove them: ${e.message}` }))
+          .catch(fail('Couldn’t remove them.'))
       }
       onMember={(peer) => openSafety(server, peer)}
     />
@@ -792,7 +869,7 @@ export default function App() {
       const url = await controllerRef.current.createInvite(server);
       dispatch({ type: 'modal', modal: { type: 'invite', url } });
     } catch (e) {
-      dispatch({ type: 'toast', text: e.message });
+      fail('Couldn’t create an invite link.')(e);
     }
   };
   const openAdminOverview = async () => {
@@ -810,7 +887,7 @@ export default function App() {
         },
       });
     } catch (e) {
-      dispatch({ type: 'toast', text: e.message });
+      fail('Couldn’t load the admin overview.')(e);
     }
   };
 
@@ -828,36 +905,34 @@ export default function App() {
 
   const paletteActions = [
     ...(activeServer && canManage
-      ? [{ id: 'act:invite', label: 'Create invite link', hint: 'Action', glyph: <LinkGlyph />, run: openInvite }]
+      ? [{ id: 'act:invite', label: 'Invite people', glyph: <LinkGlyph />, run: openInvite }]
       : []),
     ...(state.globalAdmin
-      ? [{ id: 'act:admin', label: 'Server admin overview', hint: 'Action', glyph: <ShieldCheck />, run: openAdminOverview }]
+      ? [{ id: 'act:admin', label: 'Admin overview', glyph: <ShieldCheck />, run: openAdminOverview }]
       : []),
     ...(activeServer
       ? [
           {
             id: 'act:circle',
-            label: `${activeServer.name} settings`,
-            hint: 'Action',
+            label: 'Circle settings',
             glyph: <Gear />,
             run: openCircleSettings,
           },
         ]
       : []),
-    { id: 'act:settings', label: 'Settings', hint: 'Action', glyph: <Gear />, run: openSettings },
-    { id: 'act:identity', label: 'Show identity key', hint: 'Action', glyph: <Key />, run: openIdentity },
-    { id: 'act:secure', label: 'Secure this account', hint: 'Action', glyph: <ShieldCheck />, run: openSecure },
+    { id: 'act:settings', label: 'Settings', glyph: <Gear />, run: openSettings },
+    { id: 'act:identity', label: 'Identity key', glyph: <Key />, run: openIdentity },
+    { id: 'act:secure', label: 'Back up account', glyph: <ShieldCheck />, run: openSecure },
     {
       id: 'act:theme',
-      label: theme === 'paper' ? 'Switch to dark theme' : 'Switch to light theme',
-      hint: 'Action',
+      label: theme === 'paper' ? 'Dark theme' : 'Light theme',
       glyph: <Sun />,
       run: toggleTheme,
     },
   ];
 
   return (
-    <div className="app-shell">
+    <div className={cx('app-shell', typing && 'typing', typingRoom && 'typing-room')}>
       {/* Reaching the conversation meant tabbing the rail, the whole channel
           sidebar and the voice list, on every load. Hidden until focused. */}
       <a className="skip-link" href="#messages-pane">
@@ -865,13 +940,7 @@ export default function App() {
       </a>
       <Masthead
         server={activeServer}
-        channel={channel}
-        // What the pane is *showing*, which is not the same as what is
-        // running: a call keeps going when you walk back to a text room, and
-        // the marker must name the room in that case, not the call.
-        callChannel={stage && state.voice.active ? state.voice.active.channel : null}
         game={liveGame && channel ? liveGame : null}
-        call={state.voice.active}
         now={now}
         onOpenCircle={() =>
           withViewTransition(() => {
@@ -881,46 +950,59 @@ export default function App() {
           })
         }
         connection={state.connection}
-        theme={theme}
         canInvite={canManage}
         onInvite={openInvite}
         onCircles={goCircles}
         onPalette={() => setPaletteOpen(true)}
-        onTheme={toggleTheme}
         me={state.me}
         onSettings={openSettings}
         callPill={state.voice.active && !stage && !(liveGame && channel) ? state.voice.active : null}
-        muted={!!state.voice.muted}
+        muted={!!state.voice.muted || !!state.voice.listenOnly}
         onOpenCall={openStage}
       />
-      {unsecured && (
+      {showSecureBanner && (
         <div className="secure-banner" data-testid="secure-banner">
-          <Key size={14} />
-          {/* §11.6 bans "gone forever" by name, and cites this banner as the
-              reason the rule exists. It has never actually been on screen —
-              the vault status it keys off never reached the reducer — so this
-              is the first version of it anyone will read. §11.2: what is true,
-              what it means for you, what to do about it. */}
+          {/* The risk, then the fix. On a narrow phone the second sentence
+              gives way to the button that says the same thing. */}
           <span>
-            Your key for <strong>{state.me}</strong> exists only in this browser. Save an
-            encrypted backup to the server so you can sign in on another device.
+            Your key is only on this device.
+            <span className="secure-banner-more"> Back up to keep your account.</span>
           </span>
           <button className="button" data-testid="secure-now" onClick={openSecure}>
-            Secure account
+            Back up
+          </button>
+          <button
+            className="button ghost banner-later"
+            data-testid="secure-later"
+            aria-label="Not now"
+            onClick={() => hideBanner('secure')}
+          >
+            <span className="banner-later-label">Not now</span>
+            <X size={14} className="banner-later-x" />
           </button>
         </div>
       )}
-      {state.storageAtRisk && state.storageEvicts && !unsecured && (
-        // Only shown where it is a real countdown (WebKit, not installed)
-        // and only once the account is already secured — an unsecured
-        // account has a louder banner of its own, and stacking two nags is
-        // how people learn to dismiss both.
+      {showStorageBanner && (
         <div className="secure-banner" data-testid="storage-banner">
-          <Key size={14} />
           <span>
-            This browser may delete quorum&rsquo;s data after 7 days without use.{' '}
-            <strong>Add it to your home screen</strong> so you don&rsquo;t have to sign in again.
+            {storageHow
+              ? 'Tap Share, then Add to Home Screen.'
+              : 'Add quorum to your home screen to stay signed in.'}
           </span>
+          {!storageHow && (
+            <button className="button" data-testid="storage-how" onClick={() => setStorageHow(true)}>
+              How
+            </button>
+          )}
+          <button
+            className="button ghost banner-later"
+            data-testid="storage-later"
+            aria-label="Not now"
+            onClick={() => hideBanner('storage')}
+          >
+            <span className="banner-later-label">Not now</span>
+            <X size={14} className="banner-later-x" />
+          </button>
         </div>
       )}
       {/* A call is running and the screen is not it. §7.4 — the mic stays
@@ -961,17 +1043,6 @@ export default function App() {
               setGame(null); // …and the game
             })
           }
-          onSettings={(ch) =>
-            dispatch({
-              type: 'modal',
-              modal: {
-                type: 'channel',
-                server,
-                channel: ch,
-                meta: activeServer.chanMeta?.[ch] ?? {},
-              },
-            })
-          }
           onCreate={(ch) => controllerRef.current.createChannel(server, ch)}
           onVoiceCreate={(ch) => controllerRef.current.createVoiceChannel(server, ch)}
           onVoiceSettings={(ch) =>
@@ -984,7 +1055,7 @@ export default function App() {
             controllerRef.current.voice
               .join(server, ch)
               .then(() => openStage())
-              .catch((e) => dispatch({ type: 'toast', text: `Couldn’t join the call: ${e.message}` }))
+              .catch(fail('Couldn’t join the call.'))
           }
           onOpenStage={openStage}
         />
@@ -1001,19 +1072,20 @@ export default function App() {
             onSend={(text) =>
               controllerRef.current
                 .sendChat(server, channel, text)
-                .catch((e) => dispatch({ type: 'toast', text: e.message }))
+                .catch(fail('Message not sent.'))
             }
             voice={state.voice}
             onVoiceJoin={(ch) =>
               controllerRef.current.voice
                 .join(server, ch)
-                .catch((e) => dispatch({ type: 'toast', text: `Couldn’t join the call: ${e.message}` }))
+                .catch(fail('Couldn’t join the call.'))
             }
             onVoiceLeave={() => controllerRef.current.voice.leave()}
             onToggleMute={() => controllerRef.current.voice.setMuted(!state.voice.muted)}
             onInviteSeat={() =>
               controllerRef.current.sendGameCard(server, channel, liveGame).catch(() => {})
             }
+            onVerify={closeGame}
             onClose={closeGame}
           />
         ) : activeServer && stage && state.voice.active ? (
@@ -1022,7 +1094,13 @@ export default function App() {
             manager={controllerRef.current.voice}
             me={state.me}
             server={activeServer}
-            backLabel={channel ? `#${channel}` : 'Board'}
+            // Where back goes: the room the stage was opened from, or the
+            // board. `channel` itself is the call's own thread here.
+            backLabel={
+              stageReturn.current?.channel && !isCallChat(stageReturn.current.channel)
+                ? `#${stageReturn.current.channel}`
+                : 'Board'
+            }
             onVerify={() =>
               withViewTransition(() => {
                 dispatch({ type: 'select', server, channel: null });
@@ -1035,18 +1113,18 @@ export default function App() {
             onSend={(text) =>
               controllerRef.current
                 .sendChat(server, channel, text)
-                .catch((e) => dispatch({ type: 'toast', text: e.message }))
+                .catch(fail('Message not sent.'))
             }
             onShare={() =>
               controllerRef.current.voice
                 .startShare()
-                .catch((e) => dispatch({ type: 'toast', text: `Couldn’t share your screen: ${e.message}` }))
+                .catch((e) => cancelled(e) || fail('Couldn’t share your screen.')(e))
             }
             onStopShare={() => controllerRef.current.voice.stopShare()}
             onCamera={() =>
               controllerRef.current.voice
                 .startCamera()
-                .catch((e) => dispatch({ type: 'toast', text: `Couldn’t start the camera: ${e.message}` }))
+                .catch(fail('Couldn’t start the camera.'))
             }
             onStopCamera={() => controllerRef.current.voice.stopCamera()}
             onToggleMute={() => controllerRef.current.voice.setMuted(!state.voice.muted)}
@@ -1068,23 +1146,16 @@ export default function App() {
                 onSend={(text, reply) =>
                   controllerRef.current
                     .sendChat(server, channel, text, reply)
-                    .catch((e) => dispatch({ type: 'toast', text: e.message }))
+                    .catch(fail('Message not sent.'))
                 }
                 onType={() => controllerRef.current?.typing(server, channel).catch(() => {})}
                 onSendFile={(file) =>
                   controllerRef.current
                     .sendFile(server, channel, file)
-                    .catch((e) => dispatch({ type: 'toast', text: e.message }))
+                    .catch(fail('File not sent.'))
                 }
                 fetchFile={(file) => controllerRef.current.fetchFile(file)}
                 voice={state.voice}
-                onVoiceJoin={(ch) =>
-                  controllerRef.current.voice
-                    .join(server, ch)
-                    .then(() => openStage())
-                    .catch((e) => dispatch({ type: 'toast', text: `Couldn’t join the call: ${e.message}` }))
-                }
-                onOpenStage={openStage}
                 onOpenBoard={() =>
                   withViewTransition(() => {
                     dispatch({ type: 'select', server, channel: null });
@@ -1110,22 +1181,22 @@ export default function App() {
                 onReact={(target, emo) =>
                   controllerRef.current
                     .react(server, channel, target, emo)
-                    .catch((e) => dispatch({ type: 'toast', text: e.message }))
+                    .catch(fail(TRY_AGAIN))
                 }
                 onRetry={(m) =>
                   controllerRef.current
                     .retryMessage(server, channel, m)
-                    .catch((e) => dispatch({ type: 'toast', text: e.message }))
+                    .catch(fail('Message not sent.'))
                 }
                 onEdit={(m, text) =>
                   controllerRef.current
                     .editMessage(server, channel, m, text)
-                    .catch((e) => dispatch({ type: 'toast', text: e.message }))
+                    .catch(fail('Couldn’t edit the message.'))
                 }
                 onDelete={(m) =>
                   controllerRef.current
                     .deleteMessage(server, channel, m)
-                    .catch((e) => dispatch({ type: 'toast', text: e.message }))
+                    .catch(fail('Couldn’t delete the message.'))
                 }
               />
             ) : (
@@ -1144,48 +1215,48 @@ export default function App() {
                   controllerRef.current.voice
                     .join(server, ch)
                     .then(() => openStage())
-                    .catch((e) => dispatch({ type: 'toast', text: `Couldn’t join the call: ${e.message}` }))
+                    .catch(fail('Couldn’t join the call.'))
                 }
                 onLaunchGame={launchGame}
                 onRally={(g) =>
                   controllerRef.current
                     .setWant(server, g)
-                    .catch((e) => dispatch({ type: 'toast', text: e.message }))
+                    .catch(fail(TRY_AGAIN))
                 }
                 onRsvp={(at, going) =>
                   controllerRef.current
                     .rsvp(server, at, going)
-                    .catch((e) => dispatch({ type: 'toast', text: e.message }))
+                    .catch(fail(TRY_AGAIN))
                 }
                 onSave={(ov) =>
                   controllerRef.current
                     .setOverview(server, ov)
-                    .catch((e) => dispatch({ type: 'toast', text: e.message }))
+                    .catch(fail(TRY_AGAIN))
                 }
                 onAddNotice={(text) =>
                   controllerRef.current
                     .addNotice(server, text)
-                    .catch((e) => dispatch({ type: 'toast', text: e.message }))
+                    .catch(fail(TRY_AGAIN))
                 }
                 onRemoveNotice={(id) =>
                   controllerRef.current
                     .removeNotice(server, id)
-                    .catch((e) => dispatch({ type: 'toast', text: e.message }))
+                    .catch(fail(TRY_AGAIN))
                 }
                 onAddOffer={(text, seats) =>
                   controllerRef.current
                     .addOffer(server, text, seats)
-                    .catch((e) => dispatch({ type: 'toast', text: e.message }))
+                    .catch(fail(TRY_AGAIN))
                 }
                 onTakeOffer={(id, taking) =>
                   controllerRef.current
                     .takeOffer(server, id, taking)
-                    .catch((e) => dispatch({ type: 'toast', text: e.message }))
+                    .catch(fail(TRY_AGAIN))
                 }
                 onRemoveOffer={(id) =>
                   controllerRef.current
                     .removeOffer(server, id)
-                    .catch((e) => dispatch({ type: 'toast', text: e.message }))
+                    .catch(fail(TRY_AGAIN))
                 }
                 onOpenProposal={(id) => setSigning({ server, id })}
                 onCircleSettings={openCircleSettings}
@@ -1218,6 +1289,7 @@ export default function App() {
             onOpenProposal={(srv, id) => setSigning({ server: srv, id })}
             onIdentity={openIdentity}
             onSecure={openSecure}
+            showAccountActions={!showSecureBanner}
           />
         )}
         <CallPanel
@@ -1228,7 +1300,7 @@ export default function App() {
             controllerRef.current.voice
               .acceptRing()
               .then(() => openStage())
-              .catch((e) => dispatch({ type: 'toast', text: `Couldn’t start the call: ${e.message}` }))
+              .catch(fail('Couldn’t start the call.'))
           }
           onDecline={() => controllerRef.current.voice.declineRing()}
           onCancel={() => controllerRef.current.voice.cancelCall()}
@@ -1253,8 +1325,7 @@ export default function App() {
             me={state.me}
             theme={theme}
             themePref={themePref}
-            onTheme={toggleTheme}
-            onSystemTheme={() => setThemePref(null)}
+            onThemePref={setThemePref}
             onEnableNotifications={() => controllerRef.current.enableNotifications()}
             voice={controllerRef.current?.voice}
             relayOnly={relayOnly}
@@ -1277,7 +1348,7 @@ export default function App() {
           <NotificationsPrompt
             onEnable={async () => {
               await controllerRef.current.enableNotifications();
-              dispatch({ type: 'toast', text: 'Notifications are on for this device' });
+              dispatch({ type: 'toast', text: 'Notifications on' });
             }}
             onClose={dismissNotifPrompt}
           />
@@ -1303,18 +1374,18 @@ export default function App() {
                 onSign={() => {
                   controllerRef.current
                     .signProposal(record.id, proposal.id)
-                    .catch((e) => dispatch({ type: 'toast', text: e.message }));
+                    .catch(fail('Couldn’t sign.'));
                 }}
                 onObject={(why) => {
                   controllerRef.current
                     .objectToProposal(record.id, proposal.id, why)
-                    .catch((e) => dispatch({ type: 'toast', text: e.message }));
+                    .catch(fail('Couldn’t send your objection.'));
                 }}
                 onWithdraw={() => {
                   setSigning(null);
                   controllerRef.current
                     .withdrawProposal(record.id, proposal.id)
-                    .catch((e) => dispatch({ type: 'toast', text: e.message }));
+                    .catch(fail('Couldn’t withdraw the proposal.'));
                 }}
                 onCompare={() => openSafety(record.id, proposal.by)}
                 onClose={() => setSigning(null)}
@@ -1326,21 +1397,28 @@ export default function App() {
             modal={state.modal}
             onClose={() => dispatch({ type: 'modal', modal: null })}
             unsecured={unsecured}
+            onSecure={openSecure}
             onLogout={() => controllerRef.current.logout()}
             onLinkSend={async (blobId, pub) => {
               await controllerRef.current.sendIdentityToDevice(blobId, pub);
             }}
-            onEnrollDevice={async () => {
-              await controllerRef.current.enrollDevicePasskey(
-                deviceLabel(navigator.userAgent)
-              );
-              dispatch({ type: 'modal', modal: null });
-              dispatch({ type: 'toast', text: 'This device can now sign in with one tap' });
-            }}
+            // Only once there is a backup to add a device to; before that,
+            // "Use passkey" is the one passkey button.
+            onEnrollDevice={
+              state.vault.kind
+                ? async () => {
+                    await controllerRef.current.enrollDevicePasskey(
+                      deviceLabel(navigator.userAgent)
+                    );
+                    dispatch({ type: 'modal', modal: null });
+                    dispatch({ type: 'toast', text: 'Passkey added for this device' });
+                  }
+                : undefined
+            }
             onListDevices={listDevices}
             onRevokeDevice={async (credId) => {
               await controllerRef.current.revokeDevice(credId);
-              dispatch({ type: 'toast', text: 'Device revoked. It can no longer sign in.' });
+              dispatch({ type: 'toast', text: 'Device removed' });
             }}
             onVerify={async (srv, peer) => {
               await controllerRef.current.markVerified(srv, peer);
@@ -1360,12 +1438,12 @@ export default function App() {
             onSecurePasskey={async () => {
               await controllerRef.current.secureWithPasskey();
               dispatch({ type: 'modal', modal: null });
-              dispatch({ type: 'toast', text: 'Account secured with a passkey' });
+              dispatch({ type: 'toast', text: 'Backed up with a passkey' });
             }}
             onSecurePassword={async (password) => {
               await controllerRef.current.secureWithPassword(password);
               dispatch({ type: 'modal', modal: null });
-              dispatch({ type: 'toast', text: 'Account secured with a password' });
+              dispatch({ type: 'toast', text: 'Backed up with a password' });
             }}
             onSecureFile={async () => {
               await controllerRef.current.markSecuredLocal();
@@ -1417,6 +1495,12 @@ export default function App() {
               setStage(false);
               setGame(null);
             }}
+            onJoinVoice={(ch) =>
+              controllerRef.current.voice
+                .join(server, ch)
+                .then(() => openStage())
+                .catch(fail('Couldn’t join the call.'))
+            }
             onClose={() => setPaletteOpen(false)}
           />
         )}

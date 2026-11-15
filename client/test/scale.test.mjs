@@ -52,8 +52,10 @@ function report(hits, ceiling, rule) {
 // change from stopping the bleeding; this is the second one.
 // Walked down from 499 when the scale (--s-1 … --s-8) was written into the
 // token block and the cleanup pass rebuilt the board, roster and call stage
-// on it.
-const SPACING_CEILING = 449;
+// on it, then from 449 when the design cleanup flattened the board, dropped
+// the room-header chips and moved the touch sizes into one block, and to
+// 386 when the review fixes put the new rules on the scale.
+const SPACING_CEILING = 386;
 const SPACING = /^(padding|margin|gap|row-gap|column-gap|inset)(-(top|right|bottom|left|inline|block))?$/;
 
 test('spacing literals do not grow past today’s count', () => {
@@ -67,7 +69,10 @@ test('spacing literals do not grow past today’s count', () => {
 // most of this number. A `--text-*` step for it is the fix, and it is a
 // rename across ~19 sites rather than a lint.
 // Was 34. --text-ui (13px) is now a step, and the cleanup moved its sites.
-const TYPE_CEILING = 10;
+// Was 10. The touch block's 16px fields became var(--text-base), and the
+// scale lost --text-xs and --text-md. What is left is two emoji sizes and
+// three display numerals (cover glyphs, the countdown).
+const TYPE_CEILING = 5;
 
 test('font-size literals do not grow past today’s count', () => {
   const hits = declarations.filter(
@@ -89,18 +94,78 @@ test('no font size is a decimal', () => {
 
 test('the font shorthand’s size slot does not grow past today’s count', () => {
   const hits = declarations.filter(([p, v]) => p === 'font' && /\b\d+(\.\d+)?px\b/.test(v));
-  report(hits, 2, '§2.7 font shorthand');
+  report(hits, 1, '§2.7 font shorthand');
 });
 
-test('nothing renders below the 10px floor', () => {
-  // §4.3 is a floor, not a ceiling-with-debt: below 10px is not a smaller
-  // step, it is unreadable. *9px badges were carrying trust state.*
+test('nothing renders below the 13px floor', () => {
+  // §4.3 is a floor, not a ceiling-with-debt. It was 10px, with a 10px
+  // --text-xs step for times and kbd; that step is gone and --text-sm (13px)
+  // is the smallest thing on the scale. *9px badges were carrying trust
+  // state.* The tokens themselves are checked too, so the floor cannot be
+  // lowered by redefining a step.
+  const px = (v) => v.match(/^(\d+(?:\.\d+)?)px$/);
   const tooSmall = declarations.filter(([p, v]) => {
     const m =
-      p === 'font-size' ? v.match(/^(\d+(?:\.\d+)?)px/) : p === 'font' ? v.match(/\b(\d+(?:\.\d+)?)px\b/) : null;
-    return m && Number(m[1]) < 10;
+      p === 'font-size'
+        ? v.match(/^(\d+(?:\.\d+)?)px/)
+        : p === 'font'
+          ? v.match(/\b(\d+(?:\.\d+)?)px\b/)
+          : /^-?-text-/.test(p)
+            ? px(v)
+            : null;
+    return m && Number(m[1]) < 13;
   });
-  assert.deepEqual(tooSmall, [], '§4.3 — minimum type size is 10px');
+  assert.deepEqual(tooSmall, [], '§4.3 — minimum type size is 13px');
+});
+
+test('the type scale has no --text-xs or --text-md step', () => {
+  // Five steps and a display size, each with one job (§4.3). The two
+  // in-between steps let 10px times and a 15px "medium" creep back in.
+  assert.doesNotMatch(css, /--text-(xs|md)\b/, '§4.3 — sm, ui, base, lg, xl, display');
+});
+
+test('font weights are 400, 600 or 700', () => {
+  // §4.2. Five weights were in use (500, 550, 650, 800 besides these), and
+  // the system faces do not all carry them: Segoe UI has no 500, so Windows
+  // was already rendering half of them as something else.
+  const allowed = new Set(['400', '600', '700', 'normal', 'bold', 'inherit']);
+  const hits = declarations.filter(([p, v]) => {
+    if (p === 'font-weight') return !allowed.has(v);
+    if (p === 'font') {
+      const first = v.split(/\s+/)[0];
+      return /^\d+$/.test(first) && !allowed.has(first);
+    }
+    return false;
+  });
+  assert.deepEqual(hits, [], '§4.2 — 400 body, 600 names and labels, 700 page titles');
+});
+
+test('mono is only for codes', () => {
+  // §4.1. Mono marks characters a person compares one by one: safety
+  // numbers, keys, recovery and device codes. It was also on timestamps,
+  // file sizes, call lengths and kbd, which spent "compare this" on
+  // numbers nobody compares. Those are sans with tabular figures now.
+  const ALLOWED = ['.mono', '.keybox', '.recovery-code', '.safety-number', '.link-code strong'];
+  const sheets = [css, readFileSync(fileURLToPath(new URL('../src/prototypes.css', import.meta.url)), 'utf8')
+    .replace(/\/\*[\s\S]*?\*\//g, '')];
+  const off = [];
+  for (const sheet of sheets) {
+    for (const [, sel, body] of sheet.matchAll(/([^{}]*)\{([^{}]*)\}/g)) {
+      if (!/var\(--mono\)/.test(body)) continue;
+      for (const one of sel.split(',').map((x) => x.trim().replace(/\s+/g, ' '))) {
+        if (!ALLOWED.includes(one)) off.push(one);
+      }
+    }
+  }
+  assert.deepEqual(off, [], `§4.1 — var(--mono) outside the allowlist: ${off.join(', ')}`);
+});
+
+test('letters are never tracked tighter', () => {
+  // Negative tracking was on every heading; on the system faces it only
+  // crowds them. Positive tracking stays for codes, where it separates the
+  // groups a person reads aloud.
+  const hits = declarations.filter(([p, v]) => p === 'letter-spacing' && /^-/.test(v));
+  assert.deepEqual(hits, [], 'no negative letter-spacing');
 });
 
 /* ----------------------------------------------------------- 2.8 motion -- */

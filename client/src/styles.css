@@ -1,154 +1,41 @@
 /* ============================================================================
-   QUORUM — "afterdark"
+   QUORUM
    ----------------------------------------------------------------------------
-   A private arcade, not a terminal. Quiet chrome, and the room warms up:
-
-   · True OLED black, neutral greys — no color cast in the surfaces.
-   · One signal color: coral, used strictly functionally (selection,
-     primary action, focus). Green means a key is verified or someone is
-     here right now, and it appears as a dot, a check or a waveform, never
-     as a button. Amber is a reduced guarantee; red is broken or final.
-   · Color is identity: member orbs and game covers carry the saturation;
-     the chrome around them stays dark and out of the way.
-   · Sans for anything a person reads or presses, in sentence case. Mono
-     only where characters must line up: timestamps, sizes, codes, keys.
-     (It used to carry every label in tracked capitals, which read as
-     decoration and, per §4.4, as "ignore me".)
-   · Soft geometry: 10px radii, round avatars, pills for counts.
+   Quiet chrome on near-black (or paper), one signal colour.
+   · Coral: selection, the primary action, focus. Green: a verified key or
+     someone here now. Amber: a reduced guarantee. Red: broken or final.
+   · The system sans for everything a person reads or presses, in sentence
+     case. Mono only for safety numbers, keys and codes.
    Two themes off one token contract: afterdark (default) and paper.
    ========================================================================== */
 
-/* ----------------------------------------------------------------- faces -- */
-/* Two faces, vendored, and the reason is not taste.
-   The stylesheet asks for weight 550 and weight 650 in seventeen places. A
-   static font cannot render either — the browser rounds them to 500 and 700 —
-   so the design as authored only ever appeared on machines whose system font
-   happens to be variable. It rendered one way on macOS (SF Pro is variable)
-   and another on Windows (Segoe UI is not), and neither was a decision
-   anybody made. Inter is variable across 400-800, so the whole ramp is real
-   and the same everywhere.
-   Mono is the system's voice (§4.1) and it is almost all small tracked
-   uppercase, where IBM Plex Mono's narrower, evener colour beats a face drawn
-   for code at editor sizes. It ships static because Plex Mono has no variable
-   cut, which is fine: mono only ever asks for 400/500/600/700.
-   Self-hosted, never linked. A stylesheet that pulls from fonts.gstatic.com
-   would hand a third party an IP and a timestamp for every member of every
-   circle on every load — which is most of what this product exists to avoid,
-   given away for a CDN hit. ~80KB over the wire for a Latin reader; the rest
-   of the subsets only download for someone whose text needs them.
-   font-display: swap, with the old system stack as the fallback: text is
-   readable on the first frame either way. Both faces are SIL OFL 1.1 — see
-   src/fonts/LICENSE. */
-
-@font-face {
-  font-family: 'Inter';
-  font-style: normal;
-  font-weight: 400 800;
-  font-display: swap;
-  src: url('./fonts/inter-latin.woff2') format('woff2');
-  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
-}
-@font-face {
-  font-family: 'Inter';
-  font-style: normal;
-  font-weight: 400 800;
-  font-display: swap;
-  src: url('./fonts/inter-latin-ext.woff2') format('woff2');
-  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
-}
-@font-face {
-  font-family: 'IBM Plex Mono';
-  font-style: normal;
-  font-weight: 400;
-  font-display: swap;
-  src: url('./fonts/plex-mono-400-latin.woff2') format('woff2');
-  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
-}
-@font-face {
-  font-family: 'IBM Plex Mono';
-  font-style: normal;
-  font-weight: 400;
-  font-display: swap;
-  src: url('./fonts/plex-mono-400-latin-ext.woff2') format('woff2');
-  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
-}
-@font-face {
-  font-family: 'IBM Plex Mono';
-  font-style: normal;
-  font-weight: 500;
-  font-display: swap;
-  src: url('./fonts/plex-mono-500-latin.woff2') format('woff2');
-  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
-}
-@font-face {
-  font-family: 'IBM Plex Mono';
-  font-style: normal;
-  font-weight: 500;
-  font-display: swap;
-  src: url('./fonts/plex-mono-500-latin-ext.woff2') format('woff2');
-  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
-}
-@font-face {
-  font-family: 'IBM Plex Mono';
-  font-style: normal;
-  font-weight: 600;
-  font-display: swap;
-  src: url('./fonts/plex-mono-600-latin.woff2') format('woff2');
-  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
-}
-@font-face {
-  font-family: 'IBM Plex Mono';
-  font-style: normal;
-  font-weight: 600;
-  font-display: swap;
-  src: url('./fonts/plex-mono-600-latin-ext.woff2') format('woff2');
-  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
-}
-@font-face {
-  font-family: 'IBM Plex Mono';
-  font-style: normal;
-  font-weight: 700;
-  font-display: swap;
-  src: url('./fonts/plex-mono-700-latin.woff2') format('woff2');
-  unicode-range: U+0000-00FF, U+0131, U+0152-0153, U+02BB-02BC, U+02C6, U+02DA, U+02DC, U+0304, U+0308, U+0329, U+2000-206F, U+20AC, U+2122, U+2191, U+2193, U+2212, U+2215, U+FEFF, U+FFFD;
-}
-@font-face {
-  font-family: 'IBM Plex Mono';
-  font-style: normal;
-  font-weight: 700;
-  font-display: swap;
-  src: url('./fonts/plex-mono-700-latin-ext.woff2') format('woff2');
-  unicode-range: U+0100-02BA, U+02BD-02C5, U+02C7-02CC, U+02CE-02D7, U+02DD-02FF, U+0304, U+0308, U+0329, U+1D00-1DBF, U+1E00-1E9F, U+1EF2-1EFF, U+2020, U+20A0-20AB, U+20AD-20C0, U+2113, U+2C60-2C7F, U+A720-A7FF;
-}
-
 /* ---------------------------------------------------------------- tokens -- */
 :root {
-  --sans: 'Inter', ui-sans-serif, system-ui, -apple-system, 'Segoe UI',
-    'Helvetica Neue', Arial, sans-serif;
-  --mono: 'IBM Plex Mono', ui-monospace, 'SF Mono', 'Cascadia Code', Menlo,
-    Consolas, 'Liberation Mono', monospace;
+  --sans: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, system-ui,
+    'Helvetica Neue', 'Noto Sans', Arial, sans-serif, 'Apple Color Emoji',
+    'Segoe UI Emoji', 'Noto Color Emoji';
+  --mono: ui-monospace, 'SF Mono', SFMono-Regular, Menlo, 'Cascadia Mono',
+    Consolas, 'Roboto Mono', 'Liberation Mono', monospace;
 
-  --text-xs: 10px;
-  --text-sm: 12px;
-  /* Controls and labels: buttons, field labels, tabs. It was the most-used
-     size in the product as a literal (13px) and not a step on the scale. */
-  --text-ui: 13px;
-  --text-base: 14px;
-  --text-md: 15px;
-  --text-lg: 17px;
-  --text-xl: 21px;
-  --text-display: 34px;
+  /* One job per step. Phones and touch get a bump (see the end of file). */
+  --text-sm: 13px;      /* meta: times, badges, captions, hints */
+  --text-ui: 14px;      /* controls: buttons, tabs, labels */
+  --text-base: 15px;    /* body: messages, inputs */
+  --text-lg: 18px;      /* titles */
+  --text-xl: 24px;      /* page headings */
+  --text-display: 32px; /* the landing tagline */
 
   --r: 10px;
   --r-lg: 16px;
   --r-sm: 6px;
   --r-pill: 999px;
 
-  /* Every horizontal edge in the main pane derives from this (§5.1): the
-     strip, the pane header, the scroll body and the composer. Four
-     components used to pick four values, so nothing in the column shared a
-     left edge and the step was visible with the naked eye. */
+  /* Every horizontal edge in the main pane derives from this (§5.1). The
+     transcript's text column sits at the gutter plus 44px (avatar + gap). */
   --pane-gutter: 18px;
+  /* One height for a text field and the buttons that sit beside or under
+     it, so their centres line up (touch raises both to --tap). */
+  --field-h: 40px;
 
   /* The spacing scale (§2.6). Four-pixel steps, named by position rather
      than value so the scale can move without a rename. New rules take these;
@@ -185,9 +72,7 @@
   --hover: #1a1a1e;
   --active: #202025;
   --ink: #f2f2f3;
-  /* Raised from #a1a1a9 (3.71:1 on --panel, below WCAG AA) to clear 4.5:1.
-     This token carries most metadata in the product — overlines, timestamps,
-     the sealed-note and fineprint lines — usually at 10-12px. */
+  /* Clears 4.5:1 on every surface (contrast.test.mjs). Most metadata. */
   --ink-dim: #b4b4bd;
   /* Raised from #6d6d76, which measured 3.17:1 on --active and failed AA on
      every surface. The comment above once implied this whole tier had been
@@ -277,14 +162,6 @@
     --overlay-shadow: 0 16px 48px rgba(60, 54, 36, 0.25);
     color-scheme: light;
   }
-
-  /* The handful of component rules that go beyond the tokens. Their
-     `[data-theme='paper']` originals are further down, beside the components
-     they belong to; these mirror them for the system-preference case. */
-  :root:not([data-theme]) .voice-live-card { border-color: rgba(31, 110, 66, 0.35); }
-  :root:not([data-theme]) .voice-join-pill { color: #fff; }
-  :root:not([data-theme]) .voice-joined-card { border-color: rgba(31, 110, 66, 0.35); }
-  :root:not([data-theme]) .call-orb .seal-avatar { box-shadow: 0 0 0 2px #dff1e6; }
 }
 
 /* ------------------------------------------------------------------ base -- */
@@ -329,6 +206,10 @@ button { cursor: pointer; }
   outline: 2px solid var(--accent);
   outline-offset: 1px;
 }
+/* A field already has a border: the ring sits on it, so only one shows. */
+:is(input:not([type='checkbox']):not([type='radio']), textarea, select):focus-visible {
+  outline-offset: -1px;
+}
 
 @media (prefers-reduced-motion: reduce) {
   *, *::before, *::after {
@@ -346,15 +227,13 @@ button { cursor: pointer; }
      happens to be last, which for a pulse is an arbitrary point in the cycle.
      These carry meaning — someone is speaking, the relay is down — so they
      stop outright and keep the static styling underneath instead. */
-  .call-orb.speaking .seal-avatar,
   .call-glyph.pulse,
   .conn-dot.connecting,
   .conn-dot.offline,
   .member-count.live,
   .stage-bubble.speaking .bubble-seal svg,
   .stage-bubble.speaking .bubble-cam,
-  .boot-mark,
-  .channel-empty .ce-glyph {
+  .boot-mark {
     animation: none !important;
   }
 
@@ -363,34 +242,28 @@ button { cursor: pointer; }
   .conn-dot.offline { outline: 2px solid var(--danger); outline-offset: 2px; }
 }
 
-h1 { font-size: var(--text-xl); font-weight: 650; letter-spacing: -0.015em; }
-h2 { font-size: var(--text-md); font-weight: 600; letter-spacing: -0.01em; }
+h1 { font-size: var(--text-xl); font-weight: 700; }
+h2 { font-size: var(--text-lg); font-weight: 600; }
 
 .muted { color: var(--ink-mute); }
 .dim { color: var(--ink-dim); }
 .mono { font-family: var(--mono); font-size: var(--text-sm); }
-.error { color: var(--danger); margin-top: 10px; font-size: 13px; }
+.error { color: var(--danger); margin-top: 10px; font-size: var(--text-sm); }
 .fineprint { font-size: var(--text-sm); margin-top: 12px; line-height: 1.55; color: var(--ink-mute); }
 
-/* A section label: sentence case, sans, readable. It was 10px tracked
-   uppercase mono, the type the product otherwise reserves for machine data
-   (§4.4) — so every section heading read as metadata to be skipped. Most
-   are real h2/h3 elements now (§8.8), hence the reset. */
+/* A section heading: sentence case, the control size, full ink. Most are
+   real h2/h3 elements (§8.8), hence the reset. */
 .overline {
   display: inline-flex;
   align-items: baseline;
   gap: var(--s-2);
   margin: 0;
-  font: 600 var(--text-sm) var(--sans);
-  letter-spacing: 0;
-  color: var(--ink-dim);
+  font: 600 var(--text-ui) var(--sans);
+  color: var(--ink);
 }
-.overline .idx { color: var(--accent-ink); font-weight: 600; }
-/* section overlines are block for spacing, so the flex gap can't help */
-.overview-section > .overline .idx { margin-left: 8px; }
 
 kbd {
-  font: 500 var(--text-xs) var(--mono);
+  font: var(--text-sm) var(--sans);
   color: var(--ink-dim);
   border: 1px solid var(--hairline-strong);
   padding: 1px 5px;
@@ -451,7 +324,7 @@ kbd {
   border-color: var(--hairline);
   color: var(--ink-mute);
 }
-.button.wide { display: flex; width: 100%; }
+.button.wide { display: flex; width: 100%; min-height: var(--field-h); }
 
 .ghost {
   display: inline-flex;
@@ -511,7 +384,7 @@ kbd {
   border-radius: var(--r-pill);
   background: var(--active);
   color: var(--ink-dim);
-  font: 500 var(--text-sm) var(--sans);
+  font: var(--text-sm) var(--sans);
   white-space: nowrap;
 }
 
@@ -542,6 +415,13 @@ kbd {
   padding: 9px 11px;
   transition: border-color var(--fast) var(--ease);
 }
+.field input:not([type='checkbox']):not([type='radio']):not([type='file']),
+.field select { height: var(--field-h); padding-block: 0; }
+/* A hint belongs to the field above it: close under it, clear of the next
+   control. */
+.field:has(+ .fineprint) { margin-bottom: var(--s-1); }
+.field + .fineprint { margin-top: 0; margin-bottom: var(--s-4); }
+.card .fineprint + .button { margin-top: var(--s-3); }
 .field input:focus, .field textarea:focus { border-color: var(--ink-dim); }
 .field select {
   width: 100%;
@@ -564,7 +444,7 @@ kbd {
   margin-bottom: 0;
   text-transform: none;
   letter-spacing: normal;
-  font: 500 var(--text-sm) var(--sans);
+  font: var(--text-sm) var(--sans);
   color: var(--ink);
 }
 .field.checkbox input { width: auto; accent-color: var(--accent); }
@@ -596,7 +476,7 @@ kbd {
   display: flex;
   align-items: center;
   gap: 20px;
-  padding: 0 12px 0 16px;
+  padding: 0 var(--pane-gutter);
   background: var(--well);
   border-bottom: 1px solid var(--hairline);
 }
@@ -622,11 +502,9 @@ kbd {
 .masthead-brand.compact { width: auto; }
 .masthead-brand.compact .wordmark { display: none; }
 .brand-glyph { color: var(--accent-ink); display: grid; place-items: center; }
-/* The product calls itself "quorum" in every sentence, so the mark does too
-   — not Q U O R U M in spaced mono capitals. */
+/* The product calls itself "quorum", so the mark does too. */
 .wordmark {
-  font: 700 var(--text-md) var(--sans);
-  letter-spacing: -0.01em;
+  font: 700 var(--text-lg) var(--sans);
 }
 
 /* The marker: which circle, which room, on every screen inside a circle.
@@ -647,7 +525,6 @@ kbd {
      display-sized h1 would not fit and would not help. */
   font-size: var(--text-base);
   font-weight: 600;
-  letter-spacing: -0.01em;
 }
 .marker-circle {
   display: flex;
@@ -683,21 +560,6 @@ kbd {
   overflow: hidden;
   text-overflow: ellipsis;
 }
-.marker-call {
-  display: flex;
-  align-items: baseline;
-  gap: 7px;
-  flex: none;
-  color: var(--ok);
-}
-/* §1.6 — the green never carries this alone, and §4.3/§4.4: the words that
-   tell you your mic is live are a decision, so they are 12px sans, not 10px
-   uppercase mono. Only the duration beside them is machine data. */
-.marker-call-word { font-size: var(--text-sm); font-weight: 600; }
-.marker-call-len {
-  font-family: var(--mono);
-  font-size: var(--text-sm);
-}
 .masthead-actions {
   margin-left: auto;
   display: flex;
@@ -716,7 +578,7 @@ kbd {
   min-width: 220px;
   background: var(--panel);
   color: var(--ink-mute);
-  font: 500 var(--text-ui) var(--sans);
+  font: var(--text-ui) var(--sans);
   transition: border-color var(--fast) var(--ease), color var(--fast) var(--ease);
 }
 .palette-hint:hover { color: var(--ink); border-color: var(--hairline-strong); }
@@ -727,7 +589,7 @@ kbd {
   align-items: center;
   gap: 7px;
   padding: 4px 9px;
-  font: 500 var(--text-sm) var(--sans);
+  font: var(--text-sm) var(--sans);
   color: var(--ink-mute);
 }
 /* §1.2 — a socket's health is not a cryptographic fact, so it never borrows
@@ -736,24 +598,42 @@ kbd {
    connecting, which gave coral a fourth job and green a third (§1.5). */
 .conn-dot { width: 7px; height: 7px; border-radius: var(--r-pill); background: var(--ink-mute); flex-shrink: 0; }
 .conn-dot.offline { background: var(--danger); }
+.conn-label { white-space: nowrap; }
+/* Connected is the normal state, so it is not shown. The chip stays a live
+   region and comes back, with its word, when the socket is not fine. */
+.conn-chip.online {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
 
 /* --------------------------------------------------------- secure banner -- */
+/* One line of text on the left, its actions on the right. The text wraps
+   inside its span; the buttons never move under it. */
 .secure-banner {
   display: flex;
   align-items: center;
-  justify-content: center;
-  gap: 14px;
-  padding: 7px 16px;
+  gap: var(--s-2);
+  padding: var(--s-2) var(--pane-gutter);
   font-size: var(--text-ui);
   color: var(--ink);
-  /* A reduced guarantee (one copy of the key, on one device) is amber's job,
-     not coral's (§1.1, §1.3). */
   background: var(--raised);
   border-bottom: 1px solid var(--hairline);
   flex-shrink: 0;
 }
-.secure-banner svg { color: var(--warn); flex-shrink: 0; }
-.secure-banner .button { padding: 3px 10px; }
+.secure-banner > span { flex: 1; min-width: 0; margin-right: var(--s-2); }
+.secure-banner .button { flex: none; padding: 3px 10px; }
+.banner-later-x { display: none; }
+/* A narrow phone: one sentence, Back up, and a close glyph for Not now. */
+@media (max-width: 480px) {
+  .secure-banner-more,
+  .banner-later-label { display: none; }
+  .banner-later-x { display: block; }
+  .secure-banner .banner-later { padding: 0; }
+}
 
 /* --------------------------------------------------------- circles home -- */
 /* The screen that replaced the rail. It is also the empty state — "no
@@ -777,7 +657,7 @@ kbd {
   max-width: 1040px;
 }
 .circles-head-id { flex: 1; min-width: 220px; }
-.circles-head-id h1 { font-size: var(--text-xl); font-weight: 650; letter-spacing: -0.01em; }
+.circles-head-id h1 { font-size: var(--text-xl); font-weight: 700; }
 .circles-head-id p { margin-top: 4px; font-size: var(--text-base); }
 .circles-head-actions { display: flex; gap: 8px; flex-wrap: wrap; }
 .circles-placeholder { color: var(--ink-mute); font-size: var(--text-base); }
@@ -792,6 +672,7 @@ kbd {
   max-width: 1040px;
 }
 .circle-card {
+  position: relative;
   display: flex;
   flex-direction: column;
   gap: 14px;
@@ -801,9 +682,10 @@ kbd {
   border: 1px solid var(--hairline);
   border-radius: var(--r-lg);
 }
+.circle-card:hover { border-color: var(--hairline-strong); }
 .circle-card-head { display: flex; align-items: flex-start; gap: 12px; min-width: 0; }
 .circle-card-id { min-width: 0; flex: 1; }
-.circle-card-id h3 { font-size: var(--text-md); font-weight: 650; letter-spacing: -0.01em; }
+.circle-card-id h3 { font-size: var(--text-lg); font-weight: 600; }
 .circle-card-blurb {
   margin-top: 3px;
   font-size: var(--text-sm);
@@ -854,9 +736,30 @@ kbd {
   color: var(--ink-mute);
 }
 .circle-card-catchup { font-size: var(--text-sm); color: var(--ink-dim); }
-/* Secondary, not coral: a filled button on every card made two or three
-   primaries in one view. A decision waiting on you is the primary here. */
-.circle-card > .button { align-self: flex-start; }
+/* The whole card opens the circle. The name in the head is the <button>;
+   its ::after stretches the hit area over the card, so the card stays an
+   <article> with a real heading and no block content inside a button. */
+.circle-card-open {
+  padding: 0;
+  background: none;
+  border: none;
+  font: inherit;
+  color: inherit;
+  text-align: left;
+  cursor: pointer;
+}
+.circle-card-open::after {
+  content: '';
+  position: absolute;
+  inset: 0;
+  border-radius: var(--r-lg);
+}
+/* The ring goes on the card, the shape the whole control has. */
+.circle-card-open:focus-visible { outline: none; }
+.circle-card:has(.circle-card-open:focus-visible) {
+  outline: 2px solid var(--accent);
+  outline-offset: 1px;
+}
 
 .circles-foot { max-width: 1040px; }
 .circles-new-btn {
@@ -877,19 +780,19 @@ kbd {
   cursor: pointer;
 }
 .circles-new-btn:hover { border-color: var(--ink-mute); color: var(--ink); }
-.circles-new-btn > span { display: flex; flex-direction: column; gap: 2px; min-width: 0; }
 .circles-new-btn strong { color: var(--ink); font-weight: 600; }
-.circles-new-btn .muted { font-size: var(--text-sm); }
 .circles-new { display: flex; align-items: flex-end; gap: 10px; flex-wrap: wrap; }
+.circles-new > .button { height: var(--field-h); }
 .circles-new .field { flex: 1; min-width: 200px; margin: 0; }
 
-/* Signed in as, in the fascia. */
+/* Signed in as, in the fascia: the avatar. The name stays in the tree for
+   screen readers (and the tests), not on screen. */
 .self-chip {
   display: flex;
   align-items: center;
   gap: 7px;
   max-width: 168px;
-  padding: 4px 8px 4px 4px;
+  padding: 4px;
   background: transparent;
   border: 1px solid transparent;
   border-radius: var(--r-pill);
@@ -898,11 +801,12 @@ kbd {
 }
 .self-chip:hover { background: var(--hover); color: var(--ink); }
 .self-chip-name {
-  min-width: 0;
-  font: 600 var(--text-sm) var(--sans);
-  white-space: nowrap;
+  position: absolute;
+  width: 1px;
+  height: 1px;
   overflow: hidden;
-  text-overflow: ellipsis;
+  clip-path: inset(50%);
+  white-space: nowrap;
 }
 
 /* ---------------------------------------------------------- lifts & kit -- */
@@ -1011,7 +915,6 @@ kbd {
 .signing-unchecked:hover { background: var(--hover); }
 .signing-unchecked > svg { flex: none; margin-top: 3px; color: var(--warn); }
 .signing-unchecked > span { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.signing-unchecked .muted { font-size: var(--text-sm); }
 .signing-compare-go {
   flex: none;
   margin-top: 2px;
@@ -1042,20 +945,6 @@ kbd {
 .signing-answer { font-size: var(--text-base); }
 .signing-object { display: flex; flex-direction: column; gap: 4px; }
 
-.signing-foot {
-  display: flex;
-  align-items: flex-start;
-  gap: 10px;
-  margin: 0;
-  padding-top: 14px;
-  border-top: 1px solid var(--hairline);
-  color: var(--ink-dim);
-  font-size: var(--text-sm);
-}
-.signing-foot > svg { flex: none; margin-top: 2px; color: var(--ink-mute); }
-.signing-foot > span { display: flex; flex-direction: column; }
-.signing-foot .fineprint { margin-top: 6px; }
-
 /* §7.3 — withdrawing takes the whole proposal down, so it sits well clear
    of the two answers rather than beside them. */
 .signing-withdraw {
@@ -1076,23 +965,20 @@ kbd {
 /* The board's block, and the strip above the circle cards. Same row
    grammar as lifts & kit so the two stack without looking like two
    products (§5.2). */
-.overview-proposals { list-style: none; margin: var(--s-2) 0 0; padding: 0; display: grid; gap: var(--s-2); }
+.overview-proposals { list-style: none; margin: 0; padding: 0; display: grid; }
 .proposal-row {
   display: flex;
   align-items: center;
   gap: var(--s-3);
   min-width: 0;
-  padding: var(--s-4) 18px;
-  background: var(--raised);
-  border: 1px solid var(--hairline);
-  border-radius: var(--r-lg);
+  padding: var(--s-3) 0;
 }
-/* A row still waiting on you is heavier, not coral: the coral in this block
-   is the button, which is the one primary action in view (§1.1). The button
-   also says Review in words, so the weight is a second channel (§1.6). */
-.proposal-row.awaiting { border-color: var(--hairline-strong); }
+.proposal-row + .proposal-row { border-top: 1px solid var(--hairline); }
+/* A row waiting on you carries the one primary in view (Review), and its
+   line is heavier, so the state is not colour alone. */
+.proposal-row.awaiting .proposal-who { font-weight: 600; }
 .proposal-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: var(--s-1); }
-.proposal-who { font-size: var(--text-md); color: var(--ink); overflow-wrap: anywhere; }
+.proposal-who { font-size: var(--text-base); color: var(--ink); overflow-wrap: anywhere; }
 /* §4.4 — who proposed them, how many have signed and whether anyone objects
    are what the decision rests on; they were 10px tracked capitals. */
 .proposal-head { font-size: var(--text-ui); color: var(--ink-dim); }
@@ -1140,9 +1026,21 @@ kbd {
 .decision-text { flex: 1; min-width: 0; overflow-wrap: anywhere; }
 .decision-circle { color: var(--ink-mute); }
 
-/* The threshold picker in circle settings. */
-.threshold-picker { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; }
-.threshold-picker input { width: 72px; }
+/* The threshold picker in circle settings: the number, "of N" right after
+   it, and Save, on one line under the label. */
+.threshold-picker { margin-bottom: var(--s-4); }
+.threshold-label { display: block; margin-bottom: var(--s-2); font: 600 var(--text-ui) var(--sans); color: var(--ink-dim); }
+.threshold-row { display: flex; align-items: center; gap: var(--s-2); }
+.threshold-row input {
+  width: 72px;
+  height: var(--field-h);
+  padding: 0 var(--s-3);
+  background: var(--well);
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--r);
+}
+.threshold-row input:focus { border-color: var(--ink-dim); }
+.threshold-row .button { height: var(--field-h); margin-left: var(--s-2); }
 
 /* ----------------------------------------------------------- phone tabs -- */
 /* Hidden by default: this is the phone's answer to a strip that lives at the
@@ -1170,12 +1068,13 @@ kbd {
 }
 .call-bar-glyph { display: grid; place-items: center; color: var(--ok); flex: none; }
 .call-bar-where { min-width: 0; }
-.call-bar-where strong { font-weight: 650; }
+.call-bar-where strong { font-weight: 600; }
 .call-bar-who { display: flex; align-items: center; gap: 9px; flex: none; }
 .call-bar-orbs { display: flex; }
 .call-bar-orbs > * { margin-right: -6px; border-radius: 50%; box-shadow: 0 0 0 2px var(--panel); }
 .call-bar-meta {
   font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
   color: var(--ink-mute);
 }
 .call-bar-actions { display: flex; align-items: center; gap: 8px; margin-left: auto; flex: none; }
@@ -1233,6 +1132,19 @@ kbd {
   scroll-snap-type: x proximity;
 }
 .room-chips::-webkit-scrollbar { display: none; }
+/* More rooms past an edge: that edge fades out (RoomStrip sets these). */
+.room-chips.more-right {
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 40px), transparent);
+  mask-image: linear-gradient(to right, #000 calc(100% - 40px), transparent);
+}
+.room-chips.more-left {
+  -webkit-mask-image: linear-gradient(to left, #000 calc(100% - 40px), transparent);
+  mask-image: linear-gradient(to left, #000 calc(100% - 40px), transparent);
+}
+.room-chips.more-left.more-right {
+  -webkit-mask-image: linear-gradient(to right, transparent, #000 40px, #000 calc(100% - 40px), transparent);
+  mask-image: linear-gradient(to right, transparent, #000 40px, #000 calc(100% - 40px), transparent);
+}
 .room-chips > li { flex: none; align-self: stretch; display: flex; scroll-snap-align: start; }
 
 /* §5.5 — one tab grammar: text and a 2px coral underline. The strip used a
@@ -1248,7 +1160,7 @@ kbd {
   border-bottom: 2px solid transparent;
   border-radius: 0;
   color: var(--ink-dim);
-  font: 500 var(--text-base) var(--sans);
+  font: var(--text-base) var(--sans);
   white-space: nowrap;
   cursor: pointer;
   transition: color var(--fast) var(--ease), border-color var(--fast) var(--ease);
@@ -1267,29 +1179,19 @@ kbd {
    survive greyscale. */
 .room-chip.live, .room-chip.joined { color: var(--ink); }
 .room-chip.live svg, .room-chip.joined svg { color: var(--ok); }
-.room-chip-state { font-size: var(--text-sm); color: var(--ink-mute); }
+.room-chip-state { font-size: var(--text-sm); font-variant-numeric: tabular-nums; color: var(--ink-mute); }
 
 .room-chip-input {
-  width: 148px;
+  width: 160px;
+  min-width: 0;
   padding: 6px 9px;
   background: var(--raised);
   border: 1px solid var(--hairline-strong);
   border-radius: var(--r-sm);
   color: var(--ink);
-  font: 500 var(--text-base) var(--sans);
+  font: var(--text-base) var(--sans);
 }
-.room-chip-add-go {
-  padding: 6px 9px;
-  margin-left: 4px;
-  background: transparent;
-  border: 1px solid var(--hairline);
-  border-radius: var(--r-sm);
-  color: var(--ink-dim);
-  font: 500 var(--text-sm) var(--sans);
-  cursor: pointer;
-}
-.room-chip-add-go:hover { color: var(--ink); border-color: var(--hairline-strong); }
-.room-strip form { display: flex; align-items: center; }
+.room-strip form { display: flex; align-items: center; gap: var(--s-2); }
 .room-strip-end { display: flex; align-items: center; gap: 2px; flex: none; }
 
 /* --------------------------------------------------------------- sidebar -- */
@@ -1311,8 +1213,7 @@ kbd {
   border: none;
   border-radius: 13px;
   color: rgba(255, 255, 255, 0.94);
-  font: 800 13px var(--sans);
-  letter-spacing: -0.01em;
+  font: 700 var(--text-sm) var(--sans);
   cursor: pointer;
   opacity: 0.62;
   transition: opacity var(--fast) var(--ease), box-shadow var(--fast) var(--ease);
@@ -1350,24 +1251,9 @@ kbd {
   animation: skeleton-shimmer 1.3s linear infinite;
 }
 
-/* An inactive tile sits at 0.62 — which reads as "nothing here". A circle
-   with unread messages has to come forward, or the badge is arguing with the
-   tile underneath it. */
-
-/* nav column header: the circle's name lives here, not in a rail row */
-
-/* rooms + voice */
-@media (hover: none) {
-  .room-row .chan-gear, .voice-row .chan-gear { opacity: 1; }
-}
 /* channel-settings modal: rename + delete management block */
 .chan-manage { margin-top: 16px; padding-top: 16px; border-top: 1px solid var(--hairline); }
 
-/* channel-row unread pill + voice live chip */
-
-/* someone's live and you're not in yet: the sidebar's join card */
-[data-theme='paper'] .voice-live-card { border-color: rgba(31, 110, 66, 0.35); }
-[data-theme='paper'] .voice-join-pill { color: #fff; }
 
 .sr-only {
   position: absolute;
@@ -1380,19 +1266,6 @@ kbd {
 }
 
 /* voice */
-/* a joined voice room button IS clickable (opens the call view) */
-.voice-join {
-  font: 600 var(--text-ui) var(--sans);
-  color: var(--ink);
-  background: none;
-  border: 1px solid var(--hairline-strong);
-  border-radius: var(--r);
-  padding: 2px 8px;
-  transition: background var(--fast) var(--ease), border-color var(--fast) var(--ease);
-}
-.voice-join:hover { background: var(--hover); }
-.voice-join.leave { color: var(--danger); border-color: var(--danger); }
-.voice-join.leave:hover { background: var(--danger-soft); }
 /* Hearing others and sending nothing is a reduced capability — amber, with
    its reason in words (§1.3, §11.11). It was coral. */
 .listen-only {
@@ -1400,14 +1273,6 @@ kbd {
   color: var(--warn);
   white-space: nowrap;
 }
-/* you're in this call: the row above gets a live treatment, and this card
-   is bound to it — a header so it isn't a bare unlabeled green box. */
-[data-theme='paper'] .voice-joined-card { border-color: rgba(31, 110, 66, 0.35); }
-/* Who's in the call, as a stack of orbs — same language as the "live in …"
-   card above, but each orb pulses while its owner is talking. */
-[data-theme='paper'] .call-orb .seal-avatar { box-shadow: 0 0 0 2px #dff1e6; }
-/* not yet connected: dim the orb instead of a text status */
-/* talking: lift, ring, and a soft breathing glow */
 
 /* roster presence: only what this device truly knows (calls) */
 .member-col { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
@@ -1441,7 +1306,10 @@ kbd {
 .call-panel {
   position: fixed;
   right: 20px;
-  bottom: 20px;
+  /* Above a composer and its encryption note, never over them: a ring card
+     once hid Send and half of a key-mismatch warning. */
+  bottom: 104px;
+  min-width: 300px;
   z-index: var(--z-dock);
   display: flex;
   align-items: center;
@@ -1461,8 +1329,8 @@ kbd {
   0%, 100% { opacity: 1; transform: scale(1); }
   50% { opacity: 0.35; transform: scale(0.82); }
 }
-.call-text { display: flex; flex-direction: column; line-height: 1.25; margin-right: auto; }
-.call-text .muted { font-size: var(--text-sm); }
+.call-text { display: flex; flex-direction: column; line-height: 1.25; margin-right: auto; min-width: 0; }
+.call-text .muted { font-size: var(--text-sm); white-space: nowrap; }
 .call-btn {
   display: inline-flex;
   align-items: center;
@@ -1517,11 +1385,10 @@ a.call-btn { text-decoration: none; }
   padding: 4px 10px 4px 4px;
   margin-left: -4px;
   color: var(--ink-dim);
-  font: 500 var(--text-ui) var(--sans);
+  font: var(--text-ui) var(--sans);
   border-right: 1px solid var(--hairline-strong);
   border-radius: var(--r) 0 0 var(--r);
 }
-.stage-head .sealed-note { margin-left: 0; flex: 1; }
 .stage-actions {
   margin-left: auto;
   display: flex;
@@ -1597,7 +1464,7 @@ a.call-btn { text-decoration: none; }
   border-radius: var(--r);
   background: rgba(0, 0, 0, 0.55);
   color: #fff;
-  font: 500 var(--text-sm) var(--sans);
+  font: var(--text-sm) var(--sans);
 }
 .stage-screen.waiting {
   flex: 0 0 auto;
@@ -1618,7 +1485,7 @@ a.call-btn { text-decoration: none; }
   border-radius: var(--r);
   background: none;
   color: var(--ink-mute);
-  font: 500 var(--text-sm) var(--sans);
+  font: var(--text-sm) var(--sans);
   cursor: pointer;
 }
 .sharer-pill:hover { color: var(--ink); }
@@ -1626,6 +1493,7 @@ a.call-btn { text-decoration: none; }
 
 .stage-bubbles {
   list-style: none;
+  padding: 0;
   display: flex;
   flex-wrap: wrap;
   align-items: flex-start;
@@ -1681,7 +1549,7 @@ a.call-btn { text-decoration: none; }
   box-shadow: 0 0 0 2px var(--ok), 0 0 14px var(--ok-soft);
 }
 .stage-bubble .bubble-name {
-  font: 600 var(--text-md) var(--sans);
+  font: 600 var(--text-lg) var(--sans);
   max-width: 160px;
   overflow: hidden;
   text-overflow: ellipsis;
@@ -1693,7 +1561,7 @@ a.call-btn { text-decoration: none; }
   display: inline-flex;
   align-items: center;
   gap: 5px;
-  font: 500 var(--text-sm) var(--sans);
+  font: var(--text-sm) var(--sans);
   color: var(--ink-dim);
 }
 .bubble-conn {
@@ -1722,7 +1590,6 @@ a.call-btn { text-decoration: none; }
 .stage-chat-head h3 { font: inherit; }
 .stage-chat-head .muted { font-weight: 400; font-size: var(--text-sm); }
 .stage-chat .scroll { padding: 10px 14px; }
-.stage-chat-empty { font-size: var(--text-sm); padding-top: 8px; }
 .stage-chat-line {
   display: flex;
   align-items: baseline;
@@ -1731,11 +1598,11 @@ a.call-btn { text-decoration: none; }
   font-size: var(--text-sm);
   line-height: 1.45;
 }
-.stage-chat-line .seal-avatar { align-self: center; }
+.stage-chat-line .seal-avatar { align-self: flex-start; }
 /* §4.1, §4.2 — a name is 600 sans everywhere, and yours is not coral (§1.1). */
 .stage-chat-line .sender { font: 600 var(--text-sm) var(--sans); white-space: nowrap; }
 .stage-chat-line .text { min-width: 0; overflow-wrap: anywhere; }
-.stage-chat-line time { margin-left: auto; font: var(--text-sm) var(--mono); color: var(--ink-mute); white-space: nowrap; }
+.stage-chat-line time { margin-left: auto; font: var(--text-sm) var(--sans); font-variant-numeric: tabular-nums; color: var(--ink-mute); white-space: nowrap; }
 .stage-chat-line.system .text { font-size: var(--text-sm); }
 .stage-composer { display: flex; align-items: center; gap: var(--s-2); padding: 8px 10px 4px; }
 .stage-composer input {
@@ -1751,23 +1618,6 @@ a.call-btn { text-decoration: none; }
 .stage-composer input:focus { border-color: var(--ink-dim); }
 .stage-chat .composer-note { padding: 4px 12px 10px; }
 
-/* joined voice room name doubles as the way back to its stage */
-/* the room you're in reads as active: green fill + a left bar tying it to
-   the participant card below (mirrors .channel.active, in the call's hue) */
-.voice-row .channel.joined,
-.voice-row .channel.joined:hover { color: var(--ink); background: var(--ok-soft); }
-.voice-row .channel.joined::before {
-  content: '';
-  position: absolute;
-  left: -8px;
-  top: 4px;
-  bottom: 4px;
-  width: 2px;
-  background: var(--ok);
-}
-.voice-row .channel.joined .glyph { color: var(--ok); }
-
-/* self card */
 
 /* ---------------------------------------------------------- conversation -- */
 .messages-pane {
@@ -1787,21 +1637,22 @@ a.call-btn { text-decoration: none; }
   padding: 0 var(--pane-gutter);
   border-bottom: 1px solid var(--hairline);
 }
-.pane-head .room-name { display: flex; align-items: center; gap: 7px; font-weight: 600; font-size: var(--text-md); }
-.pane-head .room-name .glyph { color: var(--ink-mute); display: grid; place-items: center; }
-/* The pane header's right-hand note: the kept-history control and the
-   retention line, or a game's host line. Sentence case, sans — it used to be
-   tracked capitals, which is how the product says "machine data, skip". */
-.sealed-note {
+.pane-head .room-name {
   display: flex;
   align-items: center;
-  gap: var(--s-3);
-  font: var(--text-sm) var(--sans);
-  color: var(--ink-dim);
+  gap: 7px;
   min-width: 0;
   overflow: hidden;
-  text-overflow: ellipsis;
   white-space: nowrap;
+  font-weight: 600;
+  font-size: var(--text-lg);
+}
+.pane-head .room-name .glyph { color: var(--ink-mute); display: grid; place-items: center; }
+/* In a room the name never shrinks (the topic does), and whatever follows
+   the name and topic (the auto-delete note, the room's settings) sits at the
+   right edge. */
+.messages-pane:not(.overview-pane) > .pane-head > .room-name { flex-shrink: 0; }
+.messages-pane:not(.overview-pane) > .pane-head > :is(.room-name, .room-topic) + :not(.room-topic) {
   margin-left: auto;
 }
 .pane-head .room-topic {
@@ -1814,51 +1665,36 @@ a.call-btn { text-decoration: none; }
   text-overflow: ellipsis;
   white-space: nowrap;
 }
-.retention-note { display: inline-flex; align-items: center; gap: 6px; color: var(--ink-mute); }
-/* The forward-secrecy trade is the one thing in the header that changes what
-   the encryption guarantees, so it is amber, and it is the control that
-   explains itself (§1.3, §10.5). */
-.kept-note {
+/* Auto-delete, when it is on: plain muted text, or a quiet button to the
+   room's settings for whoever can change it. */
+.retention-note {
   display: inline-flex;
   align-items: center;
   gap: 6px;
   flex: none;
-  padding: 4px 10px;
-  background: transparent;
-  border: 1px solid var(--warn);
-  border-radius: var(--r);
-  color: var(--warn);
-  font: 600 var(--text-ui) var(--sans);
-  cursor: pointer;
+  padding: 0;
+  background: none;
+  border: 0;
+  font: var(--text-sm) var(--sans);
+  color: var(--ink-mute);
+  white-space: nowrap;
 }
-.kept-note:hover { background: var(--hover); }
-.kept-short { display: none; }
-.kept-detail {
-  flex-shrink: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  gap: var(--s-2);
-  padding: var(--s-3) var(--pane-gutter);
-  background: var(--panel);
-  border-bottom: 1px solid var(--hairline);
-  color: var(--ink-dim);
-  font-size: var(--text-ui);
-}
-.kept-detail p { max-width: 72ch; }
+button.retention-note { cursor: pointer; }
+button.retention-note:hover { color: var(--ink); text-decoration: underline; text-underline-offset: 3px; }
 
-.scroll { flex: 1; overflow-y: auto; padding: 4px 20px 12px; }
+/* Two left edges in the transcript: the gutter (avatars, dividers) and the
+   text column at gutter + 44px (names, lines, system lines, typing). */
+.scroll { flex: 1; overflow-y: auto; padding: var(--s-1) var(--pane-gutter) var(--s-5); }
 
 /* The start of the room's record. A plain line — it was a boxed panel with
    a coral rule and a caps tag above a sentence saying the same thing. */
 .watermark {
   margin: var(--s-5) 0 var(--s-2);
-  padding: 0 6px;
+  padding: 0;
   color: var(--ink-mute);
   font-size: var(--text-ui);
   line-height: 1.6;
 }
-.watermark strong { color: var(--ink-dim); }
 
 .day-divider {
   display: flex;
@@ -1873,20 +1709,23 @@ a.call-btn { text-decoration: none; }
 /* message groups */
 .msg-group {
   display: grid;
-  grid-template-columns: 32px 1fr;
+  /* minmax(0, …): a nowrap reply quote must not widen the text column past
+     the screen and clip every line in the group. */
+  grid-template-columns: 32px minmax(0, 1fr);
   gap: 0 12px;
-  padding: 7px 6px 3px;
+  padding: 6px 0 2px;
   animation: pop var(--slow) var(--ease);
 }
 .msg-group .seal-avatar { grid-row: 1 / span 99; margin-top: 3px; }
 .msg-head { display: flex; align-items: baseline; gap: 10px; min-width: 0; }
 /* No YOU pill: it was coral marking identity (§1.1), on every one of your
    own messages, in a product where you already know your own name. */
-.msg-head .sender { font-weight: 600; font-size: var(--text-base); letter-spacing: -0.01em; }
-.msg-head time { font: var(--text-sm) var(--mono); color: var(--ink-mute); }
+.msg-head .sender { font-weight: 600; font-size: var(--text-base); }
+.msg-head time { font: var(--text-sm) var(--sans); font-variant-numeric: tabular-nums; color: var(--ink-mute); }
 
 .msg-line {
   position: relative;
+  min-width: 0;
   padding: 1px 64px 1px 0;
   overflow-wrap: anywhere;
   color: var(--ink);
@@ -1905,24 +1744,31 @@ a.call-btn { text-decoration: none; }
   position: absolute;
   right: 6px;
   top: 3px;
-  font: var(--text-xs) var(--mono);
+  font: var(--text-sm) var(--sans);
+  font-variant-numeric: tabular-nums;
   color: var(--ink-mute);
   opacity: 0;
   transition: opacity var(--fast) var(--ease);
 }
 .msg-line:hover time { opacity: 1; }
+/* The toolbar sits where the hover time does; while it shows, the time
+   steps aside rather than peeking out under it. */
+.msg-line:hover:has(> .msg-actions) > time { opacity: 0; }
 
-.system-chip { display: flex; margin: 10px 0 10px 44px; }
-.system-chip > span {
-  display: inline-flex;
+/* A join, a leave, a removal, an auto-delete change: one muted line in the
+   text column. No box, no rule. */
+.system-line {
+  display: flex;
   align-items: baseline;
-  gap: 10px;
-  font: var(--text-ui) var(--sans);
+  flex-wrap: wrap;
+  gap: var(--s-2);
+  margin: var(--s-1) 0;
+  padding-left: 44px;
+  font: var(--text-sm) var(--sans);
   color: var(--ink-mute);
-  border-left: 2px solid var(--hairline-strong);
-  padding: 1px 12px;
 }
-.system-chip time { font-size: var(--text-xs); }
+.system-line > span { display: inline-flex; align-items: baseline; flex-wrap: wrap; gap: var(--s-2); }
+.system-line time { font-size: var(--text-sm); font-variant-numeric: tabular-nums; }
 
 /* attachments */
 .attachment-img {
@@ -1944,18 +1790,18 @@ a.call-btn { text-decoration: none; }
   padding: 7px 12px;
   max-width: 100%;
   color: var(--ink);
-  font: 500 var(--text-ui) var(--sans);
+  font: var(--text-ui) var(--sans);
   transition: border-color var(--fast) var(--ease);
 }
 .attachment-file:hover { border-color: var(--ink-dim); }
 .attachment-file svg { color: var(--ink-mute); flex: none; }
-/* A filename is something you read (sans); its size is a number (mono). */
 .attachment-name { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; }
-.attachment-file .size { flex: none; font: var(--text-sm) var(--mono); color: var(--ink-mute); }
+.attachment-file .size { flex: none; font: var(--text-sm) var(--sans); font-variant-numeric: tabular-nums; color: var(--ink-mute); }
 .attachment-error { color: var(--danger); font-size: var(--text-sm); }
 
 /* composer */
 .composer-dock {
+  position: relative;
   padding: 0 var(--pane-gutter) calc(10px + env(safe-area-inset-bottom, 0px));
   flex-shrink: 0;
 }
@@ -1969,7 +1815,9 @@ a.call-btn { text-decoration: none; }
   padding: 3px 4px;
   transition: border-color var(--fast) var(--ease);
 }
-.composer:focus-within { border-color: var(--ink-dim); }
+/* Focus shows on the rounded frame, not as a box inside it. */
+.composer:focus-within { border-color: var(--ink-dim); box-shadow: 0 0 0 1px var(--ink-dim); }
+.composer input:focus-visible { outline: none; }
 .composer input[type='text'], .composer > input { flex: 1; min-width: 0; background: none; border: none; padding: 7px 8px; }
 .attach {
   display: grid;
@@ -1990,19 +1838,26 @@ a.call-btn { text-decoration: none; }
 .send { flex: none; padding-top: 6px; padding-bottom: 6px; }
 /* The one encryption line on a conversation surface, written for whatever is
    true (§10.1). Green lock while everyone is verified; amber, with the way
-   to fix it, while someone is not. */
+   to fix it, while someone is not. A key mismatch is broken, not reduced:
+   the whole line takes the danger colour and never reads as verified.
+   Alone, there is nobody to verify, so the lock is neutral. */
 .composer-note {
   display: flex;
   align-items: center;
   flex-wrap: wrap;
   gap: 7px;
-  padding: 6px 2px 0;
+  padding: 6px 0 0;
   font: var(--text-sm) var(--sans);
   color: var(--ink-mute);
 }
 .composer-note svg { color: var(--ok); flex: none; }
 .composer-note.unchecked svg { color: var(--warn); }
 .composer-note .linkish { color: var(--warn); text-decoration: underline; text-underline-offset: 3px; }
+.composer-note.mismatch,
+.composer-note.mismatch svg,
+.composer-note.mismatch .linkish { color: var(--danger); }
+.composer-note.mismatch .linkish { font-weight: 600; }
+.composer-note.alone svg { color: var(--ink-mute); }
 .composer-note.restored-note {
   padding: 12px 2px;
   color: var(--ink-dim);
@@ -2038,26 +1893,15 @@ a.call-btn { text-decoration: none; }
 .device-row .ghost { min-height: 44px; min-width: 44px; padding: 0 10px; flex-shrink: 0; }
 
 /* ---------------------------------------------------------------- roster -- */
-/* The roster is a section of the board now, not a column beside the
-   conversation. It keeps every action it had — it is still the security
-   boundary — it just stops costing a fifth of the window on every screen. */
-/* The roster: a card of rows on the board. It was a grid of mini-cards in
-   mono, with three badge styles in one card; it is a list of people now,
-   each row saying who, where, and whether their key is checked — with the
-   control to check it (§10.5). */
+/* The roster: a plain section of the board, a list of people. Each row says
+   who, and whether their key is checked, with the control to check it. */
 .members {
   display: flex;
   flex-direction: column;
   min-width: 0;
-  background: var(--panel);
-  border: 1px solid var(--hairline);
-  border-radius: var(--r-lg);
-  padding: var(--s-4) 18px;
 }
 .members .member-list { overflow: visible; display: block; padding: 0; }
 .members .section-label { justify-content: flex-start; flex-wrap: wrap; row-gap: var(--s-2); gap: var(--s-3); padding: 0 0 var(--s-2); }
-.members .section-label .member-unchecked { margin-left: auto; }
-.members-title { font: 600 var(--text-md) var(--sans); }
 .member-count { font: var(--text-ui) var(--sans); color: var(--ink-mute); }
 .member-list { list-style: none; padding: 0 8px; flex: 1; min-width: 0; }
 .member {
@@ -2085,23 +1929,22 @@ a.call-btn { text-decoration: none; }
 .member-you { flex: none; color: var(--ink-mute); font-size: var(--text-ui); }
 .member-verified { display: inline-grid; place-items: center; flex: none; color: var(--ok); }
 .member .tag { margin-left: auto; flex-shrink: 0; display: flex; align-items: center; gap: 6px; }
+/* "…" sits apart from Call so Remove is never one slip from it. */
+.member .tag .member-more { margin-left: var(--s-3); }
+/* Each row has a view-transition-name, which makes it a stacking context, so
+   an open menu would paint under the next row. Lift the row that holds it. */
+.member:has(.pop-menu) { position: relative; z-index: var(--z-pop); }
+/* "Joined by link": a quiet second line under the name, a trust signal. */
+.member-note {
+  font: var(--text-sm) var(--sans);
+  color: var(--ink-mute);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 /* A mismatch is broken, not reduced: the one roster state with a fill, so it
    survives being read past (§1.4, §10.9). */
 .badge-mismatch { background: var(--danger-soft); }
-
-.role-toggle {
-  font: 500 var(--text-ui) var(--sans);
-  color: var(--ink-mute);
-  cursor: pointer;
-  margin-left: 6px;
-  padding: 1px 4px;
-  /* display:none (not visibility) so the toggle doesn't reserve width at
-     rest — otherwise it silently squeezes short handles to "b.." */
-  display: none;
-}
-.member:hover .role-toggle,
-.member:focus-within .role-toggle { display: inline-flex; align-items: center; }
-.role-toggle:hover { color: var(--ink); text-decoration: underline; text-underline-offset: 3px; }
 
 .add-member { padding: var(--s-4) 0 0; border-top: 1px solid var(--hairline); }
 .add-member-label { display: block; margin-bottom: var(--s-2); font: 600 var(--text-ui) var(--sans); color: var(--ink-dim); }
@@ -2140,12 +1983,8 @@ a.call-btn { text-decoration: none; }
 }
 .board-main,
 .board-side { display: flex; flex-direction: column; gap: var(--s-6); min-width: 0; }
-.side-card {
-  padding: var(--s-4) 18px;
-  background: var(--panel);
-  border: 1px solid var(--hairline);
-  border-radius: var(--r-lg);
-}
+/* Side sections are plain: a heading and rows, no card. */
+.side-card { min-width: 0; }
 
 .overview-section { min-width: 0; }
 .overview-section > .overline { display: block; margin-bottom: var(--s-3); }
@@ -2154,44 +1993,48 @@ a.call-btn { text-decoration: none; }
   white-space: pre-wrap;
   line-height: 1.6;
   max-width: 66ch;
-  font-size: var(--text-md);
+  font-size: var(--text-base);
   color: var(--ink-dim);
 }
-.overview-blurb.placeholder { font-style: italic; }
+/* Admins only, in place of a placeholder sentence. The ghost's text sits on
+   the column's left edge, so it lines up with the sections. */
+.overview-blurb-add {
+  align-self: flex-start;
+  margin-left: -6px;
+}
 
-/* Up next. A card like the others — it lost the coral rule down its left
-   edge (coral marks selection, not importance) and the maroon wash behind
-   it, and it says its countdown once instead of twice. */
+/* Up next: the one emphasised block on the board. */
 .overview-upnext {
   padding: var(--s-5) var(--s-6);
-  border: 1px solid var(--hairline);
   border-radius: var(--r-lg);
   background: var(--panel);
 }
 .hub-hero-meta { display: flex; align-items: baseline; flex-wrap: wrap; gap: var(--s-3); margin-bottom: var(--s-2); }
 .hub-hero-tag { margin: 0; font: 600 var(--text-ui) var(--sans); color: var(--ink-dim); }
-.upnext-title { font-size: var(--text-lg); font-weight: 650; letter-spacing: -0.01em; }
-.upnext-when { font-size: var(--text-ui); color: var(--ink-mute); }
+.upnext-title { font-size: var(--text-lg); font-weight: 600; }
+.upnext-when { font-size: var(--text-ui); font-variant-numeric: tabular-nums; color: var(--ink-mute); }
 .upnext-note { margin-top: 6px; font-size: var(--text-base); color: var(--ink-dim); line-height: 1.5; }
 
-.overview-links { list-style: none; padding: 0; display: grid; gap: 6px; }
+/* Links and rooms share the board's row grammar: rows divided by a
+   hairline, no box per row. */
+.overview-links,
+.overview-rooms { list-style: none; padding: 0; display: grid; }
+.overview-links > li + li,
+.overview-rooms > li + li { border-top: 1px solid var(--hairline); }
 .overview-link {
   display: flex;
   align-items: baseline;
   gap: 9px;
-  padding: 8px 12px;
-  border: 1px solid var(--hairline);
-  border-radius: var(--r);
-  background: var(--panel);
+  padding: 10px 0;
   color: var(--ink);
   text-decoration: none;
   min-width: 0;
-  transition: border-color var(--fast) var(--ease), background var(--fast) var(--ease);
 }
-a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover); }
+a.overview-link:hover .label { text-decoration: underline; text-underline-offset: 3px; }
 .overview-link svg { color: var(--ink-mute); flex-shrink: 0; align-self: center; }
-.overview-link .label { font-weight: 550; }
+.overview-link .label { font-weight: 600; }
 .overview-link .url {
+  font-size: var(--text-sm);
   color: var(--ink-mute);
   overflow: hidden;
   text-overflow: ellipsis;
@@ -2205,7 +2048,6 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
 .overview-link.inert svg { color: var(--ink-mute); }
 
 /* catch up: per-room unread + latest line */
-.overview-rooms { list-style: none; padding: 0; display: grid; gap: 4px; }
 /* §9.4 — a grid item is min-content wide by default, so without this the row
    grows to fit the whole of the last message and the ellipsis on `.last`
    never engages. It is why the board was 602px of content in a 354px pane at
@@ -2217,22 +2059,19 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
   align-items: center;
   gap: 9px;
   width: 100%;
-  padding: 8px 12px;
-  border: 1px solid var(--hairline);
-  border-radius: var(--r);
-  background: var(--panel);
+  padding: 10px 0;
+  background: none;
+  border: 0;
   color: var(--ink-dim);
   text-align: left;
   min-width: 0;
-  transition: border-color var(--fast) var(--ease), background var(--fast) var(--ease),
-    color var(--fast) var(--ease);
+  transition: color var(--fast) var(--ease);
 }
-.overview-room:hover { border-color: var(--ink-mute); background: var(--hover); color: var(--ink); }
+.overview-room:hover { color: var(--ink); }
 .overview-room .glyph { color: var(--ink-mute); display: grid; place-items: center; flex-shrink: 0; }
 .overview-room:hover .glyph { color: var(--ink); }
-.overview-room .room { font-weight: 550; font-size: var(--text-ui); flex-shrink: 0; }
-.overview-room.has-unread { color: var(--ink); border-color: var(--hairline-strong); }
-.overview-room.voice.live .glyph { color: var(--ok); }
+.overview-room .room { font-weight: 600; font-size: var(--text-ui); flex-shrink: 0; }
+.overview-room.has-unread { color: var(--ink); }
 /* A count is neutral (§1.1). It was a coral pill: coral is the selection,
    the primary action and focus, and a number of unread lines is none of
    those. Weight and a filled chip carry it. */
@@ -2240,6 +2079,7 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
   flex-shrink: 0;
   min-width: 20px;
   font: 600 var(--text-sm) var(--sans);
+  font-variant-numeric: tabular-nums;
   text-align: center;
   background: var(--active);
   color: var(--ink);
@@ -2260,6 +2100,7 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
 .overview-room .when {
   flex-shrink: 0;
   font-size: var(--text-sm);
+  font-variant-numeric: tabular-nums;
   color: var(--ink-mute);
 }
 .overview-room .go {
@@ -2285,6 +2126,17 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
   transition: border-color var(--fast) var(--ease);
 }
 .notice-composer input:focus { border-color: var(--ink-dim); }
+/* "Pin a note" and "Offer a lift": at the foot of their own section once it
+   exists; before that, side by side in a plain row of board actions. */
+.offer-add {
+  display: flex;
+  width: fit-content;
+  margin-top: var(--s-2);
+  margin-left: -6px;
+}
+.board-side-actions { display: flex; flex-wrap: wrap; gap: var(--s-1) var(--s-3); }
+.board-side-actions .offer-add { margin-top: 0; }
+.notice-composer .ghost { flex-shrink: 0; }
 .overview-notices,
 .cal-list { list-style: none; padding: 0; margin: 0; display: grid; }
 .notice,
@@ -2301,25 +2153,30 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
 .cal-body { flex: 1; min-width: 0; display: grid; gap: 2px; }
 .notice-head,
 .cal-when { font-size: var(--text-sm); color: var(--ink-mute); }
+.cal-when { font-variant-numeric: tabular-nums; }
 .cal-title { font-weight: 600; overflow-wrap: anywhere; }
 .cal-note { font-size: var(--text-ui); color: var(--ink-dim); }
 .notice-text { line-height: 1.5; overflow-wrap: anywhere; }
 .notice-remove { flex-shrink: 0; opacity: 0; padding: 2px 5px; }
 .notice:hover .notice-remove, .notice-remove:focus-visible { opacity: 1; }
 @media (hover: none) { .notice-remove { opacity: 1; } }
-.overview-empty-note { font-size: var(--text-sm); line-height: 1.55; max-width: 60ch; }
 
-.overview-edit-form { display: grid; gap: 8px; max-width: 66ch; }
-.overview-event-edit { display: grid; grid-template-columns: 1fr auto; gap: 6px; }
-.overview-event-edit input, .overview-edit-form > input {
+.overview-edit-form { display: grid; grid-template-columns: minmax(0, 1fr); gap: 8px; max-width: 66ch; }
+.overview-event-edit { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 6px; }
+.overview-event-edit input,
+.overview-event-edit2 input,
+.overview-edit-form > input {
   width: 100%;
+  min-width: 0;
   background: var(--well);
   border: 1px solid var(--hairline-strong);
   border-radius: var(--r);
   padding: 9px 11px;
   transition: border-color var(--fast) var(--ease);
 }
-.overview-event-edit input:focus, .overview-edit-form > input:focus { border-color: var(--ink-dim); }
+.overview-event-edit input:focus,
+.overview-event-edit2 input:focus,
+.overview-edit-form > input:focus { border-color: var(--ink-dim); }
 .overview-event-edit input[type='datetime-local'] { color-scheme: inherit; font-size: var(--text-ui); }
 .overview-field-label {
   font: 600 var(--text-ui) var(--sans);
@@ -2340,7 +2197,7 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
 .overview-link-edit input:focus { border-color: var(--ink-dim); }
 .overview-link-edit {
   display: grid;
-  grid-template-columns: minmax(90px, 1fr) 2fr auto;
+  grid-template-columns: minmax(0, 1fr) minmax(0, 2fr) auto;
   gap: 6px;
   align-items: center;
 }
@@ -2406,12 +2263,7 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
   padding: 14px 26px;
   border-bottom: 1px solid var(--hairline);
 }
-.dialog-head .dialog-glyph {
-  display: grid;
-  place-items: center;
-  color: var(--ink-dim);
-}
-.dialog-head h1 { font-size: var(--text-md); }
+.dialog-head h1 { font-size: var(--text-lg); }
 .card > .muted, .card .lede { margin-bottom: 16px; font-size: var(--text-ui); line-height: 1.55; }
 .card h1 + .muted, .card h1 + .lede { margin-top: 6px; }
 
@@ -2427,7 +2279,7 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
 }
 .settings-profile { display: flex; align-items: center; gap: 12px; }
 /* §4.1 — a handle is a person's name, so it is never mono. */
-.settings-handle { font: 600 var(--text-md) var(--sans); color: var(--ink); }
+.settings-handle { font: 600 var(--text-lg) var(--sans); color: var(--ink); }
 .settings-row { display: flex; align-items: flex-start; gap: 10px; }
 .settings-row-glyph { color: var(--ink-mute); display: grid; place-items: center; padding-top: 1px; }
 .settings-row-body { flex: 1; min-width: 0; }
@@ -2454,10 +2306,36 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
 .settings-toggle { display: flex; align-items: flex-start; gap: 10px; margin-top: 9px; cursor: pointer; }
 .settings-toggle input { width: auto; margin-top: 2px; accent-color: var(--accent); flex-shrink: 0; }
 .settings-toggle-body { display: flex; flex-direction: column; gap: 2px; }
-.settings-toggle-label { font: 500 var(--text-sm) var(--sans); color: var(--ink); }
+.settings-toggle-label { font: var(--text-ui) var(--sans); color: var(--ink); }
 .settings-dsp > .fineprint { margin-top: 10px; }
 
-.settings-actions { display: flex; gap: 8px; flex-wrap: wrap; }
+.settings-actions { display: flex; gap: 8px; flex-wrap: wrap; margin-top: var(--s-3); }
+/* A three-way choice in one control: the filled option is the state. Its
+   row centres the label on it. */
+.settings-row:has(> .segmented) { align-items: center; }
+.segmented {
+  display: inline-flex;
+  flex: none;
+  align-self: center;
+  gap: var(--s-1);
+  padding: var(--s-1);
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--r);
+}
+.segment {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  padding: var(--s-1) var(--s-3);
+  background: none;
+  border: 0;
+  border-radius: var(--r-sm);
+  color: var(--ink-dim);
+  font: 600 var(--text-ui) var(--sans);
+  cursor: pointer;
+}
+.segment:hover { color: var(--ink); }
+.segment.on { background: var(--active); color: var(--ink); }
 .fineprint.warn { color: var(--danger); }
 .fineprint.ok { color: var(--ok); }
 
@@ -2475,7 +2353,7 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
   margin-bottom: -1px;
   padding: 8px 2px;
   color: var(--ink-dim);
-  font: 500 var(--text-base) var(--sans);
+  font: var(--text-base) var(--sans);
   transition: color var(--fast) var(--ease);
 }
 .tab:hover { color: var(--ink); }
@@ -2497,20 +2375,30 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
   overflow-wrap: anywhere;
 }
 .keybox.small { min-height: 56px; margin: 0; }
+/* The invite link on one line. Still mono: the link carries the circle key. */
+.keybox.invite-link {
+  min-height: 0;
+  resize: none;
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
 
 .divider {
   display: flex;
   align-items: center;
   gap: 10px;
-  font: 500 var(--text-sm) var(--sans);
+  font: var(--text-sm) var(--sans);
   color: var(--ink-mute);
   margin: 14px 0;
 }
 .divider::before, .divider::after { content: ''; flex: 1; height: 1px; background: var(--hairline); }
+/* A bare rule (no label): without this the two halves leave a gap. */
+.divider:empty { gap: 0; }
 
 .recovery-code {
   font-family: var(--mono);
-  font-size: 18px;
+  font-size: var(--text-lg);
   letter-spacing: 0.16em;
   text-align: center;
   color: var(--ink);
@@ -2535,15 +2423,18 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
   /* Digits that two people read aloud to each other: the one place in a
      dialog where mono is the point. */
   font-family: var(--mono);
-  font-size: var(--text-md);
+  font-size: var(--text-base);
   letter-spacing: 0.06em;
   color: var(--ink);
 }
+/* Read aloud across a table: the groups keep the body size, not .mono's. */
+.safety-number .mono { font-size: inherit; }
 
 .check {
-  display: flex;
+  display: grid;
+  grid-template-columns: auto minmax(0, 1fr);
   gap: 10px;
-  align-items: flex-start;
+  align-items: start;
   margin: 16px 0;
   font-size: var(--text-ui);
   cursor: pointer;
@@ -2607,7 +2498,7 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
 .signin-as .linkish { margin-left: auto; }
 
 /* device linking */
-.device-link-entry { display: inline-flex; align-items: center; gap: 6px; margin-top: 14px; }
+.device-link-entry { margin-top: var(--s-2); }
 .qr-card {
   background: #fff;
   border-radius: 14px;
@@ -2649,12 +2540,10 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
 .gate-tagline {
   font-size: var(--text-display);
   font-weight: 700;
-  line-height: 1.12;
-  letter-spacing: -0.03em;
+  line-height: 1.15;
   margin: 30px 0 12px;
   max-width: 18ch;
 }
-.gate-sub { color: var(--ink-dim); max-width: 46ch; font-size: var(--text-md); line-height: 1.6; }
 
 .principles {
   list-style: none;
@@ -2665,7 +2554,7 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
 .principles li {
   display: flex;
   gap: 16px;
-  align-items: flex-start;
+  align-items: center;
   max-width: 56ch;
   padding: 14px 0;
   border-bottom: 1px solid var(--hairline);
@@ -2676,11 +2565,9 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
   display: grid;
   place-items: center;
   color: var(--ink-dim);
-  padding-top: 2px;
   flex-shrink: 0;
 }
-.principles strong { display: block; font-size: var(--text-md); letter-spacing: -0.01em; margin-bottom: 2px; }
-.principles span { color: var(--ink-dim); font-size: var(--text-base); line-height: 1.55; }
+.principles strong { display: block; font-size: var(--text-base); font-weight: 600; }
 
 .gate-form {
   display: flex;
@@ -2700,17 +2587,27 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
    add no specificity, so these only win by source order. */
 @media (max-width: 820px) {
   .gate { grid-template-columns: 1fr; height: auto; min-height: 100%; }
-  .gate-brand { padding: 28px 18px 8px; border-right: none; background: var(--well); }
-  .gate-tagline { font-size: var(--text-xl); margin: 18px 0 8px; }
-  .gate-sub { font-size: var(--text-base); }
+  .gate-brand { padding: 28px var(--pane-gutter) 8px; border-right: none; background: var(--well); }
+  .gate-tagline { margin: 18px 0 8px; }
   .principles { margin-top: 18px; }
   .principles li { padding: 10px 0; }
   .gate-form {
     align-items: flex-start;
-    padding: 8px 18px calc(24px + env(safe-area-inset-bottom, 0px));
+    padding: 8px var(--pane-gutter) calc(24px + env(safe-area-inset-bottom, 0px));
     overflow-y: visible;
   }
   .gate-form .card { width: 100%; max-width: 420px; margin: 0; padding: 12px 0; }
+  /* An invite: the brand and tagline, then the form, then the facts, so the
+     one thing to do is above the fold. */
+  .gate-invite { align-content: start; }
+  .gate-invite .gate-brand { display: contents; }
+  .gate-invite .brand-lockup { padding: 28px var(--pane-gutter) 0; }
+  .gate-invite .gate-tagline { padding: 0 var(--pane-gutter); }
+  .gate-invite .gate-form { padding-bottom: 0; }
+  .gate-invite .principles {
+    order: 1;
+    margin: 8px var(--pane-gutter) calc(24px + env(safe-area-inset-bottom, 0px));
+  }
 }
 
 /* -------------------------------------------------------- command palette -- */
@@ -2741,8 +2638,12 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
   border: none;
   border-bottom: 1px solid var(--hairline);
   padding: 14px 16px;
-  font-size: var(--text-md);
+  font-size: var(--text-base);
 }
+/* The field is the palette's whole top edge, so the focus mark is a 2px
+   coral rule along its bottom rather than a square ring inside the
+   rounded panel. */
+.palette-input:focus-visible { outline: none; box-shadow: inset 0 -2px 0 var(--accent); }
 .palette-results { list-style: none; padding: 6px; max-height: 320px; overflow-y: auto; }
 .palette-item {
   display: flex;
@@ -2795,8 +2696,6 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
   font-size: var(--text-sm);
   color: var(--ink-mute);
 }
-/* Pushed to the right of the key hints: a standing caveat, not a shortcut. */
-.palette-scope { margin-left: auto; }
 .palette-foot {
   display: flex;
   gap: 14px;
@@ -2804,6 +2703,10 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
   border-top: 1px solid var(--hairline);
   font: var(--text-sm) var(--sans);
   color: var(--ink-mute);
+}
+/* A key hint means nothing on a touch screen. */
+@media (pointer: coarse) {
+  .palette-hint kbd { display: none; }
 }
 
 /* reactions: pills under a message line */
@@ -2822,7 +2725,8 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
   transition: border-color var(--fast) var(--ease), background var(--fast) var(--ease);
 }
 .react:hover { border-color: var(--hairline-strong); }
-.react.on { background: var(--accent-soft); border-color: var(--accent); color: var(--ink); }
+/* Your own reaction is pressed (neutral), not coral. */
+.react.on { background: var(--active); border-color: var(--hairline-strong); color: var(--ink); }
 
 /* hover toolbar: react / reply / edit / delete, a raised card at the line's
    top-right that overlays rather than reserving a row on every message */
@@ -2849,7 +2753,10 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
    ~185px wide on a 390px screen — half the column, floating over the line
    above — on every message at once. `.acting` is set by a tap on the line. */
 @media (hover: none) {
-  .msg-actions { opacity: 0; pointer-events: none; }
+  /* Sticky :hover and a focused button must not keep a toolbar over the
+     line you are answering; only the tapped line shows one. */
+  .msg-line:not(.acting) .msg-actions,
+  .msg-line:not(.acting) .msg-actions:focus-within { opacity: 0; pointer-events: none; }
   .msg-line.acting .msg-actions { opacity: 1; pointer-events: auto; }
 }
 .react-add-wrap { position: relative; display: inline-flex; }
@@ -2868,7 +2775,7 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
   transition: color var(--fast) var(--ease), background var(--fast) var(--ease);
 }
 .msg-act:hover { color: var(--ink); background: var(--hover); }
-.msg-act.danger { color: var(--danger); font-weight: 650; padding: 0 8px; }
+.msg-act.danger { color: var(--danger); font-weight: 600; padding: 0 8px; }
 .react-picker {
   position: absolute;
   top: calc(100% + 6px);
@@ -2892,6 +2799,42 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
 }
 .react-pick:hover { background: var(--hover); }
 
+/* A small button that opens a short list of actions (PopMenu.jsx): the room
+   strip's "+" (Text room, Voice room) and a member row's "…". */
+.pop-menu-wrap { position: relative; display: inline-flex; }
+.pop-menu {
+  position: absolute;
+  top: calc(100% + var(--s-1));
+  right: 0;
+  z-index: var(--z-pop);
+  display: flex;
+  flex-direction: column;
+  min-width: 10rem;
+  padding: var(--s-1);
+  background: var(--raised);
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--r);
+  box-shadow: var(--overlay-shadow);
+}
+.pop-menu-item {
+  display: flex;
+  align-items: center;
+  gap: var(--s-2);
+  padding: var(--s-2) var(--s-3);
+  background: none;
+  border: none;
+  border-radius: var(--r-sm);
+  color: var(--ink);
+  font: var(--text-ui) var(--sans);
+  text-align: left;
+  white-space: nowrap;
+  cursor: pointer;
+}
+.pop-menu-item svg { color: var(--ink-mute); flex: none; }
+.pop-menu-item:hover,
+.pop-menu-item:focus-visible { background: var(--hover); }
+.pop-menu-item.danger { color: var(--danger); }
+
 /* @mentions: matched against the live roster at render time. Neutral and
    heavier, not coral — a mention is a person, and coral never marks identity
    (§1.1). Your own handle gets the stronger weight. */
@@ -2902,7 +2845,7 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
   color: var(--ink-dim);
   font-weight: 600;
 }
-.mention.self { color: var(--ink); font-weight: 700; }
+.mention.self { color: var(--ink); }
 
 /* the "(edited)" marker and the tombstone a delete leaves behind */
 .edited-tag { margin-left: 5px; font-size: var(--text-sm); color: var(--ink-mute); }
@@ -2935,7 +2878,7 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
 }
 .reply-quote:hover:not(.orphan) { color: var(--ink-dim); border-left-color: var(--ink-mute); }
 .reply-quote.orphan { cursor: default; }
-.reply-quote .rq-who { font-weight: 650; color: var(--ink-dim); flex-shrink: 0; }
+.reply-quote .rq-who { font-weight: 600; color: var(--ink-dim); flex-shrink: 0; }
 .reply-quote .rq-text { overflow: hidden; text-overflow: ellipsis; white-space: nowrap; min-width: 0; }
 
 /* reply bar: the line you're answering, parked above the composer */
@@ -2953,7 +2896,7 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
   color: var(--ink-mute);
 }
 .reply-bar .rb-label { flex-shrink: 0; }
-.reply-bar .rb-label strong { color: var(--ink-dim); font-weight: 650; }
+.reply-bar .rb-label strong { color: var(--ink-dim); font-weight: 600; }
 .reply-bar .rb-text {
   flex: 1;
   min-width: 0;
@@ -2974,21 +2917,28 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
   cursor: pointer;
 }
 .reply-bar .rb-cancel:hover { color: var(--ink); background: var(--hover); }
-/* editing reuses the reply bar's frame with a warmer edge and a keyboard hint */
+/* editing reuses the reply bar's frame with a warmer edge */
 .reply-bar.editing { border-left-color: var(--warn); }
-.reply-bar .rb-hint { flex: 1; text-align: right; color: var(--ink-mute); font-size: var(--text-sm); }
 
-/* typing indicator: a quiet italic line reserving its own row above the
-   composer so the input never jumps as it comes and goes */
+/* Typing indicator: laid over the transcript just above the composer, in
+   the text column, so nothing moves when it comes and goes. The element is
+   always there (it is the live region); empty, it is invisible. */
 .typing-line {
-  height: 18px;
+  position: absolute;
+  bottom: 100%;
+  left: calc(var(--pane-gutter) + 44px);
+  max-width: calc(100% - 2 * var(--pane-gutter) - 44px);
   display: flex;
   align-items: center;
   gap: 7px;
-  padding: 0 12px;
+  padding: 0 0 2px;
+  background: var(--raised);
   font-size: var(--text-sm);
   font-style: italic;
   color: var(--ink-mute);
+  white-space: nowrap;
+  overflow: hidden;
+  pointer-events: none;
 }
 .typing-dots { display: inline-flex; gap: 3px; }
 .typing-dots i {
@@ -3108,19 +3058,7 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
   max-width: 42ch;
   animation: pop var(--slow) var(--ease);
 }
-.channel-empty .ce-glyph {
-  display: grid;
-  place-items: center;
-  width: 46px;
-  height: 46px;
-  margin-bottom: 6px;
-  border-radius: 50%;
-  color: var(--ink-mute);
-  background: var(--active);
-}
-.channel-empty .ce-title { font-size: var(--text-md); font-weight: 600; color: var(--ink-dim); }
-.channel-empty .ce-title strong { color: var(--ink); }
-.channel-empty .ce-sub { font-size: var(--text-sm); line-height: 1.55; margin: 0; }
+.channel-empty .ce-title { font-size: var(--text-base); font-weight: 600; color: var(--ink-dim); }
 
 /* reactions settle in with a quick scale; the add-in moment, not every render */
 .reacts .react { animation: react-pop 140ms var(--ease); }
@@ -3225,24 +3163,13 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
 
 /* verified check beside the sender name */
 .sender-check { display: inline-grid; place-items: center; color: var(--ok); }
-/* Deliberately not --ok and deliberately not --danger: an unattributable
-   line is not a failure, it is a weaker claim (§10.2). --warn is the token
-   for "this guarantee is reduced". It is a word now, not a 10px glyph with
-   its meaning in a tooltip. */
-.sender-history {
-  display: inline-flex;
-  align-items: center;
-  height: 20px;
-  padding: 0 var(--s-2);
-  border: 1px solid var(--warn);
-  border-radius: var(--r-pill);
-  color: var(--warn);
-  font: 500 var(--text-sm) var(--sans);
-  align-self: center;
+/* A line whose sender can't be confirmed says so in muted text after the
+   time: a weaker claim, not a failure (§10.2), and not an amber pill. */
+.sender-note {
+  font: var(--text-sm) var(--sans);
+  color: var(--ink-mute);
+  white-space: nowrap;
 }
-
-/* the conversation header's call affordance */
-.pane-call { margin-left: 12px; flex-shrink: 0; padding: 5px 12px; }
 
 /* a game launch as a first-class message: a row, not a poster */
 .game-invite {
@@ -3288,16 +3215,11 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
 .pane-actions .button { padding: 5px 12px; }
 
 /* The games block's top slot when the circle is in a game: who's in, and a
-   way to join them. A card like the others — it lost the green gradient
-   wash; the green dot beside "playing now" is the presence. */
+   way to join them. A plain row; the green dot is the presence. */
 .hub-band {
   display: flex;
   align-items: center;
   gap: 16px;
-  padding: 14px 16px;
-  border: 1px solid var(--hairline-strong);
-  border-radius: var(--r-lg);
-  background: var(--panel);
 }
 .hub-band-cover {
   width: 56px;
@@ -3311,7 +3233,7 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
 .hub-band-cover .game-cover-mark { font-size: 26px; }
 .hub-band-cover .game-cover-mark.glyph { font-size: 30px; }
 .hub-band-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 3px; }
-.hub-band-title { font-size: var(--text-lg); font-weight: 650; letter-spacing: -0.01em; }
+.hub-band-title { font-size: var(--text-lg); font-weight: 600; }
 .hub-band-who {
   display: flex;
   align-items: center;
@@ -3322,20 +3244,13 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
 .hub-band-who .game-who-stack .seal-avatar { box-shadow: 0 0 0 2px var(--raised); }
 .hub-band-join { flex-shrink: 0; }
 
-/* "Nothing live" line. Not dashed: §5.4 keeps dashes for an empty slot
-   awaiting content, and this is a sentence. */
-.hub-nudge {
-  font-size: var(--text-ui);
-  color: var(--ink-mute);
-}
-
 /* Shelf filter chips. Sans, like every control (§4.1). */
 .shelf-filters { display: flex; flex-wrap: wrap; gap: 7px; margin: 4px 0 14px; }
 .fchip {
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font: 500 var(--text-ui) var(--sans);
+  font: var(--text-ui) var(--sans);
   color: var(--ink-dim);
   background: var(--panel);
   border: 1px solid var(--hairline);
@@ -3347,32 +3262,24 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
 .fchip:hover { color: var(--ink); border-color: var(--hairline-strong); }
 .fchip.on { color: var(--ink); background: var(--hover); border-color: var(--hairline-strong); }
 .shelf-empty-filter { grid-column: 1 / -1; font-size: var(--text-sm); padding: 6px 2px; }
-.shelf-honesty {
-  font-size: var(--text-sm);
-  line-height: 1.5;
-  max-width: 62ch;
-  margin-top: 12px;
-}
 
 /* Rallies — open "I want to play X" calls from the circle. Neutral rows:
    they were coral-tinted, which spent the selection colour on an
    invitation (§1.1). */
 .hub-rallies > .overline { display: block; margin-bottom: 8px; }
-.rally-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 6px; }
+.rally-list { list-style: none; padding: 0; margin: 0; display: grid; }
 .rally-row {
   display: flex;
   align-items: center;
   gap: 12px;
-  padding: 9px 12px;
-  border: 1px solid var(--hairline);
-  border-radius: var(--r);
-  background: var(--panel);
+  padding: 10px 0;
 }
+.rally-row + .rally-row { border-top: 1px solid var(--hairline); }
 .rally-row .game-who-stack { flex-shrink: 0; }
 .rally-row .game-who-stack .seal-avatar { margin-right: -8px; box-shadow: 0 0 0 2px var(--panel); }
 .rally-row .game-who-stack .seal-avatar:last-child { margin-right: 0; }
 .rally-text { flex: 1; min-width: 0; font-size: var(--text-sm); color: var(--ink-dim); }
-.rally-text strong { color: var(--ink); font-weight: 650; }
+.rally-text strong { color: var(--ink); font-weight: 600; }
 .rally-host { flex-shrink: 0; font-size: var(--text-sm); color: var(--ink-mute); }
 .rally-join { flex-shrink: 0; }
 
@@ -3386,7 +3293,7 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
   margin-top: 7px;
   padding: 6px 10px;
   width: 100%;
-  font: 500 var(--text-sm) var(--sans);
+  font: var(--text-sm) var(--sans);
   color: var(--ink-dim);
   background: none;
   border: 1px solid transparent;
@@ -3397,57 +3304,6 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
 }
 .game-rally:hover { color: var(--ink); background: var(--hover); }
 .game-rally.on { color: var(--ink); background: var(--active); }
-
-/* Game nights — upcoming events tied to a game, right where the shelf is. */
-.hub-nights > .overline { display: block; margin-bottom: 8px; }
-.nights-list { list-style: none; padding: 0; margin: 0; display: grid; gap: 6px; }
-.night-row {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  padding: 10px 13px;
-  border: 1px solid var(--hairline);
-  border-radius: var(--r);
-  background: var(--panel);
-  /* A grid item's min-width is `auto`, i.e. min-content — so this row refused
-     to shrink below the combined width of the attendee stack and the RSVP
-     button, and pushed 700px of content through a 390px pane. The overflow
-     was invisible because the scroller's `overflow-y: auto` computes
-     `overflow-x` to `auto` too, so it scrolled sideways inside the pane
-     instead of breaking the page. */
-  min-width: 0;
-}
-.night-mark {
-  flex-shrink: 0;
-  display: grid;
-  place-items: center;
-  width: 30px;
-  height: 30px;
-  border-radius: var(--r-sm);
-  color: var(--ink-mute);
-  background: var(--active);
-}
-.night-body { flex: 1; min-width: 0; display: flex; flex-direction: column; gap: 2px; }
-.night-title { font-weight: 650; font-size: var(--text-base); letter-spacing: -0.01em; }
-.night-game { color: var(--ink-dim); font-weight: 550; }
-.night-when {
-  font-size: var(--text-sm);
-  color: var(--ink-mute);
-  overflow: hidden;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-.night-going {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  flex-shrink: 0;
-  font-size: var(--text-sm);
-  color: var(--ink-dim);
-}
-.night-going .game-who-stack .seal-avatar { margin-right: -8px; box-shadow: 0 0 0 2px var(--panel); }
-.night-going .game-who-stack .seal-avatar:last-child { margin-right: 0; }
-.night-action { flex-shrink: 0; padding: 6px 14px; }
 
 /* The game an up-next event is for: a link to it, not a coral second title. */
 .hero-game {
@@ -3460,7 +3316,7 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
   border: none;
   border-radius: var(--r-sm);
   color: var(--ink-dim);
-  font: 500 var(--text-ui) var(--sans);
+  font: var(--text-ui) var(--sans);
   cursor: pointer;
 }
 .hero-game:hover { color: var(--ink); background: var(--hover); }
@@ -3470,8 +3326,11 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
 /* Multiple events in the customize form: a title/time row over a note+game row. */
 .overview-event-row { display: grid; gap: 6px; padding: 8px 0; border-bottom: 1px dashed var(--hairline); }
 .overview-event-row:first-of-type { padding-top: 0; }
-.overview-event-edit2 { display: grid; grid-template-columns: 1fr auto auto; gap: 6px; align-items: center; }
+.overview-event-edit2 { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 6px; align-items: center; }
+/* The select takes the field's height beside it, not its own. */
 .overview-event-edit2 select {
+  align-self: stretch;
+  min-width: 0;
   background: var(--well);
   color: var(--ink);
   border: 1px solid var(--hairline-strong);
@@ -3486,8 +3345,7 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
 .hub-hero-title {
   display: block;
   font-size: var(--text-xl);
-  font-weight: 700;
-  letter-spacing: -0.02em;
+  font-weight: 600;
   line-height: 1.2;
   text-wrap: balance;
 }
@@ -3498,19 +3356,16 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
   display: inline-flex;
   align-items: center;
   gap: 9px;
-  font: 500 var(--text-ui) var(--sans);
+  font: var(--text-ui) var(--sans);
   color: var(--ink-dim);
 }
 .hub-going-stack { display: flex; }
 .hub-going-stack .seal-avatar { margin-right: -7px; box-shadow: 0 0 0 2px var(--panel); }
 .hub-going-stack .seal-avatar:last-child { margin-right: 2px; }
-.shelf-head { display: flex; align-items: baseline; gap: var(--s-3); margin-bottom: var(--s-3); }
-.shelf-meta { margin-left: auto; font-size: var(--text-sm); color: var(--ink-mute); }
 
 /* ------------------------------------------------------------- game shelf -- */
-/* The hub's centerpiece: pointers to games living on other servers. Covers
-   carry each game's derived hue — the one place the chrome allows a wash of
-   color, same rule as the member orbs. */
+/* Pointers to games living on other servers. Covers carry each game's
+   derived hue, like member avatars do. */
 .game-shelf {
   list-style: none;
   padding: 0;
@@ -3524,19 +3379,21 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
   border: 1px solid var(--hairline);
   border-radius: var(--r-lg);
   background: var(--panel);
-  overflow: hidden;
   transition: border-color var(--fast) var(--ease), transform var(--fast) var(--ease);
 }
+/* Not clipped (the "…" menu opens past the card) and above its neighbours
+   while that menu is open. */
+.game-card:has(.pop-menu) { position: relative; z-index: var(--z-pop); }
 .game-card:hover { border-color: var(--hairline-strong); transform: translateY(-1px); }
 .game-cover {
   position: relative;
   height: 96px;
+  border-radius: calc(var(--r-lg) - 1px) calc(var(--r-lg) - 1px) 0 0;
   display: grid;
   place-items: center;
 }
 .game-cover-mark {
   font: 700 34px var(--sans);
-  letter-spacing: -0.02em;
   color: rgba(255, 255, 255, 0.92);
   text-shadow: 0 3px 14px rgba(0, 0, 0, 0.45);
 }
@@ -3547,7 +3404,7 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
   display: inline-flex;
   align-items: center;
   gap: 6px;
-  font: 500 var(--text-sm) var(--sans);
+  font: var(--text-sm) var(--sans);
   color: rgba(255, 255, 255, 0.9);
   background: rgba(0, 0, 0, 0.5);
   border-radius: var(--r-pill);
@@ -3564,16 +3421,6 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
 .game-who-stack { display: flex; }
 .game-who-stack .seal-avatar { margin-right: -7px; box-shadow: 0 0 0 2px var(--panel); }
 .game-who-stack .seal-avatar:last-child { margin-right: 2px; }
-.game-remove {
-  position: absolute;
-  top: 6px;
-  right: 6px;
-  color: rgba(255, 255, 255, 0.75);
-  background: rgba(0, 0, 0, 0.35);
-  opacity: 0;
-}
-.game-card:hover .game-remove, .game-remove:focus-visible { opacity: 1; }
-@media (hover: none) { .game-remove { opacity: 1; } }
 .game-body {
   display: flex;
   flex-direction: column;
@@ -3582,20 +3429,9 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
   flex: 1;
 }
 .game-name-row { display: flex; align-items: center; gap: 8px; }
-.game-name { font-weight: 650; font-size: var(--text-base); letter-spacing: -0.01em; flex: 1; min-width: 0; }
-.game-fav {
-  flex-shrink: 0;
-  display: inline-grid;
-  place-items: center;
-  background: none;
-  border: none;
-  padding: 2px;
-  cursor: pointer;
-  color: var(--ink-mute);
-  transition: color var(--fast) var(--ease);
-}
-.game-fav:hover { color: var(--ink-dim); }
-.game-fav.on { color: var(--ink); }
+.game-name { font-weight: 600; font-size: var(--text-base); flex: 1; min-width: 0; }
+.game-starred { display: inline-grid; place-items: center; flex: none; color: var(--ink-dim); }
+.game-more { flex: none; }
 .game-card.live { border-color: var(--hairline-strong); }
 .game-host {
   display: flex;
@@ -3632,9 +3468,8 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
 }
 .add-card-btn:hover { color: var(--ink); background: var(--hover); }
 .add-card-plus { display: grid; place-items: center; margin-bottom: 2px; }
-.add-card-title { font-weight: 650; font-size: var(--text-base); color: var(--ink-dim); }
+.add-card-title { font-weight: 600; font-size: var(--text-base); color: var(--ink-dim); }
 .add-card-btn:hover .add-card-title { color: var(--ink); }
-.add-card-sub { font-size: var(--text-sm); line-height: 1.45; max-width: 24ch; }
 .game-add-form {
   display: grid;
   gap: 8px;
@@ -3667,7 +3502,18 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
   background: var(--well);
 }
 .game-stage-head .room-name { flex-shrink: 0; }
-.game-host-note { margin-left: 0; flex: 1; display: block; }
+/* Who can see what in a game: a muted line beside the title. */
+.game-host-note {
+  flex: 1;
+  display: block;
+  min-width: 0;
+  margin-left: 0;
+  font: var(--text-sm) var(--sans);
+  color: var(--ink-dim);
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
 .game-stage-body { flex: 1; min-height: 0; display: flex; }
 .game-frame {
   flex: 1;
@@ -3676,7 +3522,29 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
   background: var(--well);
   display: block;
 }
-.game-frame-blocked { display: grid; place-items: center; }
+.game-frame-blocked { display: grid; place-content: center; justify-items: center; gap: var(--s-3); }
+/* Back to the newest line after reading scrollback: a pill over the
+   transcript's foot, centred, out of the composer's way. */
+.jump-latest {
+  position: absolute;
+  bottom: calc(100% + var(--s-2));
+  left: 50%;
+  transform: translateX(-50%);
+  z-index: var(--z-raised);
+  display: inline-flex;
+  align-items: center;
+  gap: var(--s-1);
+  padding: var(--s-1) var(--s-3);
+  background: var(--raised);
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--r-pill);
+  box-shadow: var(--overlay-shadow);
+  color: var(--ink);
+  font: 600 var(--text-sm) var(--sans);
+  white-space: nowrap;
+  cursor: pointer;
+}
+.jump-latest:hover { background: var(--hover); }
 .game-dock {
   width: 300px;
   flex-shrink: 0;
@@ -3699,7 +3567,7 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
   background: none;
   border: none;
   border-bottom: 2px solid transparent;
-  font: 500 var(--text-ui) var(--sans);
+  font: var(--text-ui) var(--sans);
   color: var(--ink-dim);
   cursor: pointer;
 }
@@ -3719,7 +3587,6 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
   white-space: nowrap;
 }
 .game-voice-ctl { display: flex; gap: 6px; align-items: center; }
-.voice-join.muted-on,
 .call-btn.muted-on { background: var(--active); }
 .call-btn.invite-seat { white-space: nowrap; }
 
@@ -3756,9 +3623,11 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
 .game-voice-row li.speaking .voice-meter { color: var(--ok); opacity: 1; }
 
 /* ------------------------------------------------------------------ mark -- */
-/* Two marks, two shapes. Round is a person, tile is a place — the shape
-   carries it, so neither depends on recognising the colour. */
+/* Two marks, two shapes. Round is a person, tile is a place, so neither
+   depends on recognising the colour. A person's circle carries their
+   initial, which tells apart two people who drew the same colour. */
 .seal-avatar { flex-shrink: 0; display: block; border-radius: 50%; }
+.seal-avatar text { font-family: var(--sans); user-select: none; pointer-events: none; }
 
 .circle-mark {
   flex-shrink: 0;
@@ -3780,7 +3649,6 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
 /* Devices without hover can't reveal hover-gated affordances — surface the
    ones that matter and drop the ones that are pure hover decoration. */
 @media (hover: none) {
-  .role-toggle { display: inline-flex; align-items: center; }
   .msg-line { padding-right: 0; }
   .msg-line time { display: none; }
 }
@@ -3790,15 +3658,34 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
    on a phone that bar cost a row of the conversation, so the pill carries
    the two facts §7.4 asks to stay on screen — you are in a call, and
    whether your mic is live — and opens the stage where the controls are. */
-.masthead-call { display: none; }
+.masthead-call {
+  display: none;
+  align-items: center;
+  gap: 6px;
+  flex: none;
+  min-height: 32px;
+  padding: 0 10px;
+  background: var(--raised);
+  border: 1px solid var(--hairline-strong);
+  border-radius: var(--r-pill);
+  color: var(--ink);
+  font: var(--text-sm) var(--sans);
+  font-variant-numeric: tabular-nums;
+  cursor: pointer;
+}
+.masthead-call .masthead-call-wave { color: var(--ok); }
+.masthead-call.muted .masthead-call-mic { color: var(--ink-mute); }
 
 /* ----------------------------------------------------------------- mobile -- */
-/* One column, and now it is the only column: the conversation owns the
-   screen at every width. Both edge drawers are gone — rooms are the strip
-   under the fascia, circles are a screen, and a circle's people are the
-   first block on its board. The register's grammar (rules, mono labels,
-   sharp geometry) is unchanged; only the floor plan moved. */
+/* One column. Rooms are the strip under the fascia, circles are a screen,
+   and the bottom tabs are the three crossings. Touch sizes are at the end. */
 @media (max-width: 820px) {
+  /* One edge for everything on a phone: fascia, strip, header, transcript,
+     composer, banner. */
+  :root {
+    --pane-gutter: 16px;
+  }
+
   /* The safety-number warning is a three-column row on a desktop: glyph,
      sentence, control. At 390px that column layout gives the title four
      words in four lines and the control a 90px gutter, so it stacks and the
@@ -3810,115 +3697,38 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
      second opinion about the same 12px. */
   .signing-compare-go { flex: 1 1 100%; text-align: right; }
 
-  /* masthead: glyph · marker ··· call · search · dot · you */
-  .masthead { gap: 10px; padding: 0 8px; }
-  .masthead-call {
-    display: inline-flex;
-    align-items: center;
-    gap: 6px;
-    flex: none;
-    min-height: 32px;
-    padding: 0 10px;
-    background: var(--raised);
-    border: 1px solid var(--hairline-strong);
-    border-radius: var(--r-pill);
-    color: var(--ink);
-    font: 500 var(--text-sm) var(--mono);
-    cursor: pointer;
-  }
-  .masthead-call .masthead-call-wave { color: var(--ok); }
-  .masthead-call.muted .masthead-call-mic { color: var(--ink-mute); }
-  /* The pill stands in for the bar on a phone; the stage has the controls. */
-  .call-bar { display: none; }
-  /* A preference, not a status: it lives in Settings on a phone. */
-  .theme-btn { display: none; }
+  /* masthead: circle ··· call · invite · search · you (icons: see below) */
   .masthead-brand { width: auto; gap: 0; }
   .masthead-brand .wordmark { display: none; }
+  /* Inside a circle the Circles tab is the way back, so the fascia gives its
+     width to the circle's name. The room is in the strip and the header. */
+  .masthead-brand.compact { display: none; }
   .circle-marker { gap: 8px; }
   .marker-title { gap: 8px; }
-  /* Below 821px the fascia cannot hold circle *and* room and still leave a
-     tap target for either. The room is where you are; the circle is one tap
-     away through the marker, which stays. §11.12 — the circle name is not
-     silently clipped, it is deliberately dropped down to its tile. */
-  .marker-name { display: none; }
-  .marker-sep { display: none; }
-  .masthead-actions { gap: 2px; }
-  .masthead-actions .button { display: none; } /* invite lives in the palette */
-  .palette-hint { border: none; padding: 4px 6px; min-width: 0; background: none; }
-  .palette-hint span, .palette-hint kbd { display: none; }
+  .marker-sep,
+  .marker-here { display: none; }
   .conn-chip { padding: 4px 2px; }
-  /* §9.5 allows abbreviating status, never removing it. "Connected" shortens
-     to its dot and stays in the accessibility tree; "Connecting…" and
-     "Offline" keep their words, because those are the states that matter. */
-  .conn-chip.online .conn-label {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip-path: inset(50%);
-    white-space: nowrap;
-  }
-  .self-chip-name { display: none; }
 
-  .secure-banner { flex-wrap: wrap; gap: 8px; padding: 7px 12px; }
-
-  /* Same shape as the game-night row below, and for the same reason: title,
-     date and RSVP do not fit on one 390px line, and the RSVP button — the
-     entire point of the row — is the part that ends up off the edge. */
+  /* Title, date and RSVP do not fit on one 390px line, and the RSVP button,
+     the point of the row, is the part that ends up off the edge. */
   .cal-row { flex-wrap: wrap; row-gap: 8px; }
   .cal-body { flex: 1 1 100%; }
   .cal-rsvp { margin-left: auto; min-height: 44px; }
 
-  /* A game night is title + who's going + RSVP. Side by side that needs more
-     width than a phone has, and the RSVP button — the entire point of the row
-     — was the part that ended up off-screen. Stack it: the body takes a full
-     row, the attendee stack and the button share the one beneath. */
-  .night-row { flex-wrap: wrap; row-gap: 10px; }
-  .night-body { flex: 1 1 100%; order: 1; }
-  .night-mark { order: 0; }
-  .night-going { order: 2; }
-  .night-action { order: 3; margin-left: auto; min-height: 44px; }
-
-  /* conversation takes the full width */
-  /* The header carries more than it used to — the room, how many of the
-     circle are here, how many keys are unchecked, and the way into the call
-     — and at 390px that does not fit on one line. It wraps rather than
-     pushing the call button off the edge, which is §9.3: no view below
-     1080px scrolls sideways. */
-  .pane-head {
-    padding: 6px 12px;
-    height: auto;
-    min-height: 44px;
-    flex-wrap: wrap;
-    row-gap: 6px;
-  }
-  /* The fascia already names the room on a phone, so the pane header does
-     not say it twice; it keeps the signals that are only here. */
-  .messages-pane:not(.overview-pane) > .pane-head > .room-name { display: none; }
-  .room-here, .room-unchecked, .kept-note { min-height: 36px; }
-  .kept-note .kept-long {
-    position: absolute;
-    width: 1px;
-    height: 1px;
-    overflow: hidden;
-    clip-path: inset(50%);
-    white-space: nowrap;
-  }
-  .kept-note .kept-short { display: inline; }
-  /* §9.5 — the kept-history disclosure used to be display:none here, the
-     one security disclosure in the room, removed for space. It stays, and
-     wraps if it has to. */
-  .sealed-note { margin-left: 0; flex-wrap: wrap; white-space: normal; }
-  .scroll { padding: 4px 12px 12px; }
   .watermark { max-width: none; }
   .attachment-img { max-width: 100%; }
-  .composer-dock { padding-left: 10px; padding-right: 10px; }
-  .composer-note { align-items: flex-start; }
-  .composer-note svg { margin-top: 2px; }
+
+  /* The board editor stacks: a date field at 16px does not fit beside a
+     title on a 390px screen. Details over the game picker and remove. */
+  .overview-event-edit { grid-template-columns: minmax(0, 1fr); }
+  .overview-event-edit2 { grid-template-columns: minmax(0, 1fr) auto; }
+  .overview-event-edit2 > input { grid-column: 1 / -1; }
 
   /* The three crossings, within reach of a thumb. */
   .phone-tabs {
     display: block;
+    position: relative;
+    z-index: 1;
     flex: none;
     background: var(--well);
     border-top: 1px solid var(--hairline);
@@ -3951,34 +3761,19 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
   .phone-tab.on { color: var(--ink); }
   .phone-tab.on span { box-shadow: inset 0 -2px 0 var(--accent); }
 
-  /* Touch targets. Everything interactive clears 44px, which is the iOS
-     minimum and above Android's 48dp only where the control is genuinely
-     secondary. These were 36px, ~32px and ~21px respectively — small
-     enough that the roster's role toggle and the voice join pill were
-     routinely mis-tapped. Padding alone is not enough for the inline
-     controls, so they get an explicit min-height. */
-  .icon-btn { width: 44px; height: 44px; }
   .room-strip { height: 44px; }
-  /* The bottom tabs carry Board on a phone; the strip need not say it too. */
+  /* The bottom tabs carry Board on a phone; the strip need not say it too.
+     The <li> goes, not just the button, or its gap stays behind. */
+  .room-chips > li.room-chips-board,
   .room-chip-board { display: none; }
   .room-chips { gap: var(--s-4); }
-  .room-chip { min-height: 44px; }
-  .member { padding: 11px 0; min-height: 44px; flex-wrap: wrap; }
-  .member .tag { flex-wrap: wrap; justify-content: flex-end; }
-  .voice-join { padding: 12px 14px; min-height: 44px; }
-  .role-toggle { padding: 12px 10px; min-height: 44px; }
-  .msg-act { min-width: 44px; min-height: 44px; }
-  /* The only way to send a file, and it was 32px. */
-  .attach { min-width: 44px; min-height: 44px; }
-  .ghost { min-height: 44px; }
-
-  /* 16px inputs: anything smaller makes iOS zoom the page on focus */
-  .composer input[type='text'],
-  .field input, .field textarea,
-  .room-chip-input, .add-member input,
-  .palette-input {
-    font-size: 16px;
-  }
+  /* A member row stays one row: Verify, Call and the menu keep to the name's
+     line and the name truncates, with a floor so it never reaches 0px.
+     "Joined by link" is the second line under the name. */
+  .member { padding: var(--s-1) 0; min-height: 44px; flex-wrap: nowrap; }
+  .member-col { flex: 1 1 0; min-width: 64px; }
+  .member .tag { flex-shrink: 0; gap: var(--s-1); }
+  .member .tag .member-more { margin-left: var(--s-1); }
 
   /* overlays: use the whole screen politely */
   .modal-backdrop {
@@ -3997,7 +3792,9 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
   .call-panel {
     left: 12px;
     right: 12px;
-    bottom: calc(12px + env(safe-area-inset-bottom, 0px));
+    /* Above the tabs and the composer with its note. */
+    bottom: calc(148px + env(safe-area-inset-bottom, 0px));
+    min-width: 0;
     max-width: none;
     flex-wrap: wrap;
   }
@@ -4015,11 +3812,10 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
     max-height: 45%;
     min-height: 170px;
   }
-  .game-dock .stage-composer input { font-size: 16px; }
   .game-shelf { grid-template-columns: repeat(auto-fill, minmax(160px, 1fr)); gap: 10px; }
 
   /* call stage: chat tucks under the bubbles in one column */
-  .stage-head { flex-wrap: wrap; height: auto; min-height: 42px; padding: 8px 12px; }
+  .stage-head { flex-wrap: wrap; height: auto; min-height: 42px; padding: 8px var(--pane-gutter); }
   .stage-actions { width: 100%; justify-content: flex-end; }
   .stage-body { flex-direction: column; }
   .stage-main { padding: 14px 12px; gap: 14px; }
@@ -4036,21 +3832,13 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
   }
   .stage-bubble .bubble-seal svg { width: 52px; height: 52px; }
   .stage-bubble .bubble-name { max-width: 100%; font-size: var(--text-base); }
-  /* Leave takes a row of its own, at the far end, and the 48px a
-     destructive control gets on touch (§7.3, §8.5). */
-  .stage-dock { width: 100%; justify-content: flex-start; }
-  .stage-dock .button { min-height: 44px; }
-  .stage-dock-gap { flex-basis: 100%; height: 0; margin: 0; }
-  .stage-dock .button.danger { min-height: 48px; margin-left: auto; }
   .stage-chat {
     width: auto;
     border-left: none;
     border-top: 1px solid var(--hairline);
-    max-height: 40%;
-    min-height: 150px;
+    max-height: 32%;
+    min-height: 140px;
   }
-  .stage-composer input { font-size: 16px; }
-
 }
 
 /* Terminal startup failure (IndexedDB unavailable, worker/wasm dead). Plain
@@ -4082,22 +3870,6 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
 .safety-actions { display: flex; gap: 8px; }
 .safety-actions .button { flex: 1; justify-content: center; }
 
-/* The outstanding-verification prompt in the roster header. Quiet by default —
-   it is a standing amount of work, not an alarm — but it is a real button, so
-   the one comparison nobody has made is always one tap away. */
-.member-unchecked {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  white-space: nowrap;
-  font: 600 var(--text-sm) var(--sans);
-  color: var(--warn);
-  background: none;
-  border: 1px solid var(--warn);
-  border-radius: var(--r-pill);
-  padding: 2px 9px;
-}
-.member-unchecked:hover { background: var(--hover); }
 
 /* Skip link: the first tab stop on the page, invisible until it has focus.
    Uses the same clip technique as .sr-only rather than a negative offset, so
@@ -4116,7 +3888,7 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
   background: var(--raised);
   border: 1px solid var(--accent);
   color: var(--ink);
-  font: 650 var(--text-sm) var(--sans);
+  font: 600 var(--text-sm) var(--sans);
   text-decoration: none;
 }
 .skip-link:focus-visible {
@@ -4130,42 +3902,237 @@ a.overview-link:hover { border-color: var(--ink-mute); background: var(--hover);
 .member.speaking .seal-avatar { box-shadow: 0 0 0 3px var(--ok), 0 0 10px var(--ok-soft); }
 .stage-bubble.speaking { border-width: 2px; }
 
-/* --------------------------------------------------- room head signals -- */
-/* What the roster column used to say from the side of the screen, said in
-   the room's own header. Both are buttons: they go to the board, which is
-   where the people themselves now are. */
-.room-here {
-  display: flex;
-  align-items: baseline;
-  gap: 5px;
-  flex: none;
-  padding: 4px 8px;
-  margin-left: -8px;
-  background: transparent;
-  border: 1px solid transparent;
-  border-radius: var(--r-sm);
-  color: var(--ink-dim);
-  font: 500 var(--text-sm) var(--sans);
-  cursor: pointer;
+/* The palette hint keeps its 220px field on a tablet. On a phone, and on a
+   phone held sideways, the masthead is icons: Invite and Search are bare
+   glyphs on a tap-sized square, and a running call is a pill (wave and mic)
+   instead of the bar, with the stage holding the controls. */
+@media (pointer: coarse) {
+  .palette-hint { min-height: var(--tap); }
 }
-.room-here:hover { background: var(--hover); color: var(--ink); }
-.room-here-n { font-weight: 600; color: var(--ink-dim); }
-/* §1.2 — green only once somebody actually is here. */
-.room-here-n.live { color: var(--ok); }
-/* §10.5 — the warning is the control that resolves it, so it is a real
-   target with a real label, not a coloured dot with a tooltip. §1.3: amber,
-   because an unchecked key is a reduced guarantee and not a broken one. */
-.room-unchecked {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  flex: none;
-  padding: 4px 9px;
-  background: transparent;
-  border: 1px solid var(--warn);
-  border-radius: var(--r-pill);
-  color: var(--warn);
-  font: 600 var(--text-sm) var(--sans);
-  cursor: pointer;
+@media (max-width: 820px) {
+  .masthead-brand { min-width: var(--tap); justify-content: center; }
 }
-.room-unchecked:hover { background: var(--hover); }
+@media (max-width: 820px), (pointer: coarse) and (max-height: 500px) {
+  .masthead { gap: 10px; }
+  .masthead-call { display: inline-flex; }
+  .masthead-call > span { display: none; }
+  .call-bar { display: none; }
+  .masthead-actions { gap: 2px; }
+  .masthead-invite { min-width: var(--tap); padding: 0; justify-content: center; background: none; border-color: transparent; }
+  .masthead-invite-label { display: none; }
+  .palette-hint { border: none; padding: 4px 6px; min-width: var(--tap); min-height: var(--tap); justify-content: center; background: none; }
+  .palette-hint span, .palette-hint kbd { display: none; }
+}
+
+/* --------------------------------------------------------- touch targets -- */
+/* A finger gets 44x44 CSS px and the type one step larger. This keys off the
+   pointer as well as the width, so a phone held sideways and a tablet get it
+   too; a desktop (fine pointer, wider than 820px) is untouched. Two ways:
+   grow the box (text buttons, fields, rows, icon buttons), or, where a bigger
+   box would break the layout, grow only the hit area with an ::after
+   (reaction pills, the member name, the people-header chip, the game star,
+   links in a sentence). Last in the file on purpose: these win by order. */
+@media (pointer: coarse), (max-width: 820px) {
+  :root {
+    --tap: 44px;
+    --field-h: 44px;
+    --text-ui: 15px;
+    --text-base: 16px;
+    --text-xl: 22px;
+    --text-display: 28px;
+  }
+
+  /* Text controls and rows: full height. */
+  .button,
+  .tab,
+  .dock-tab,
+  .call-btn,
+  .call-bar-mic,
+  .call-bar-back,
+  .masthead-brand,
+  .masthead-call,
+  .palette-item,
+  .overview-room,
+  .overview-link,
+  .attachment-file,
+  .reply-quote,
+  .room-chip-add-go,
+  .game-rally,
+  .pop-menu-item,
+  .segment,
+  .jump-latest,
+  .device-link-entry,
+  .retention-note,
+  .hero-game,
+  .sharer-pill,
+  .signing-withdraw,
+  .check {
+    min-height: var(--tap);
+  }
+  /* The note is one short line; its link gets a 44px hit area from an
+     ::after (below) instead of a 44px row. The composer and the phone tabs
+     sit above that hit area, so it only takes taps nothing else wants. */
+  .composer-note { padding-top: var(--s-1); }
+  .composer { position: relative; z-index: 1; }
+  .check,
+  .settings-toggle { align-items: center; }
+  .check input,
+  .settings-toggle input { margin-top: 0; width: 20px; height: 20px; flex: none; }
+  /* A settings checkbox row is the target, a tap high. */
+  .settings-toggle { min-height: var(--tap); margin-top: 0; }
+  .advanced summary { min-height: var(--tap); padding-block: var(--s-3); margin-bottom: 0; }
+
+  /* Fields: a tap high, and 16px text, below which iOS zooms on focus. */
+  input:not([type='checkbox']):not([type='radio']):not([type='range']):not([type='file']):not([type='color']),
+  select,
+  textarea,
+  .settings-field select {
+    min-height: var(--tap);
+    font-size: var(--text-base);
+  }
+  .keybox,
+  .keybox.small { font-size: var(--text-base); }
+  /* The composer's children are a tap high already; the frame adds none. */
+  .composer { padding-block: 0; }
+
+  /* Icon buttons: a 44px square with the glyph centred. min-width beats the
+     fixed 28/32px widths, so nothing else has to change. */
+  .icon-btn,
+  .attach,
+  .msg-act,
+  .ghost,
+  .button.icon-only,
+  .reply-bar .rb-cancel,
+  .react-pick,
+  .masthead-brand.compact,
+  .self-chip,
+  .marker-circle,
+  .dock-tab,
+  .room-chip,
+  .room-chip-add-go,
+  .notice-remove {
+    min-width: var(--tap);
+    min-height: var(--tap);
+    justify-content: center;
+  }
+  /* The close glyph sits in the dialog head instead of hanging below it. */
+  .modal .close { top: var(--s-1); right: var(--s-1); }
+  /* The reply/edit bar takes its height from the 44px cancel, not padding. */
+  .reply-bar { padding-block: 0; }
+  /* Pills (reactions, shelf filters): a 36px box, the rest is hit area,
+     with room between. */
+  .react,
+  .fchip { min-height: 36px; padding: 0 var(--s-3); }
+  .reacts,
+  .shelf-filters { gap: var(--s-2); }
+  .reacts { margin-top: var(--s-2); }
+
+  /* Hit area only: the box keeps its size, a centred ::after takes the tap. */
+  .react,
+  .fchip,
+  .linkish:not(.device-link-entry) {
+    position: relative;
+  }
+  .react::after,
+  .fchip::after,
+  .linkish:not(.device-link-entry)::after {
+    content: '';
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: max(100%, var(--tap));
+    height: max(100%, var(--tap));
+    transform: translate(-50%, -50%);
+  }
+
+  /* The member name truncates (overflow: hidden), which would clip a hit
+     area on the button itself, so its ::after is placed against the row: the
+     whole row opens the person. Every other control in the row is
+     positioned and later in the tree, so it paints, and takes taps, above. */
+  .member { position: relative; }
+  .member button.member-name::after { content: ''; position: absolute; inset: 0; }
+  .member button.member-name:disabled::after { content: none; }
+  .member .tag,
+  .member :is(button, a):not(.member-name) { position: relative; }
+
+  /* The new-room form is wider than the strip's end once its buttons are
+     44px. While it is open it takes the strip; the chips come back after. */
+  .room-strip:has(.room-strip-end form) .room-chips { display: none; }
+  .room-strip-end:has(form) { flex: 1; min-width: 0; }
+  .room-strip form { flex: 1; min-width: 0; gap: var(--s-1); }
+  .room-chip-input { flex: 1; min-width: 0; width: auto; }
+}
+
+/* ------------------------------------------------------------ keyboard up -- */
+/* A phone with the keyboard up has 200 to 350px left. Focus in a composer is
+   the signal (no keyboard event exists; App sets .typing and .typing-room
+   from it, and clears them a moment after blur so the tap that blurred the
+   field lands before anything moves): the tabs and the banner step out.
+   On a short screen (a phone held sideways, or the keyboard up; .vv-short is
+   set from visualViewport for browsers that only shrink that) the room
+   header and the strip go too, so the transcript shrinks and the composer
+   stays on screen. They come back when the field loses focus. */
+@media (pointer: coarse) {
+  .app-shell.typing :is(.phone-tabs, .secure-banner) { display: none; }
+  .vv-short .app-shell.typing-room :is(.room-strip, .messages-pane > .pane-head) { display: none; }
+}
+@media (pointer: coarse) and (max-height: 500px) {
+  .app-shell.typing-room :is(.room-strip, .messages-pane > .pane-head) { display: none; }
+  /* Sideways, the banner keeps to one line. */
+  .secure-banner > span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
+}
+
+/* On a phone the strip already names the room, so a header holding only the
+   name is kept for screen readers and hidden from view. */
+@media (max-width: 820px) {
+  .messages-pane > .pane-head.bare {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+}
+
+@media (max-width: 820px), (pointer: coarse) and (max-height: 500px) {
+  /* One row of controls, no box: the glyph over a short label, Leave last
+     in red with extra room before it (§7.3). Three rows of wrapped buttons
+     pushed Leave under the chat on a small phone. */
+  .stage-dock {
+    width: 100%;
+    flex-wrap: nowrap;
+    justify-content: center;
+    gap: var(--s-1);
+    padding: 0;
+    background: none;
+    border: none;
+  }
+  .stage-dock .button {
+    flex: 1 1 0;
+    min-width: 0;
+    max-width: 96px;
+    min-height: 56px;
+    flex-direction: column;
+    justify-content: center;
+    gap: var(--s-1);
+    padding: var(--s-1);
+    font-size: var(--text-sm);
+    line-height: 1.2;
+    text-align: center;
+    white-space: normal;
+  }
+  .stage-dock .button .muted { display: block; }
+  .stage-dock-gap { display: none; }
+  .stage-dock .button.danger { margin-left: var(--s-3); }
+}
+
+/* A short screen in a call (a phone held sideways, a small phone): smaller
+   people, no 220px tiles, so the controls and Leave stay above the fold. */
+@media (pointer: coarse) and (max-height: 500px), (max-width: 820px) and (max-height: 700px) {
+  .stage-main { justify-content: flex-start; padding: var(--s-2); gap: var(--s-2); }
+  .stage-bubbles { flex: 0 0 auto; gap: var(--s-2); }
+  .stage-bubble { min-width: 0; min-height: 0; padding: var(--s-2); gap: var(--s-1); }
+  .stage-bubble .bubble-seal svg { width: 40px; height: 40px; }
+  .stage-bubble .bubble-name { font-size: var(--text-ui); }
+}

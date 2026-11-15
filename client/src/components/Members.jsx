@@ -1,10 +1,10 @@
 import React, { useState } from 'react';
 import Seal from './Seal.jsx';
+import PopMenu from './PopMenu.jsx';
 import { circlePresence } from '../lib/presence.js';
 import { normalizeThreshold } from '../lib/quorum.js';
-import { describeAgo } from '../lib/overview.js';
 import { memberVtName } from '../lib/viewTransition.js';
-import { Check, Phone, X, AlertTriangle } from './icons.jsx';
+import { Check, Phone, AlertTriangle, More } from './icons.jsx';
 import { cx } from '../lib/cx.js';
 
 // The roster is the security boundary: it is, exactly, who can read this
@@ -33,32 +33,46 @@ export default function Members({
   const [name, setName] = useState('');
   const roles = server.roles ?? {};
   const adminCount = Object.values(roles).filter((r) => r === 'admin').length;
-  const now = Date.now();
   // What this circle asks of itself before it lets somebody in.
   const needed = thresholdFor(server);
 
   // Who is in a call, and who claims to be in a game. Shared with circles
   // home so a card saying "3 here now" and this list naming them cannot
   // disagree.
-  const { inRoom, playing } = circlePresence(server, voice, now);
+  const { inRoom, playing } = circlePresence(server, voice);
 
   const occupiedRooms = [...new Set(Object.values(inRoom))];
   const inCallSet = new Set(Object.keys(inRoom).filter((m) => server.members.includes(m)));
   const playingOnly = server.members.filter((m) => !inCallSet.has(m) && playing[m]);
   const rest = server.members.filter((m) => !inCallSet.has(m) && !playing[m]);
-  const liveCount = inCallSet.size + playingOnly.length;
-  // Everyone whose key nobody on this device has checked. Deliberately not
-  // just the link-joiners: a member added by hand is equally unchecked — they
-  // arrived with someone vouching for them socially rather than
-  // cryptographically. The badge below distinguishes provenance; this count
-  // does not, because the work outstanding is the same either way.
-  const unchecked = server.members.filter(
-    (m) => m !== me && !(server.verified ?? []).includes(m) && !server.mismatched?.[m]
-  );
 
   const row = (m) => {
     const speaking = voice?.speaking?.includes(m);
     const p = playing[m];
+    const verified = (server.verified ?? []).includes(m) && !server.mismatched?.[m];
+    const viaLink = (server.linkJoined ?? []).includes(m);
+    // Admin actions sit behind "…" so Remove is never one slip from Call.
+    const actions =
+      canManage && m !== me
+        ? [
+            roles[m] && {
+              key: 'role',
+              label: roles[m] === 'admin' ? 'Remove admin' : 'Make admin',
+              testid: `role-toggle-${m}`,
+              onSelect: () => onSetRole(m, roles[m] === 'admin' ? 'member' : 'admin'),
+            },
+            onRemoveMember &&
+              !(roles[m] === 'admin' && adminCount <= 1) && {
+                key: 'remove',
+                label: 'Remove',
+                danger: true,
+                testid: `remove-member-${m}`,
+                onSelect: () => {
+                  if (window.confirm(`Remove ${m}? They lose access immediately.`)) onRemoveMember(m);
+                },
+              },
+          ].filter(Boolean)
+        : [];
     return (
       <li
         key={m}
@@ -72,30 +86,22 @@ export default function Members({
         <Seal name={m} size={32} />
         <span className="member-col">
           <span className="member-line">
-            {/* §4.1 — a name is the most human thing in the product, so it is
-                set in the sans, like it is in the transcript. It was mono
-                here, the one place the whole roster is in view. */}
             <button
               className="member-name"
               data-testid={`member-${m}`}
               disabled={m === me}
-              title={m === me ? undefined : 'Safety number and verification'}
+              title={m === me ? undefined : 'Safety number'}
               onClick={() => onMember(m)}
             >
               {m}
             </button>
             {m === me && <span className="member-you">(you)</span>}
             {roles[m] === 'admin' && <span className="badge">Admin</span>}
-            {m !== me && (server.linkJoined ?? []).includes(m) && (
-              <span className="badge" data-testid={`badge-link-${m}`}>
-                Joined by link
-              </span>
-            )}
-            {m !== me && (server.verified ?? []).includes(m) && !server.mismatched?.[m] && (
+            {m !== me && verified && (
               <span
                 className="member-verified"
                 role="img"
-                aria-label="Verified on this device"
+                aria-label="Verified"
                 data-testid={`badge-verified-${m}`}
               >
                 <Check size={14} />
@@ -106,21 +112,20 @@ export default function Members({
             <span className="member-presence" data-testid={`member-playing-${m}`}>
               <span className="live-dot" aria-hidden="true" />
               Playing <span className="game">{p.game.name}</span>
-              {inRoom[m] ? '' : ` · ${describeAgo(p.ts, now).replace(' ago', '')}`}
-            </span>
-          ) : inRoom[m] ? (
-            <span className="member-presence" data-testid={`member-in-call-${m}`}>
-              <span className="live-dot" aria-hidden="true" />
-              In {inRoom[m]}
             </span>
           ) : null}
+          {/* Who is in a call is the group header above these rows. */}
+          {/* A trust signal, not a status: nobody vouched for them by hand. */}
+          {m !== me && viaLink && !verified && (
+            <span className="member-note" data-testid={`badge-link-${m}`}>
+              Joined by link
+            </span>
+          )}
         </span>
         <span className="tag">
-          {m === me ? null : /* A found mismatch outranks every other state.
-                 Losing a ✓ must render as a loss, not as the absence of a
-                 mark — "no badge" is what an unchecked stranger looks like,
-                 and this is not that (§10.9). */
-            server.mismatched?.[m] ? (
+          {m === me ? null : server.mismatched?.[m] ? (
+            // A found mismatch outranks every other state and reads as a
+            // loss, never as the absence of a mark (§10.9).
             <button
               className="button danger badge-mismatch"
               data-testid={`badge-mismatch-${m}`}
@@ -129,13 +134,10 @@ export default function Members({
               <AlertTriangle size={14} />
               Key mismatch
             </button>
-          ) : (server.verified ?? []).includes(m) ? null : (
-            // §10.5 — an unverified member carries the control that verifies
-            // them, not only a badge for the ones who came by link. A member
-            // added by hand is equally unchecked.
+          ) : verified ? null : (
             <button
-              className="button warn"
-              data-testid={(server.linkJoined ?? []).includes(m) ? `badge-unverified-${m}` : `verify-${m}`}
+              className="button ghost"
+              data-testid={viaLink ? `badge-unverified-${m}` : `verify-${m}`}
               onClick={() => onMember(m)}
             >
               Verify
@@ -152,29 +154,14 @@ export default function Members({
               <Phone size={14} />
             </button>
           )}
-          {canManage && m !== me && roles[m] && (
-            <button
-              className="ghost role-toggle"
-              data-testid={`role-toggle-${m}`}
-              onClick={() => onSetRole(m, roles[m] === 'admin' ? 'member' : 'admin')}
-            >
-              {roles[m] === 'admin' ? 'Remove admin' : 'Make admin'}
-            </button>
-          )}
-          {canManage && m !== me && onRemoveMember && !(roles[m] === 'admin' && adminCount <= 1) && (
-            <button
-              className="ghost member-remove danger"
-              data-testid={`remove-member-${m}`}
-              aria-label={`Remove ${m} from the circle`}
-              title={`Remove ${m} from the circle`}
-              onClick={() => {
-                if (window.confirm(`Remove ${m} from ${server.name}? They lose access immediately.`)) {
-                  onRemoveMember(m);
-                }
-              }}
-            >
-              <X size={14} />
-            </button>
+          {actions.length > 0 && (
+            <PopMenu
+              className="member-more"
+              label={`More for ${m}`}
+              glyph={<More size={18} />}
+              testid={`member-menu-${m}`}
+              items={actions}
+            />
           )}
         </span>
       </li>
@@ -184,28 +171,12 @@ export default function Members({
   return (
     <section className="members" id="roster-drawer" aria-labelledby="members-title">
       <div className="section-label">
-        <h3 className="members-title" id="members-title">
+        <h3 className="overline" id="members-title">
           People
         </h3>
-        <span className="member-count">
-          {server.members.length} member{server.members.length === 1 ? '' : 's'}
-          {liveCount > 0 && ` · ${liveCount} here now`}
-        </span>
-        {/* The product had no surface that ever asked anyone to verify: the
-            flow existed and nothing pointed at it, so an unchecked member
-            stayed unchecked forever. The count is the prompt, and it is the
-            button — opening the first outstanding comparison is one tap from
-            the roster rather than a tooltip nobody sees on touch. */}
-        {unchecked.length > 0 && (
-          <button
-            className="member-unchecked"
-            data-testid="unchecked-count"
-            onClick={() => onMember(unchecked[0])}
-          >
-            <AlertTriangle size={14} />
-            {unchecked.length} not verified
-          </button>
-        )}
+        <span className="member-count">{server.members.length}</span>
+        {/* No "N not verified" count here: each row already says Verify or
+            Key mismatch, and saying it twice taught people to read neither. */}
       </div>
       {occupiedRooms.map((room) => {
         const here = server.members.filter((m) => inRoom[m] === room);
@@ -276,8 +247,7 @@ export default function Members({
       </form>
       {needed > 1 && (
         <p className="fineprint muted" id="propose-help">
-          A new member needs {needed} of the {server.members.length} members to sign. Admins
-          can&rsquo;t add people on their own.
+          Needs {needed} of {server.members.length} members to sign.
         </p>
       )}
     </section>

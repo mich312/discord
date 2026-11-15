@@ -25,7 +25,7 @@ import CallBar from './components/CallBar.jsx';
 import PhoneTabs from './components/PhoneTabs.jsx';
 import GameStage from './components/GameStage.jsx';
 import BootLoader from './components/BootLoader.jsx';
-import { Key, LinkGlyph } from './components/icons.jsx';
+import { LinkGlyph, X } from './components/icons.jsx';
 
 const params = new URLSearchParams(location.search);
 const view = params.get('view') ?? 'app';
@@ -315,8 +315,6 @@ function PreviewShell({ empty = false, circles = false, banner = false, modal = 
       </a>
       <Masthead
         server={activeServer}
-        channel={active.channel}
-        callChannel={stage ? vc.active?.channel ?? null : null}
         game={liveGame && active.channel ? liveGame : null}
         call={vc.active}
         now={now}
@@ -324,25 +322,24 @@ function PreviewShell({ empty = false, circles = false, banner = false, modal = 
         me={me}
         onSettings={noop}
         connection="online"
-        theme={theme}
+        canInvite
         onInvite={() => setOpenModal(modals['modal-invite'])}
         onPalette={() => setPaletteOpen(true)}
-        onTheme={() => {
-          document.documentElement.dataset.theme =
-            document.documentElement.dataset.theme === 'paper' ? 'carbon' : 'paper';
-        }}
         callPill={vc.active && !stage && !(liveGame && active.channel) ? vc.active : null}
         muted={!!vc.muted}
         onOpenCall={noop}
       />
       {banner && (
         <div className="secure-banner" data-testid="secure-banner">
-          <Key size={14} />
           <span>
-            Your key exists only in this browser. Save an encrypted backup to the server so you
-            can sign in on another device.
+            Your key is only on this device.
+            <span className="secure-banner-more"> Back up to keep your account.</span>
           </span>
-          <button className="button">Secure account</button>
+          <button className="button">Back up</button>
+          <button className="button ghost banner-later" aria-label="Not now">
+            <span className="banner-later-label">Not now</span>
+            <X size={14} className="banner-later-x" />
+          </button>
         </div>
       )}
       {vc.active && !stage && !(liveGame && active.channel) && (
@@ -360,7 +357,6 @@ function PreviewShell({ empty = false, circles = false, banner = false, modal = 
           voice={vc}
           canManage
           onSelect={(ch) => setActive({ ...active, channel: ch })}
-          onSettings={noop}
           onCreate={noop}
           onVoiceCreate={noop}
           onVoiceSettings={noop}
@@ -420,9 +416,8 @@ function PreviewShell({ empty = false, circles = false, banner = false, modal = 
                   throw new Error('preview: no blob store');
                 }}
                 voice={vc}
-                onVoiceJoin={noop}
-                onOpenStage={noop}
-              onOpenBoard={() => setActive({ ...active, channel: null })}
+                onOpenBoard={() => setActive({ ...active, channel: null })}
+                onRoomSettings={noop}
                 onLaunchGame={(g) => {
                   setActive({ ...active, channel: activeServer.channels[0] });
                   setLiveGame(g);
@@ -534,7 +529,7 @@ function PreviewShell({ empty = false, circles = false, banner = false, modal = 
           <CommandPalette
             servers={list}
             active={active.server}
-            actions={[{ id: 'a', label: 'Create invite link', hint: 'Action', glyph: <LinkGlyph size={14} />, run: noop }]}
+            actions={[{ id: 'a', label: 'Invite people', glyph: <LinkGlyph size={14} />, run: noop }]}
             onNavigate={(srv, ch) => setActive({ server: srv, channel: ch })}
             onClose={() => setPaletteOpen(false)}
           />

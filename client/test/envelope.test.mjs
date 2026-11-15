@@ -230,26 +230,24 @@ test('a malformed reaction is dropped', () => {
 
 /* ------------------------------------------------------------- channels -- */
 
-test('creating a channel clears its tombstone and announces it once', () => {
+test('creating a channel clears its tombstone and is parked once', () => {
   const r = circle({ deletedChannels: ['design'] });
   const { effects } = apply(r, { k: 'chan', ch: 'design' });
   assert.deepEqual(r.channels, ['general', 'design']);
   assert.deepEqual(r.deletedChannels, [], 'a deliberate re-creation clears the tombstone');
-  assert.deepEqual(kinds(effects), ['systemMessage', 'backup']);
+  assert.deepEqual(kinds(effects), ['backup'], 'a new room is not a line in the transcript');
 
   // A repeat is a no-op, so a rebroadcast does not spam the channel.
   assert.deepEqual(apply(r, { k: 'chan', ch: 'design' }).effects, []);
 });
 
-test('renaming a channel moves its messages before announcing it', () => {
-  // Order matters: the system message lands in the new channel, so the rows
-  // have to have moved first.
+test('renaming a channel moves its messages, and says nothing in the room', () => {
   const r = circle({ channels: ['general', 'design'], chanMeta: { design: { topic: 't' } } });
   const { effects } = apply(r, { k: 'chan-ren', ch: 'design', to: 'ui' });
   assert.deepEqual(r.channels, ['general', 'ui']);
   assert.deepEqual(r.chanMeta, { ui: { topic: 't' } }, 'settings follow the rename');
   assert.deepEqual(r.deletedChannels, ['design'], 'the old name becomes a tombstone');
-  assert.deepEqual(kinds(effects), ['renameMessages', 'systemMessage', 'refreshMessages', 'backup']);
+  assert.deepEqual(kinds(effects), ['renameMessages', 'refreshMessages', 'backup']);
   assert.deepEqual(find(effects, 'renameMessages'), {
     t: 'renameMessages',
     server: 'srv',
@@ -278,7 +276,7 @@ test('deleting a channel drops its settings and its stored messages', () => {
   assert.deepEqual(r.channels, ['general']);
   assert.equal('design' in r.chanMeta, false);
   assert.deepEqual(r.deletedChannels, ['design']);
-  assert.deepEqual(kinds(effects), ['deleteMessages', 'systemMessage', 'backup']);
+  assert.deepEqual(kinds(effects), ['deleteMessages', 'backup']);
 });
 
 test('tombstones are bounded so a record cannot grow without limit', () => {
@@ -297,10 +295,7 @@ test('deleting the room you are in forces you out of the call', () => {
   });
   assert.deepEqual(r.voiceChannels, ['lounge']);
   assert.ok(kinds(effects).includes('leaveVoice'));
-  assert.ok(
-    kinds(effects).indexOf('leaveVoice') < kinds(effects).indexOf('systemMessage'),
-    'leave before announcing, as the original did'
-  );
+  assert.ok(!kinds(effects).includes('systemMessage'), 'a deleted room is not a line in the transcript');
 });
 
 test('deleting a room you are not in leaves your call alone', () => {
@@ -328,7 +323,12 @@ test('changing channel settings applies retention and re-reads history', () => {
   const { effects } = apply(r, { k: 'chanset', ch: 'general', meta: { hid: 'h1', retention: 3600 } });
   assert.deepEqual(r.chanMeta.general, { hid: 'h1', retention: 3600 });
   assert.deepEqual(kinds(effects), ['systemMessage', 'applyRetention', 'backfillHistory', 'backup']);
-  assert.match(find(effects, 'systemMessage').text, /auto-delete: 1 hour/);
+  assert.match(find(effects, 'systemMessage').text, /set auto-delete to 1 hour/);
+
+  // A topic edit leaves auto-delete as it was, so the room hears nothing.
+  const again = apply(r, { k: 'chanset', ch: 'general', meta: { hid: 'h1', retention: 3600, topic: 'pits' } });
+  assert.equal(r.chanMeta.general.topic, 'pits');
+  assert.ok(!kinds(again.effects).includes('systemMessage'), 'only auto-delete changes are announced');
 });
 
 test('a chanset never drops a room key, whichever side minted it', () => {
@@ -490,12 +490,11 @@ test('unpinning fails CLOSED when the remover’s role could not be resolved', (
 
 /* ---------------------------------------------------------------- role -- */
 
-test('a role change announces itself and triggers a re-read of the ACL', () => {
+test('a role change triggers a re-read of the ACL, and no line in the room', () => {
   // Roles live in the relay's ACL; the envelope is only a nudge.
   const r = circle();
   const { effects } = apply(r, { k: 'role', user: 'alice', role: 'admin' });
-  assert.deepEqual(kinds(effects), ['systemMessage', 'refreshRoles']);
-  assert.match(find(effects, 'systemMessage').text, /alice is now an admin/);
+  assert.deepEqual(kinds(effects), ['refreshRoles']);
 });
 
 /* ----------------------------------------------------------- ephemerals -- */

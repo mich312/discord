@@ -1,7 +1,7 @@
 {
-  "name": "quorum — sealed rooms",
+  "name": "quorum",
   "short_name": "quorum",
-  "description": "Small, persistent, invite-only groups — end-to-end encrypted with MLS. The server stores ciphertext it can never read.",
+  "description": "Encrypted group chat for small circles.",
   "start_url": "/",
   "scope": "/",
   "display": "standalone",

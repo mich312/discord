@@ -46,6 +46,7 @@ try {
     t.check('…and the joiner reads what was written before they joined', await sees(bob, 'written before bob joined'));
 
     await room(alice, 'general');
+    await alice.click('[data-testid=new-room-menu]');
     await alice.click('[data-testid=new-channel]');
     await alice.fill('[data-testid=new-channel-name]', 'pits');
     await alice.press('[data-testid=new-channel-name]', 'Enter');
@@ -70,6 +71,8 @@ try {
     await alice.waitForTimeout(1000);
     await board(alice);
     alice.once('dialog', (d) => d.accept());
+    // Remove sits behind the row's "…" menu, away from Call.
+    await alice.click('[data-testid=member-menu-charlie]');
     await alice.click('[data-testid=remove-member-charlie]');
     t.check('the removed member is put out', await charlie.waitForSelector('[data-testid=circles-home]', { timeout: 15000 }).then(() => true, () => false));
     await room(alice, 'general');
@@ -233,6 +236,7 @@ try {
     // Removing a person removes every device of theirs.
     await board(alice);
     alice.once('dialog', (d) => d.accept());
+    await alice.click('[data-testid=member-menu-dan]');
     await alice.click('[data-testid=remove-member-dan]');
     t.check('removing the member puts every device out', await tablet.waitForSelector('[data-testid=circles-home]', { timeout: 15000 }).then(() => true, () => false));
   }
@@ -323,7 +327,7 @@ if (!crashed) {
     await amy.waitForSelector('.palette-input');
     await amy.fill('.palette-input', 'admin overview');
     await amy.waitForTimeout(400);
-    t.check('someone who is not a global admin is not offered the overview', (await amy.locator('text=Server admin overview').count()) === 0);
+    t.check('someone who is not a global admin is not offered the overview', (await amy.locator('.palette-item', { hasText: 'Admin overview' }).count()) === 0);
   } catch (e) {
     crashed = e;
   }

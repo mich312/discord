@@ -73,19 +73,20 @@ test('a worker that fails to start rejects every in-flight call', async () => {
   }
 });
 
-test('the startup error names the underlying cause', async () => {
-  // "something went wrong" is not actionable; the wasm fetch failure is.
+test('the startup error carries the underlying cause', async () => {
+  // "something went wrong" is not actionable; the wasm fetch failure is. It
+  // rides as the error's cause, so the toast stays a plain sentence.
   const call = crypto();
   const p = call('boot');
   FakeWorker.last.onerror({ message: 'failed to fetch crypto_core_bg.wasm' });
-  await assert.rejects(() => p, /crypto_core_bg\.wasm/);
+  await assert.rejects(() => p, (e) => /crypto_core_bg\.wasm/.test(e.cause) && !/wasm/.test(e.message));
 });
 
 test('a startup failure with no message still produces a usable error', async () => {
   const call = crypto();
   const p = call('boot');
   FakeWorker.last.onerror({});
-  await assert.rejects(() => p, /unknown error/);
+  await assert.rejects(() => p, (e) => /failed to start/.test(e.message) && /unknown error/.test(e.cause));
 });
 
 test('calls made AFTER the worker died fail fast rather than hanging', async () => {

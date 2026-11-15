@@ -75,11 +75,7 @@ export function deviceLabel(userAgent = '') {
     encrypted under — common on Chromium (Edge/Chrome) on macOS, where Safari
     does support it. */
 export function noPrfMessage() {
-  return (
-    "this browser didn’t provide the passkey PRF extension we need to encrypt your vault. " +
-    'On a Mac, Safari supports it; otherwise secure this account with a password, or link ' +
-    'this device from one you’re already signed in on.'
-  );
+  return 'Passkeys don’t work in this browser. Try Safari, a password, or linking this device.';
 }
 
 /**
@@ -103,7 +99,7 @@ export function isNoAccount(message) {
     PRF that differs across devices. Carries `linkFallback` so the gate can
     offer device linking instead of reading it as corruption. */
 export function unlockableHereError() {
-  const e = new Error("this device can't unlock your vault with that passkey");
+  const e = new Error("This passkey can't unlock your account on this device.");
   e.linkFallback = true;
   return e;
 }
@@ -190,7 +186,7 @@ export class AccountService {
       its hash) and a wrap half (encrypts the identity, never leaves). */
   async secureWithPassword(password) {
     if ((password ?? '').length < MIN_PASSWORD) {
-      throw new Error(`password: ${MIN_PASSWORD} characters minimum`);
+      throw new Error(`Password needs at least ${MIN_PASSWORD} characters.`);
     }
     const salt = this.webcrypto.getRandomValues(new Uint8Array(16));
     const keys = new Uint8Array(await this.crypto('deriveLoginKeys', { password, salt }));
@@ -212,7 +208,7 @@ export class AccountService {
   /** Register a WebAuthn credential and get back both it and the relay's
       serialized copy. Shared by the two enrollment paths below. */
   async registerCredential() {
-    if (!this.credentials?.create) throw new Error('WebAuthn unavailable in this browser');
+    if (!this.credentials?.create) throw new Error('This browser has no passkey support.');
     const start = await this.request({ t: 'passkey_register_start' });
     const credential = await this.credentials.create({
       publicKey: parseCreationOptions(JSON.parse(start.payload)),
@@ -319,7 +315,7 @@ export class AccountService {
       them is the caller's job. */
   async unlockWithPassword(user, password) {
     const params = await this.params(user);
-    if (params.kind !== 'password') throw new Error(`this account uses ${params.kind} sign-in`);
+    if (params.kind !== 'password') throw new Error(`This account uses ${params.kind} sign-in.`);
     const salt = b64.dec(params.salt);
     const keys = new Uint8Array(await this.crypto('deriveLoginKeys', { password, salt }));
     const reply = await this.fetch(`/account/${encodeURIComponent(user)}/login`, {
@@ -332,10 +328,10 @@ export class AccountService {
 
   /** Unwrap the vault with a named handle's passkey. */
   async unlockWithPasskey(user) {
-    if (!this.credentials?.get) throw new Error('this browser has no passkey support');
+    if (!this.credentials?.get) throw new Error('This browser has no passkey support.');
     const params = await this.params(user);
     if (params.kind !== 'passkey') {
-      throw new Error(`this account uses ${params.kind} sign-in, not a passkey`);
+      throw new Error(`This account uses ${params.kind} sign-in.`);
     }
     const prfSalt = b64.dec(params.salt);
     const challenge = await this.fetch(
@@ -346,7 +342,7 @@ export class AccountService {
       publicKey: parseRequestOptions(challenge, prfSalt),
     });
     const secret = prfSecret(assertion);
-    if (!secret) throw new Error('authenticator returned no PRF secret');
+    if (!secret) throw new Error("This passkey can't unlock your account here. Try linking this device.");
     const reply = await this.fetch(`/account/${encodeURIComponent(user)}/passkey/login`, {
       assertion: serializeAssertion(assertion),
     });
@@ -366,7 +362,7 @@ export class AccountService {
    * autocomplete, or `signal` aborts it. Omit both for the modal button.
    */
   async unlockWithDiscoverablePasskey({ mediation, signal } = {}) {
-    if (!this.credentials?.get) throw new Error('this browser has no passkey support');
+    if (!this.credentials?.get) throw new Error('This browser has no passkey support.');
     const { session, options } = await this.fetch('/passkey/discover/challenge', {});
     const assertion = await this.credentials.get({
       publicKey: parseRequestOptions(options, VAULT_PRF_SALT),
@@ -375,7 +371,7 @@ export class AccountService {
     });
     const secret = prfSecret(assertion);
     if (!secret) {
-      throw new Error('This passkey can’t unlock your account on its own. Sign in with your handle instead.');
+      throw new Error('This passkey can’t sign in on its own. Enter your handle.');
     }
     const reply = await this.fetch('/passkey/discover/login', {
       session,

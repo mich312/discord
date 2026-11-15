@@ -13,7 +13,6 @@ import {
   freshWant,
   gameHost,
   lastPlayed,
-  playCount,
   isFavorite,
   toggleFavorite,
   matchesFilter,
@@ -22,22 +21,13 @@ import {
   normalizeGame,
 } from '../lib/games.js';
 import { nameHue } from '../lib/avatar.js';
-import { Hash, Wave, Bell, Clock, LinkGlyph, Plus, X, ArrowRight, Gamepad, External, Copy, Check, Gear, Star, Server } from './icons.jsx';
+import { Hash, Bell, LinkGlyph, Plus, X, ArrowRight, Gamepad, External, Copy, Check, Gear, Star, Server, More } from './icons.jsx';
+import PopMenu from './PopMenu.jsx';
 import { cx } from '../lib/cx.js';
 
-// The circle's game hub. Two faces off one page, so the thing the page is
-// named for leads:
-//   · Play — what's live right now, and the shelf of games to start. The
-//            live band takes the top when anyone's in a game; the cards
-//            below adapt (join / launch / copy) and can be starred, filtered
-//            and sorted live-first.
-//   · Home — the circle briefing that used to crowd the top: the next event
-//            with its countdown + RSVP, the per-room catch-up, the
-//            noticeboard, pinned links, and the blurb.
-// Which face you're on is remembered per-device; nothing here changed about
-// what crosses the wire. Every synced word still travels inside MLS; the
-// relay reads none of it. What the relay CAN'T hide — that connecting to a
-// game shows that game's host your traffic — the shelf still says plainly.
+// The circle's board: the next event, who is waiting to join, the people,
+// the rooms, games when there are any, and the circle's pinned notes, lifts
+// and links. Every synced word travels inside MLS; the relay reads none of it.
 
 // Only ever link out to http(s) — anything else renders as inert text, so
 // a pinned "javascript:" or "data:" URL can't become a click target.
@@ -138,11 +128,12 @@ function EditForm({ overview, games, onSave, onCancel }) {
             <input
               value={ev.title}
               onChange={(e) => setEvent(i, { title: e.target.value })}
-              placeholder="What’s happening (leave empty to remove)"
+              placeholder="Event name"
               data-testid={i === 0 ? 'overview-event-title' : `overview-event-title-${i}`}
             />
             <input
               type="datetime-local"
+              aria-label="Date and time"
               value={ev.at}
               onChange={(e) => setEvent(i, { at: e.target.value })}
               data-testid={i === 0 ? 'overview-event-at' : `overview-event-at-${i}`}
@@ -152,7 +143,7 @@ function EditForm({ overview, games, onSave, onCancel }) {
             <input
               value={ev.note}
               onChange={(e) => setEvent(i, { note: e.target.value })}
-              placeholder="Where, what to bring (optional)"
+              placeholder="Details (optional)"
               data-testid={i === 0 ? 'overview-event-note' : `overview-event-note-${i}`}
             />
             <select
@@ -191,7 +182,7 @@ function EditForm({ overview, games, onSave, onCancel }) {
         }
       >
         <Plus size={14} />
-        Add an event
+        Add event
       </button>
       <label className="overview-field-label">About this circle</label>
       <textarea
@@ -200,7 +191,7 @@ function EditForm({ overview, games, onSave, onCancel }) {
         rows={4}
         value={blurb}
         onChange={(e) => setBlurb(e.target.value)}
-        placeholder={'What is this circle for? House rules, cadence, where to start…'}
+        placeholder="What’s this circle for?"
       />
       <label className="overview-field-label">Links</label>
       {links.map((l, i) => (
@@ -235,27 +226,22 @@ function EditForm({ overview, games, onSave, onCancel }) {
         onClick={() => setLinks((ls) => [...ls, { label: '', url: '', _id: ++linkSeq }])}
       >
         <Plus size={14} />
-        Add a link
+        Add link
       </button>
       <div className="row overview-edit-actions">
         <button className="button primary" type="submit" data-testid="overview-save">
-          Save changes
+          Save
         </button>
         <button className="button" type="button" onClick={onCancel}>
           Cancel
         </button>
       </div>
-      <p className="fineprint muted">
-        Everyone in the circle sees this page. Links open only if they start with https://;
-        anything else stays plain text.
-      </p>
     </form>
   );
 }
 
-// The live band: the Play view's top slot when anyone in the circle is in a
-// game. It leads with who's in and one green way to join them — a door, not
-// a status line. Falls back to nothing when the circle is quiet.
+// The live band: shown while anyone in the circle is in a game, with who is
+// in and one way to join them. Nothing when the circle is quiet.
 function LiveBand({ game, players, me, onJoin }) {
   const [copied, setCopied] = useState(false);
   const hue = nameHue(game.name);
@@ -291,10 +277,10 @@ function LiveBand({ game, players, me, onJoin }) {
           </span>
           <span className="live-dot" aria-hidden="true" />
           {who.length === 1
-            ? `${who[0] === 'you' ? 'You are' : `${who[0]} is`} playing now`
+            ? `${who[0] === 'you' ? 'You’re' : `${who[0]} is`} playing`
             : who.length <= 3
-              ? `${who.slice(0, -1).join(', ')} and ${who[who.length - 1]} are playing now`
-              : `${who.length} playing now`}
+              ? `${who.slice(0, -1).join(', ')} and ${who[who.length - 1]} are playing`
+              : `${who.length} playing`}
         </span>
       </div>
       {isServer ? (
@@ -312,17 +298,14 @@ function LiveBand({ game, players, me, onJoin }) {
   );
 }
 
-// One game on the shelf. The cover carries the game's own hue (derived from
-// its name, like a member's orb); the primary action reads the game's state —
-// join when the circle's already in it, launch when it's quiet, copy for a
-// native server — so one glance tells you the next move.
+// One game on the shelf. The cover carries the game's own hue; the main
+// action follows its state: join when someone is in it, play when it is
+// quiet, copy the address for a game server.
 function GameCard({ game, players, canManage, rallied, onLaunch, onRally, onRemove, onFavorite }) {
   const [copied, setCopied] = useState(false);
   const [fav, setFav] = useState(() => isFavorite(game.id));
   const hue = nameHue(game.name);
   const host = gameHost(game);
-  const played = lastPlayed(game.id);
-  const plays = playCount(game.id);
   const live = players.length > 0;
   const isServer = game.kind === 'server';
   const copyAddress = async () => {
@@ -338,62 +321,64 @@ function GameCard({ game, players, canManage, rallied, onLaunch, onRally, onRemo
     setFav(toggleFavorite(game.id));
     onFavorite?.();
   };
-  // How the card describes itself when nobody's in it: plays first, then when
-  // this device last opened it — the honest device-local memory of the shelf.
-  const idleNote = [
-    plays ? `${plays} play${plays === 1 ? '' : 's'}` : '',
-    played ? `last played ${describeAgo(played)}` : '',
-  ]
-    .filter(Boolean)
-    .join(' · ');
   return (
     <li className={cx('game-card', live && 'live')} data-testid={`game-card-${game.id}`}>
-      {/* A game's cover is its identity, the way an orb is a person's — so
-          it keeps its hue. It lost the two-stop gradient and the film grain,
-          which were decoration on top of the identity. */}
       <div className="game-cover" style={{ background: `hsl(${hue} 38% 30%)` }}>
         <span className={cx('game-cover-mark', game.glyph && 'glyph')}>
           {game.glyph ?? game.name.slice(0, 1).toUpperCase()}
         </span>
-        {live ? (
+        {live && (
           <span className="game-kind live" data-testid={`game-live-${game.id}`}>
             <span className="live-dot" aria-hidden="true" />
             Live
           </span>
-        ) : (
-          <span className="game-kind">{isServer ? 'Game server' : 'Web game'}</span>
-        )}
-        {canManage && (
-          <button
-            className="ghost game-remove"
-            aria-label={`Remove ${game.name} from the shelf`}
-            title="Remove from the shelf"
-            data-testid={`game-remove-${game.id}`}
-            onClick={onRemove}
-          >
-            <X size={14} />
-          </button>
         )}
       </div>
       <div className="game-body">
         <div className="game-name-row">
           <span className="game-name">{game.name}</span>
-          {/* §6.1 — an icon from the set, not ★ and ☆ standing in for one. */}
-          <button
-            className={cx('game-fav', fav && 'on')}
-            aria-label={fav ? `Unstar ${game.name}` : `Star ${game.name}`}
-            title={fav ? 'Unstar' : 'Star to keep it at the front'}
-            aria-pressed={fav}
-            data-testid={`game-favorite-${game.id}`}
-            onClick={flipFav}
-          >
-            <Star size={14} filled={fav} />
-          </button>
+          {fav && (
+            <span className="game-starred" role="img" aria-label="Starred">
+              <Star size={14} filled />
+            </span>
+          )}
+          {/* The name and Play are the card; star, new tab and remove are
+              behind "…". */}
+          <PopMenu
+            className="game-more"
+            label={`More for ${game.name}`}
+            glyph={<More size={18} />}
+            testid={`game-menu-${game.id}`}
+            items={[
+              {
+                key: 'fav',
+                label: fav ? 'Unstar' : 'Star',
+                testid: `game-favorite-${game.id}`,
+                onSelect: flipFav,
+              },
+              !isServer && {
+                key: 'tab',
+                label: 'Open in a new tab',
+                testid: `game-newtab-${game.id}`,
+                onSelect: () => window.open(game.url, '_blank', 'noopener,noreferrer'),
+              },
+              canManage && {
+                key: 'remove',
+                label: 'Remove from board',
+                danger: true,
+                testid: `game-remove-${game.id}`,
+                onSelect: onRemove,
+              },
+            ].filter(Boolean)}
+          />
         </div>
-        <span className={cx('game-host', host && 'mono')}>
-          {isServer ? <Server size={14} /> : <External size={14} />}
-          {host ?? 'Runs inside quorum'}
-        </span>
+        {/* Where it runs, for a game that is not built in. */}
+        {host && (
+          <span className="game-host">
+            {isServer ? <Server size={14} /> : <External size={14} />}
+            {host}
+          </span>
+        )}
         {game.note && <span className="game-note">{game.note}</span>}
         {live ? (
           <span className="game-who">
@@ -402,10 +387,8 @@ function GameCard({ game, players, canManage, rallied, onLaunch, onRally, onRemo
                 <Seal key={p} name={p} size={20} title={p} />
               ))}
             </span>
-            {players.length === 1 ? `${players[0]} is playing` : `${players.length} playing now`}
+            {players.length === 1 ? `${players[0]} is playing` : `${players.length} playing`}
           </span>
-        ) : idleNote ? (
-          <span className="game-who muted">{idleNote}</span>
         ) : null}
         <div className="game-actions">
           {isServer ? (
@@ -423,16 +406,6 @@ function GameCard({ game, players, canManage, rallied, onLaunch, onRally, onRemo
                 <Gamepad size={14} />
                 Join
               </button>
-              <a
-                className="button icon-only"
-                aria-label={`Open ${game.name} in a new tab`}
-                title="Open in a new tab"
-                href={game.url}
-                target="_blank"
-                rel="noreferrer noopener"
-              >
-                <External size={14} />
-              </a>
             </>
           ) : (
             <>
@@ -440,16 +413,6 @@ function GameCard({ game, players, canManage, rallied, onLaunch, onRally, onRemo
                 <Gamepad size={14} />
                 Play
               </button>
-              <a
-                className="button icon-only"
-                aria-label={`Open ${game.name} in a new tab`}
-                title="Open in a new tab"
-                href={game.url}
-                target="_blank"
-                rel="noreferrer noopener"
-              >
-                <External size={14} />
-              </a>
             </>
           )}
         </div>
@@ -461,7 +424,7 @@ function GameCard({ game, players, canManage, rallied, onLaunch, onRally, onRemo
             onClick={() => onRally(rallied ? null : game)}
           >
             <Bell size={14} />
-            {rallied ? 'Waiting for others. Cancel rally' : 'Ask the circle to play'}
+            {rallied ? 'Stop asking' : 'Ask to play'}
           </button>
         )}
       </div>
@@ -497,7 +460,7 @@ function AddGameForm({ onAdd, onCancel }) {
         <input
           value={url}
           onChange={(e) => setUrl(e.target.value)}
-          placeholder={kind === 'server' ? 'Address, e.g. mc.example.net:25565' : 'https:// address'}
+          placeholder={kind === 'server' ? 'Server address' : 'Web address'}
           aria-label={kind === 'server' ? 'Server address' : 'Web address'}
           data-testid="game-add-url"
         />
@@ -506,18 +469,17 @@ function AddGameForm({ onAdd, onCancel }) {
           value={glyph}
           onChange={(e) => setGlyph(e.target.value)}
           placeholder="♞"
-          aria-label="Cover mark: one character (optional)"
-          title="Cover mark: one character (optional)"
+          aria-label="Icon (one character)"
           data-testid="game-add-glyph"
         />
       </div>
-      <select value={kind} onChange={(e) => setKind(e.target.value)} data-testid="game-add-kind">
-        <option value="activity">Web game: plays inside quorum</option>
-        <option value="server">Game server: join with its own app</option>
+      <select value={kind} onChange={(e) => setKind(e.target.value)} aria-label="Type" data-testid="game-add-kind">
+        <option value="activity">Web game</option>
+        <option value="server">Game server (separate app)</option>
       </select>
       <div className="row">
         <button className="button primary" type="submit" data-testid="game-add-save">
-          Add to shelf
+          Add
         </button>
         <button className="button" type="button" onClick={onCancel}>
           Cancel
@@ -532,11 +494,9 @@ export default function Overview({
   me,
   canManage,
   canSend,
-  voice,
   digestKey,
   loadDigest,
   onSelectChannel,
-  onVoiceJoin,
   onLaunchGame,
   onRally,
   onRsvp,
@@ -559,6 +519,9 @@ export default function Overview({
   // starred / recent without the parent tracking each card's state.
   const [favTick, setFavTick] = useState(0);
   const [draft, setDraft] = useState('');
+  const [offering, setOffering] = useState(false);
+  // The pin composer opens from a button, as the offer form does.
+  const [pinning, setPinning] = useState(false);
   const [offerDraft, setOfferDraft] = useState('');
   const [offerSeats, setOfferSeats] = useState('');
   const [digest, setDigest] = useState([]);
@@ -588,9 +551,6 @@ export default function Overview({
   // window, then drops out of the upcoming list.
   const upcoming = upcomingEvents(overview, now);
   const soonest = upcoming[0] ?? null;
-  // Game nights: upcoming events tied to a game still on the shelf — these
-  // also surface on the Play tab, next to the shelf they belong with.
-  const gameNights = upcoming.filter((e) => e.gameId && gamesById[e.gameId]);
   // Who said "I'm in" for the event at this timestamp (RSVPs key on the time).
   const goingFor = (at) =>
     Object.entries(server.rsvps ?? {})
@@ -652,7 +612,6 @@ export default function Overview({
   // Membership is the circle's decision, so the board carries the ledger.
   const proposals = server.proposals ?? [];
   const threshold = normalizeThreshold(server.threshold, (server.members ?? []).length);
-  const voiceRooms = server.voiceChannels ?? ['lounge'];
   const byChannel = Object.fromEntries(digest.map((d) => [d.channel, d]));
   // Catch-up order: unread rooms first, then most recently active.
   const rooms = [...server.channels].sort((a, b) => {
@@ -667,15 +626,34 @@ export default function Overview({
     onLaunchGame(g);
   };
 
-  const admins = (server.members ?? []).filter((m) => server.roles?.[m] === 'admin');
   const whenOf = (at) =>
     new Date(at).toLocaleString([], {
       weekday: 'short',
       month: 'short',
       day: 'numeric',
-      hour: '2-digit',
+      hour: 'numeric',
       minute: '2-digit',
     });
+  // Lifts and spares draw only once someone has offered one; until then a
+  // member gets a small button that opens the form in place.
+  const showOffers = offers.length > 0 || (canSend && offering);
+  const offerButton = canSend && !offering && (
+    <button className="ghost offer-add" data-testid="overview-offer-add" onClick={() => setOffering(true)}>
+      <Plus size={14} />
+      Offer a lift
+    </button>
+  );
+  // Pinned draws only when there is a note (or one being written). Until a
+  // section exists its button sits in a plain row of board actions, so it
+  // never reads as part of another section.
+  const showPinned = notices.length > 0 || (canSend && pinning);
+  const pinButton = canSend && !pinning && (
+    <button className="ghost offer-add" data-testid="overview-notice-add" onClick={() => setPinning(true)}>
+      <Plus size={14} />
+      Pin a note
+    </button>
+  );
+  const looseActions = [!showPinned && pinButton, !showOffers && offerButton].filter(Boolean);
   const hasSide =
     upcoming.length > 1 ||
     canSend ||
@@ -686,32 +664,19 @@ export default function Overview({
   return (
     <main className="messages-pane overview-pane" data-testid="overview-pane">
       <header className="pane-head">
-        {/* "board", not "game hub". Two of the three circles this product is
-            for have no games in them, and naming the landing page after the
-            one module some circles never populate is the intent drift the
-            floor plan is correcting. */}
-        <h2 className="room-name">{server.name}&rsquo;s board</h2>
+        <h2 className="room-name">Board</h2>
         {!editing && (
           <span className="pane-actions">
             {canManage && (
               <button className="button" data-testid="overview-edit" onClick={() => setEditing(true)}>
-                Edit board
+                Edit
               </button>
             )}
-            {canManage && !addingGame && (
-              <button className="button" data-testid="game-add" onClick={() => setAddingGame(true)}>
-                <Plus size={14} />
-                Add a game
-              </button>
-            )}
-            {/* The circle's own settings — its name, its face, how many
-                signatures it asks for, and leaving it. Not admin-gated: the
-                only way out of a circle is in that dialog, and gating the
-                exit on a role would be the product deciding who may leave. */}
+            {/* Not admin-gated: leaving the circle lives in that dialog. */}
             <button
               className="ghost"
-              aria-label={`${server.name} settings`}
-              title={`${server.name} settings`}
+              aria-label="Circle settings"
+              title="Circle settings"
               data-testid="circle-settings"
               onClick={onCircleSettings}
             >
@@ -740,28 +705,24 @@ export default function Overview({
             />
           </section>
         ) : (
-          // Two columns from 1081px: what needs you and who is here on the
-          // left, the circle's notes and plans on the right. It used to be one
-          // column of blocks at four different widths, so nothing in it
-          // shared a right edge. Below 1081px the side column follows the
-          // main one.
+          // Two columns from 1081px: the circle on the left, its notes and
+          // plans on the right. Narrower, the side column follows.
           <div className={cx('board', hasSide && 'with-side')}>
             <div className="board-main">
               {overview?.blurb ? (
                 <p className="overview-blurb" data-testid="overview-blurb">
                   {overview.blurb}
                 </p>
-              ) : (
-                // §11.10 — an empty state names the next action and who can
-                // take it, by name.
-                <p className="overview-blurb placeholder muted" data-testid="overview-blurb-empty">
-                  {canManage
-                    ? 'Nothing here yet. Use Edit board to describe this circle, set an event and pin links.'
-                    : admins.length
-                      ? `Nothing here yet. ${admins.join(', ')} can describe this circle.`
-                      : 'Nothing here yet.'}
-                </p>
-              )}
+              ) : canManage ? (
+                <button
+                  className="ghost overview-blurb-add"
+                  data-testid="overview-blurb-add"
+                  onClick={() => setEditing(true)}
+                >
+                  <Plus size={14} />
+                  Add a description
+                </button>
+              ) : null}
 
               {/* Who is waiting to get in. Draws only when somebody is — a
                   circle with nobody proposed should not carry an empty
@@ -770,11 +731,10 @@ export default function Overview({
                   on the board. */}
               {proposals.length > 0 && (
                 <section className="overview-section" data-testid="overview-proposals">
-                  <h3 className="overline">Wants to join</h3>
+                  <h3 className="overline">Waiting to join</h3>
                   <ul className="overview-proposals">
                     {proposals.map((p) => {
                       const signed = standingSignatures(p, server.members).length;
-                      const togo = Math.max(0, threshold - signed);
                       const mine = awaitingFrom(p, me);
                       return (
                         <li
@@ -785,19 +745,15 @@ export default function Overview({
                           <Seal name={p.handle} size={32} title={p.handle} />
                           <div className="proposal-body">
                             <span className="proposal-who">
-                              <strong>{p.handle}</strong> wants to join
+                              <strong>{p.handle}</strong>
                             </span>
-                            {/* §1.6 — the count is the state, in words, and it
-                                does not lean on the border colour to say it.
-                                §4.4 — these are the facts a decision rests on,
-                                so they are set to be read, not in capitals. */}
+                            {/* §1.6: the count is the state, in words. */}
                             <span className="proposal-head">
-                              Proposed by {p.by === me ? 'you' : p.by} · {signed} of {threshold} signed
-                              {togo === 0 && ' · enough to join'}
+                              Proposed by {p.by === me ? 'you' : p.by}. {signed} of {threshold} signed.
                               {p.objections.length > 0 &&
-                                ` · ${p.objections.length} objection${p.objections.length === 1 ? '' : 's'}`}
+                                ` ${p.objections.length} objection${p.objections.length === 1 ? '' : 's'}.`}
                             </span>
-                            <span className="proposal-meter" role="img" aria-label={`${signed} of ${threshold} signed`}>
+                            <span className="proposal-meter" aria-hidden="true">
                               {Array.from({ length: threshold }, (_, i) => (
                                 <span key={i} className={cx('pip', i < signed && 'on')} />
                               ))}
@@ -866,9 +822,6 @@ export default function Overview({
                   );
                 })()}
 
-              {/* The circle opens on its people. At six members the roster was
-                  the densest thing on screen and it lived in a column beside
-                  the conversation, which is where you look last. */}
               {people}
 
               <section className="overview-section">
@@ -894,7 +847,7 @@ export default function Overview({
                             </span>
                           )}
                           <span className="last">
-                            {d.last ? `${d.last.sender}: ${d.last.text}` : topic ?? 'Nothing here yet'}
+                            {d.last?.text ? `${d.last.sender}: ${d.last.text}` : topic ?? ''}
                           </span>
                           <span className="when">{d.last ? describeAgo(d.last.ts, now) : ''}</span>
                           <span className="go">
@@ -904,42 +857,17 @@ export default function Overview({
                       </li>
                     );
                   })}
-                  {voiceRooms.map((ch) => {
-                    const present = voice?.presence?.[`${server.id}/${ch}`] ?? [];
-                    return (
-                      <li key={`v:${ch}`}>
-                        <button
-                          className={cx('overview-room', 'voice', present.length && 'live')}
-                          data-testid={`overview-voice-${ch}`}
-                          onClick={() => onVoiceJoin(ch)}
-                        >
-                          <span className="glyph">
-                            <Wave size={14} />
-                          </span>
-                          <span className="room">{ch}</span>
-                          <span className="last">
-                            {present.length ? `In call: ${present.join(', ')}` : 'Nobody in the call'}
-                          </span>
-                          <span className="go">{present.length ? 'Join' : 'Start a call'}</span>
-                        </button>
-                      </li>
-                    );
-                  })}
                 </ul>
               </section>
 
-              {bandGame ? (
+              {bandGame && (
                 <LiveBand
                   game={bandGame}
                   players={playingBy[bandGame.id] ?? []}
                   me={me}
                   onJoin={() => launchFromShelf(bandGame)}
                 />
-              ) : games.length > 0 && rallies.length === 0 ? (
-                <p className="hub-nudge" data-testid="hub-quiet">
-                  Nobody&rsquo;s playing right now. Start a game below, or ask the circle to play.
-                </p>
-              ) : null}
+              )}
 
               {rallies.length > 0 && (
                 <section className="hub-rallies" data-testid="hub-rallies">
@@ -949,14 +877,14 @@ export default function Overview({
                       <li className="rally-row" key={g.id} data-testid={`rally-${g.id}`}>
                         <span className="game-who-stack">
                           {who.slice(0, 3).map((p) => (
-                            <Seal key={p} name={p} size={22} title={p} />
+                            <Seal key={p} name={p} size={24} title={p} />
                           ))}
                         </span>
                         <span className="rally-text">
                           {ralliersLabel(who, me)} <strong>{g.name}</strong>
                         </span>
                         {g.kind === 'server' ? (
-                          <span className="rally-host mono">{gameHost(g)}</span>
+                          <span className="rally-host">{gameHost(g)}</span>
                         ) : (
                           <button
                             className="button rally-join"
@@ -973,94 +901,28 @@ export default function Overview({
                 </section>
               )}
 
-              {gameNights.length > 0 && (
-                <section className="hub-nights" data-testid="hub-nights">
-                  <h3 className="overline">Game nights</h3>
-                  <ul className="nights-list">
-                    {gameNights.map((ev) => {
-                      const g = gamesById[ev.gameId];
-                      const going = goingFor(ev.at);
-                      const iAmIn = going.includes(me);
-                      const live = (playingBy[g.id]?.length ?? 0) > 0;
-                      return (
-                        <li className="night-row" key={ev.id} data-testid={`night-${ev.id}`}>
-                          <span className="night-mark" aria-hidden="true">
-                            <Clock size={14} />
-                          </span>
-                          <div className="night-body">
-                            <span className="night-title">
-                              {ev.title} <span className="night-game">· {g.name}</span>
-                            </span>
-                            <span className="night-when">
-                              {whenOf(ev.at)} · {describeUntil(ev.at, now)}
-                              {ev.note ? `. ${ev.note}` : ''}
-                            </span>
-                          </div>
-                          {going.length > 0 && (
-                            <span className="night-going" data-testid={`night-going-${ev.id}`}>
-                              <span className="game-who-stack">
-                                {going.slice(0, 3).map((p) => (
-                                  <Seal key={p} name={p} size={20} title={p} />
-                                ))}
-                              </span>
-                              {going.length} going
-                            </span>
-                          )}
-                          {live && g.kind !== 'server' ? (
-                            <button className="button night-action" onClick={() => launchFromShelf(g)}>
-                              <Gamepad size={14} />
-                              Join
-                            </button>
-                          ) : (
-                            canSend && (
-                              <button
-                                className={cx('button', 'night-action', iAmIn && 'pressed')}
-                                aria-pressed={iAmIn}
-                                data-testid={`night-rsvp-${ev.id}`}
-                                onClick={() => onRsvp(ev.at, !iAmIn)}
-                              >
-                                {iAmIn && <Check size={14} />}
-                                {iAmIn ? 'Going' : 'I’m in'}
-                              </button>
-                            )
-                          )}
-                        </li>
-                      );
-                    })}
-                  </ul>
-                </section>
-              )}
-
-              <section className="overview-section">
-                <div className="shelf-head">
+              {(games.length > 0 || canManage) && (
+                <section className="overview-section">
                   <h3 className="overline">Games</h3>
-                  {games.length > 0 && (
-                    <span className="shelf-meta">
-                      {games.length} game{games.length === 1 ? '' : 's'}
-                      {liveGames.length > 0 && ` · ${liveGames.length} live`}
-                    </span>
+
+                  {showFilters && (
+                    <div className="shelf-filters" role="group" aria-label="Filter games">
+                      {filterChips.map((f) => (
+                        <button
+                          key={f}
+                          className={cx('fchip', filter === f && 'on')}
+                          data-testid={`game-filter-${f}`}
+                          aria-pressed={filter === f}
+                          onClick={() => setFilter(f)}
+                        >
+                          {f === 'live' && <span className="live-dot" aria-hidden="true" />}
+                          {f === 'favorites' && <Star size={14} />}
+                          {FILTER_LABEL[f]}
+                        </button>
+                      ))}
+                    </div>
                   )}
-                </div>
 
-                {showFilters && (
-                  <div className="shelf-filters" role="group" aria-label="Filter games">
-                    {filterChips.map((f) => (
-                      <button
-                        key={f}
-                        className={cx('fchip', filter === f && 'on')}
-                        data-testid={`game-filter-${f}`}
-                        aria-pressed={filter === f}
-                        onClick={() => setFilter(f)}
-                      >
-                        {f === 'live' && <span className="live-dot" aria-hidden="true" />}
-                        {f === 'favorites' && <Star size={14} />}
-                        {FILTER_LABEL[f]}
-                      </button>
-                    ))}
-                  </div>
-                )}
-
-                {games.length > 0 || canManage ? (
                   <ul className="game-shelf" data-testid="game-shelf">
                     {shownGames.map((g) => (
                       <GameCard
@@ -1077,7 +939,7 @@ export default function Overview({
                     ))}
                     {games.length > 0 && shownGames.length === 0 && (
                       <li className="shelf-empty-filter muted" data-testid="game-filter-empty">
-                        No games match &ldquo;{FILTER_LABEL[filter]}&rdquo;.
+                        No matches
                       </li>
                     )}
                     {canManage && filter === 'all' && (
@@ -1099,27 +961,14 @@ export default function Overview({
                             <span className="add-card-plus">
                               <Plus size={18} />
                             </span>
-                            <span className="add-card-title">Add a game</span>
-                            <span className="add-card-sub">
-                              A web address is enough. It shows up for the whole circle.
-                            </span>
+                            <span className="add-card-title">Add game</span>
                           </button>
                         )}
                       </li>
                     )}
                   </ul>
-                ) : (
-                  <p className="muted overview-empty-note" data-testid="game-shelf-empty">
-                    No games yet. {admins.length ? `${admins.join(', ')} can add one.` : ''}
-                  </p>
-                )}
-                {games.length > 0 && (
-                  <p className="shelf-honesty muted" data-testid="shelf-honesty">
-                    Each game runs on the server its card names. That server sees your connection,
-                    never your chat.
-                  </p>
-                )}
-              </section>
+                </section>
+              )}
             </div>
 
             {hasSide && (
@@ -1160,7 +1009,9 @@ export default function Overview({
                   </section>
                 )}
 
-                {(canSend || notices.length > 0) && (
+                {looseActions.length > 0 && <div className="board-side-actions">{looseActions}</div>}
+
+                {showPinned && (
                   <section className="overview-section side-card">
                     <h3 className="overline">Pinned</h3>
                     {notices.length ? (
@@ -1187,12 +1038,8 @@ export default function Overview({
                           </li>
                         ))}
                       </ul>
-                    ) : (
-                      <p className="muted overview-empty-note" data-testid="overview-notices-empty">
-                        Nothing pinned yet. Pin a note the whole circle should see.
-                      </p>
-                    )}
-                    {canSend && (
+                    ) : null}
+                    {canSend && pinning && (
                       <form
                         className="notice-composer"
                         onSubmit={(e) => {
@@ -1200,32 +1047,40 @@ export default function Overview({
                           const text = draft.trim();
                           if (!text) return;
                           setDraft('');
+                          setPinning(false);
                           onAddNotice(text);
                         }}
                       >
                         <input
+                          autoFocus
                           value={draft}
                           onChange={(e) => setDraft(e.target.value)}
-                          placeholder="Pin a note for everyone"
-                          aria-label="Pin a note for everyone"
+                          placeholder="Pin a note"
+                          aria-label="Pin a note"
                           data-testid="overview-notice-input"
                         />
                         <button className="button" type="submit" data-testid="overview-notice-post">
                           Pin
                         </button>
+                        <button
+                          className="ghost"
+                          type="button"
+                          onClick={() => {
+                            setPinning(false);
+                            setDraft('');
+                          }}
+                        >
+                          Cancel
+                        </button>
                       </form>
                     )}
+                    {pinButton}
                   </section>
                 )}
 
-                {/* Lifts and kit — the block that makes a race team's board
-                    look like a race team's, and a photo club's like a print
-                    swap. It draws only when the circle has put something in
-                    it, which is what "composed per circle" means in
-                    practice. */}
-                {(offers.length > 0 || canSend) && (
+                {showOffers && (
                   <section className="overview-section side-card" data-testid="overview-offers">
-                    <h3 className="overline">Lifts and kit</h3>
+                    <h3 className="overline">Lifts and spares</h3>
                     {offers.length > 0 && (
                       <ul className="overview-offers">
                         {offers.map((o) => {
@@ -1238,13 +1093,10 @@ export default function Overview({
                                 <span className="offer-head">
                                   {o.author}
                                   {o.note ? ` · ${o.note}` : ''}
-                                  {left !== null &&
-                                    ` · ${o.seats - left} of ${o.seats} ${o.seats === 1 ? 'seat' : 'seats'} taken`}
+                                  {left !== null && ` · ${o.seats - left}/${o.seats} seats`}
                                 </span>
                               </div>
                               {left !== null && canSend && (
-                                /* §1.6 — "full" is a word, not a greyed-out
-                                   button and nothing else. */
                                 <button
                                   className={cx('button', 'offer-take', mine && 'pressed')}
                                   aria-pressed={mine}
@@ -1253,14 +1105,14 @@ export default function Overview({
                                   onClick={() => onTakeOffer(o.id, !mine)}
                                 >
                                   {mine && <Check size={14} />}
-                                  {mine ? 'You’re in' : left === 0 ? 'Full' : 'Take a seat'}
+                                  {mine ? 'You’re in' : left === 0 ? 'Full' : 'I’m in'}
                                 </button>
                               )}
                               {canSend && canRemoveOffer(o, me, server.roles?.[me] === 'admin') && (
                                 <button
                                   className="ghost notice-remove"
-                                  aria-label="Take this down"
-                                  title="Take this down"
+                                  aria-label="Remove"
+                                  title="Remove"
                                   data-testid={`overview-offer-remove-${o.id}`}
                                   onClick={() => onRemoveOffer(o.id)}
                                 >
@@ -1272,7 +1124,7 @@ export default function Overview({
                         })}
                       </ul>
                     )}
-                    {canSend && (
+                    {canSend && offering && (
                       <form
                         className="notice-composer offer-composer"
                         onSubmit={(e) => {
@@ -1281,19 +1133,21 @@ export default function Overview({
                           if (!text) return;
                           setOfferDraft('');
                           setOfferSeats('');
+                          setOffering(false);
                           onAddOffer(text, Number(offerSeats) || 0);
                         }}
                       >
                         <input
+                          autoFocus
                           value={offerDraft}
                           onChange={(e) => setOfferDraft(e.target.value)}
-                          placeholder="A lift, a spare, where to meet"
-                          aria-label="Offer a lift or kit"
+                          placeholder="A lift or a spare"
+                          aria-label="What you’re offering"
                           data-testid="overview-offer-input"
                         />
-                        {/* §8.7 — a real label, not a placeholder doing its job. */}
+                        {/* §8.7: a real label, not a placeholder doing its job. */}
                         <label className="offer-seats">
-                          <span className="sr-only">Seats, if this is a lift</span>
+                          <span className="sr-only">Seats (for a lift)</span>
                           <input
                             type="number"
                             min="0"
@@ -1307,8 +1161,20 @@ export default function Overview({
                         <button className="button" type="submit" data-testid="overview-offer-post">
                           Post
                         </button>
+                        <button
+                          className="ghost"
+                          type="button"
+                          onClick={() => {
+                            setOffering(false);
+                            setOfferDraft('');
+                            setOfferSeats('');
+                          }}
+                        >
+                          Cancel
+                        </button>
                       </form>
                     )}
+                    {offerButton}
                   </section>
                 )}
 
@@ -1330,14 +1196,14 @@ export default function Overview({
                               >
                                 <LinkGlyph size={14} />
                                 <span className="label">{l.label || l.url}</span>
-                                <span className="url mono">{l.url}</span>
+                                <span className="url">{l.url}</span>
                               </a>
                             ) : (
                               <span className="overview-link inert" data-testid="overview-link">
                                 <LinkGlyph size={14} />
                                 <span className="label">{l.label || l.url}</span>
-                                <span className="url mono">{l.url}</span>
-                                <span className="inert-why">Not an https:// link, so it won&rsquo;t open</span>
+                                <span className="url">{l.url}</span>
+                                <span className="inert-why">Can&rsquo;t open this link</span>
                               </span>
                             )}
                           </li>

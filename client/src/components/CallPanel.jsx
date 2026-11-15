@@ -17,7 +17,7 @@ export default function CallPanel({ voice, me, stageOpen, onAccept, onDecline, o
         <span className="call-glyph pulse">
           <Phone size={18} />
         </span>
-        <Seal name={voice.ring.from} size={26} />
+        <Seal name={voice.ring.from} size={24} />
         <div className="call-text">
           <strong>{voice.ring.from}</strong>
           <span className="muted">Incoming call…</span>
@@ -39,7 +39,7 @@ export default function CallPanel({ voice, me, stageOpen, onAccept, onDecline, o
         <span className="call-glyph pulse">
           <Phone size={18} />
         </span>
-        <Seal name={voice.dial.to} size={26} />
+        <Seal name={voice.dial.to} size={24} />
         <div className="call-text">
           <strong>{voice.dial.to}</strong>
           <span className="muted">Ringing…</span>

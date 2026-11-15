@@ -53,10 +53,17 @@ export function meshFull(count) {
   return (Number(count) || 0) >= MESH_LIMIT;
 }
 
-/** What to tell someone who cannot get in. Names the real reason — the
- *  alternative is a refusal that reads as a bug. */
+/** What to tell someone who cannot get in. */
 export function meshFullMessage() {
-  return `this call is full (${MESH_LIMIT} people). calls are peer-to-peer, so every extra person costs everyone else bandwidth`;
+  return `This call is full (${MESH_LIMIT} people max).`;
+}
+
+/** A call's name for people: a voice room's own name, or for a direct
+ *  call (`dm:alice+bob`) the other person. Never the internal id. */
+export function callName(channel, me) {
+  if (typeof channel !== 'string' || !channel.startsWith('dm:')) return channel;
+  const pair = channel.slice(3).split('+');
+  return pair.find((n) => n !== me) ?? pair[0];
 }
 
 /// Device preference: route my media through TURN so call peers never see my
@@ -191,9 +198,6 @@ export class VoiceManager {
     // these are for assistive tech, not for the screen: a toast on every
     // join and leave would be noise nobody asked for.
     this.onAnnounce = opts.onAnnounce ?? (() => {});
-    // A room's presence went 0 -> 1: someone opened a call. The controller
-    // drops a system line into the room's first text channel.
-    this.onCallStarted = opts.onCallStarted ?? (() => {});
     this.muted = false; // my mic, track.enabled-level — peers hear silence
     this.iceServers = opts.iceServers ?? DEFAULT_ICE;
     // Device preference, not account state — same treatment as the theme.
@@ -450,15 +454,10 @@ export class VoiceManager {
     if (typeof window !== 'undefined') window.__voiceLevels = {};
   }
 
-  /** `announce`: whether a 0 -> 1 transition means a call actually started
-      right now. 'here' replies to a probe describe a call that has been
-      running — announcing those would drop a bogus "started a call" line
-      on every reconnect. */
-  track(server, channel, name, present, announce = true) {
+  track(server, channel, name, present) {
     const key = this.key(server, channel);
     if (!this.presence.has(key)) this.presence.set(key, new Set());
     const set = this.presence.get(key);
-    if (present && announce && set.size === 0) this.onCallStarted(server, channel, name);
     present ? set.add(name) : set.delete(name);
   }
 
@@ -743,13 +742,13 @@ export class VoiceManager {
   async startShare() {
     if (!this.active || this.share) return;
     if (!navigator.mediaDevices?.getDisplayMedia) {
-      throw new Error('screen sharing is not available in this browser');
+      throw new Error('Screen sharing isn’t supported in this browser.');
     }
     const stream = await navigator.mediaDevices.getDisplayMedia({ video: true, audio: false });
     const track = stream.getVideoTracks()[0];
     if (!track) {
       stream.getTracks().forEach((t) => t.stop());
-      throw new Error('no video track in the captured screen');
+      throw new Error('Nothing was shared. Try again.');
     }
     // The browser's own "stop sharing" bar ends the track out from under us.
     track.addEventListener('ended', () => {
@@ -776,7 +775,7 @@ export class VoiceManager {
   async startCamera() {
     if (!this.active || this.camera) return;
     if (!navigator.mediaDevices?.getUserMedia) {
-      throw new Error('camera is not available in this browser');
+      throw new Error('Camera isn’t supported in this browser.');
     }
     const stream = await navigator.mediaDevices.getUserMedia({
       video: this.videoConstraint(),
@@ -785,7 +784,7 @@ export class VoiceManager {
     const track = stream.getVideoTracks()[0];
     if (!track) {
       stream.getTracks().forEach((t) => t.stop());
-      throw new Error('no video track from the camera');
+      throw new Error('No camera found.');
     }
     // A camera yanked mid-call (unplugged, revoked) ends the track — tear down.
     track.addEventListener('ended', () => {
@@ -872,7 +871,7 @@ export class VoiceManager {
   /** The other party in a direct room, or null for a normal voice room. */
   directPeer(channel) {
     if (!channel || !channel.startsWith('dm:')) return null;
-    return channel.slice(3).split('+').find((n) => n !== this.me) ?? null;
+    return callName(channel, this.me);
   }
 
   /** Ring a member we share this server with, and wait in the room. */
@@ -1023,7 +1022,7 @@ export class VoiceManager {
         case 'cancel': {
           if (this.ring && this.ring.from === sender) {
             this.ring = null;
-            this.onNotify(`missed call from ${sender}`);
+            this.onNotify(`Missed call from ${sender}`);
           }
           break;
         }
@@ -1036,7 +1035,7 @@ export class VoiceManager {
       switch (content.action) {
         case 'join':
         case 'here': {
-          this.track(server, content.ch, sender, true, content.action === 'join');
+          this.track(server, content.ch, sender, true);
           if (content.sharing) {
             this.shares.set(sender, this.key(server, content.ch));
             this.routeVideo(content.shareSid, 'screen');

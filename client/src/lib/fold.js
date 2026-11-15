@@ -18,8 +18,8 @@ export function dayLabel(ts) {
     a.getFullYear() === b.getFullYear() &&
     a.getMonth() === b.getMonth() &&
     a.getDate() === b.getDate();
-  if (same(d, today)) return 'today';
-  if (same(d, yesterday)) return 'yesterday';
+  if (same(d, today)) return 'Today';
+  if (same(d, yesterday)) return 'Yesterday';
   return d.toLocaleDateString([], { weekday: 'long', month: 'long', day: 'numeric' });
 }
 

@@ -5,10 +5,29 @@
 // Run after: crypto-core/build-wasm.sh, npm run build, cargo build -p relay.
 import { spawn } from 'node:child_process';
 import { existsSync } from 'node:fs';
+import net from 'node:net';
 import { fileURLToPath } from 'node:url';
 import { chromium } from 'playwright';
 
 const here = (p) => fileURLToPath(new URL(p, import.meta.url));
+
+/** Whether something already answers on 127.0.0.1:`port`. */
+export function portInUse(port) {
+  return new Promise((resolve) => {
+    const s = net.connect({ port, host: '127.0.0.1' });
+    s.once('connect', () => {
+      s.destroy();
+      resolve(true);
+    });
+    s.once('error', () => resolve(false));
+  });
+}
+
+/** The first port from `from` up that nothing answers on. */
+export async function freePort(from) {
+  for (let p = from; p < from + 100; p++) if (!(await portInUse(p))) return p;
+  throw new Error(`no free port in ${from}–${from + 99}`);
+}
 
 /** Start a relay on `port` serving the built client, and a browser. */
 export async function startStack(port, env = {}) {
@@ -16,6 +35,10 @@ export async function startStack(port, env = {}) {
   const clientDir = here('../dist');
   if (!existsSync(relayBin)) throw new Error('relay binary missing — run: cargo build -p relay');
   if (!existsSync(clientDir)) throw new Error('client build missing — run: npm run build');
+  // Something else on the port (a dev server left running) would answer the
+  // page loads while the relay failed to bind, and every journey would then
+  // time out waiting to come online, with nothing saying why.
+  if (await portInUse(port)) throw new Error(`port ${port} is already in use — stop whatever is on it`);
   let relay = null;
   const startRelay = async () => {
     relay = spawn(relayBin, [], {
@@ -32,7 +55,10 @@ export async function startStack(port, env = {}) {
         ...env,
       },
     });
+    let exited = null;
+    relay.once('exit', (code) => (exited = code));
     await new Promise((r) => setTimeout(r, 800)); // let it bind
+    if (exited !== null) throw new Error(`relay exited on start (code ${exited}); port ${port} taken?`);
   };
   process.on('exit', () => relay?.kill());
   await startRelay();

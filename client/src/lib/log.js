@@ -63,6 +63,10 @@ export function createChannelLog() {
         the relay will hand out, so a local echo sorts last until the real
         entry replaces it. */
     localSeq: Math.floor(Number.MAX_SAFE_INTEGER / 2),
+    /** Entries read as 'unknown': signed, but by someone the key directory
+        had no key for yet. Kept whole, with the log id they came from, so
+        they can be checked again once it does. See `reattribute`. */
+    unverified: new Map(),
   };
 }
 
@@ -108,7 +112,7 @@ export function entryToMessage(entry, { server, channel, auth, seq }) {
  */
 export function addEntries(log, items, { server, channel }) {
   let added = 0;
-  for (const { seq, entry, auth, local = false } of items) {
+  for (const { seq, entry, auth, hid, local = false } of items) {
     // A signature that did not verify is not a message with a caveat, it is
     // someone with the room key writing in another member's name. Drop it.
     if (!entry || auth === 'forged') continue;
@@ -129,6 +133,7 @@ export function addEntries(log, items, { server, channel }) {
       // else's. Never the other way round.
       if (prior && !(prior.local && !local)) continue;
       log.base.set(id, message);
+      if (auth === 'unknown') (log.unverified ??= new Map()).set(id, { seq, entry, hid });
       added += 1;
       continue;
     }
@@ -138,6 +143,9 @@ export function addEntries(log, items, { server, channel }) {
       // or unattributable mutation is exactly the shape a room-key holder
       // would forge to tamper with someone else's message, and unlike
       // content there is no legacy of them to stay compatible with.
+      if (auth === 'unknown' && !log.mutations.has(mutationId(entry))) {
+        (log.unverified ??= new Map()).set(mutationId(entry), { seq, entry, hid });
+      }
       if (auth !== 'signed') continue;
       const id = mutationId(entry);
       if (log.mutations.has(id)) continue;
@@ -148,9 +156,49 @@ export function addEntries(log, items, { server, channel }) {
   return added;
 }
 
+/** The entries this log holds as 'unknown', for a second check. */
+export function unverifiedEntries(log) {
+  return [...(log?.unverified?.values() ?? [])];
+}
+
 /**
- * A device-local notice — "you joined", "#design was renamed", "bob was
- * removed" — placed in the channel's stream.
+ * Apply a second verdict to entries first read as 'unknown'.
+ *
+ * The key directory can fill in after a page was read (a join builds it
+ * while the first page loads). A line that now checks out becomes 'signed'
+ * and its held-back mutations take effect; one whose signature fails is
+ * dropped, exactly as it would have been on first read.
+ *
+ * @param items  `[{seq, entry, auth}]` — `auth` from `verifyEntries`
+ * @returns how many lines or mutations changed
+ */
+export function reattribute(log, items) {
+  let changed = 0;
+  for (const { seq, entry, auth } of items) {
+    if (!entry || auth === 'unknown') continue;
+    const kind = entry.k ?? 'chat';
+    if (CONTENT_KINDS.has(kind)) {
+      const id = messageId(String(entry.sender ?? ''), Number(entry.ts) || 0);
+      log.unverified?.delete(id);
+      const prior = log.base.get(id);
+      if (!prior || prior.auth !== 'unknown') continue;
+      if (auth === 'forged') log.base.delete(id);
+      else log.base.set(id, { ...prior, auth });
+      changed += 1;
+    } else if (MUTATION_KINDS.has(kind)) {
+      const id = mutationId(entry);
+      log.unverified?.delete(id);
+      if (auth !== 'signed' || log.mutations.has(id)) continue;
+      log.mutations.set(id, { seq: Number.isFinite(seq) ? seq : log.localSeq++, entry });
+      changed += 1;
+    }
+  }
+  return changed;
+}
+
+/**
+ * A device-local notice ("alice joined", "You removed bob") placed in the
+ * channel's stream.
  *
  * These are deliberately NOT written to the relay's log. They are derived
  * from events this device watched happen, so every device would write its
@@ -254,6 +302,9 @@ export function pruneLog(log, beforeTs) {
   }
   for (const [id, { entry }] of log.mutations) {
     if (Number(entry.ts) < beforeTs) log.mutations.delete(id);
+  }
+  for (const [id, { entry }] of log.unverified ?? []) {
+    if (Number(entry.ts) < beforeTs) log.unverified.delete(id);
   }
   return removed;
 }

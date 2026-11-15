@@ -14,8 +14,11 @@ export function createCrypto({ WorkerImpl = globalThis.Worker } = {}) {
   // the user staring at the splash with no error and no way back.
   let dead = null;
 
-  const killAll = (message) => {
-    dead = new Error(message);
+  // The person gets a plain sentence; the underlying cause rides along as
+  // `cause` and in the console, where a bug report can find it.
+  const killAll = (message, cause) => {
+    dead = new Error(message, { cause });
+    if (cause) console.error(`crypto worker: ${cause}`);
     for (const [, p] of pending) p.reject(dead);
     pending.clear();
   };
@@ -28,10 +31,10 @@ export function createCrypto({ WorkerImpl = globalThis.Worker } = {}) {
     ok ? p.resolve(result) : p.reject(new Error(error));
   };
   worker.onerror = (e) =>
-    killAll(`the encryption worker failed to start: ${e.message ?? 'unknown error'}`);
+    killAll('The encryption worker failed to start. Try reloading.', e.message ?? 'unknown error');
   // Fired when a module worker's static imports (crypto_core.js, and the
   // wasm it pulls in) cannot be resolved — the common real-world failure.
-  worker.onmessageerror = () => killAll('the encryption worker sent an unreadable message');
+  worker.onmessageerror = () => killAll('The encryption worker sent an unreadable message. Try reloading.');
 
   return (cmd, args = {}) =>
     new Promise((resolve, reject) => {

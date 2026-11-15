@@ -63,8 +63,8 @@ exists. Prose drifts; keep the rules where a test can reach them.
 The UI is its own product language, not a Discord/Slack skin. A private
 arcade rather than a terminal: true-black neutral surfaces, soft geometry
 (10px radii, round avatars, pills for counts), and colour carried by
-identity — member orbs and game covers hold the saturation while the chrome
-around them stays dark and out of the way. Two themes off one token contract
+identity — member avatars and game covers hold the saturation while the
+chrome around them stays dark and out of the way. Two themes off one token contract
 in `src/styles.css` — **carbon** (dark, default) and **paper** (light),
 each authored separately rather than derived, because a light-theme tint
 needs about half the alpha of a dark one to read the same.
@@ -73,21 +73,23 @@ Colour is a controlled vocabulary, one meaning each: **coral** for selection,
 the primary action and focus; **green** for a cryptographic fact or someone
 being here right now; **amber** for a guarantee that is reduced or unchecked;
 **red** for broken or irreversible. Green appears as a dot, a check or a
-waveform, never as a button. Everything a person reads or presses is sans in
-sentence case; monospace is only for characters that must line up —
-timestamps, sizes, safety numbers, codes, keys — and nothing is set in
-transformed capitals. Buttons climb one ladder (one coral primary per view,
+waveform, never as a button. Everything a person reads or presses is the
+platform's own sans (a system font stack; nothing is downloaded) in
+sentence case; monospace is only for codes a person compares character by
+character — safety numbers, keys, recovery and device codes — and nothing is
+set in transformed capitals. Times and sizes are sans with tabular figures. Buttons climb one ladder (one coral primary per view,
 then outline, quiet, warn, danger, and a neutral "pressed" for toggles that
-are on), there is one badge, and every tab bar uses the same underline. Member avatars are **mesh orbs**
-(`src/lib/avatar.js`): hashed hue blobs blurred into one wash, derived from
-the handle and never uploaded, because identity here is a key. A **circle**
+are on), there is one badge, and every tab bar uses the same underline. Member avatars are the
+member's **initial on a solid circle** (`src/components/Seal.jsx`), its colour
+from `circleFill()` in `src/lib/crest.js`, derived from the handle and never
+uploaded, because identity here is a key. A **circle**
 gets a different shape on purpose (`src/components/CircleMark.jsx`): a flat
 tile in its own colour carrying one glyph, keyed to the circle id so a rename
 never changes its face. Round is a person, tile is a place.
 
-Chrome layout, top to bottom: a full-width masthead (brand · the marker
-saying which circle and which room · invite · ⌘K palette · theme · relay
-state · who you are signed in as), the call bar when a call is running
+Chrome layout, top to bottom: a full-width masthead (brand · the circle,
+and the game when one is on screen · invite · search, the ⌘K palette · who
+you are signed in as; the relay state shows only when it is not fine), the call bar when a call is running
 somewhere you are not looking, the rooms strip, and the conversation
 (grouped messages, day dividers, hover timestamps). There is no circle rail
 and no channel column: crossing between circles is a screen
@@ -99,13 +101,14 @@ rather than a column beside every room. `Ctrl/⌘-K` opens a command palette
 
 **Mobile** (≤820px): the same components and, now, largely the same floor
 plan — one column at every width, so there are no edge drawers to summon.
-The marker drops the circle name down to its tile, the pane header keeps
-only the signals that are not already in the fascia, the invite action and
-the theme switch move into the palette and Settings, and a running call
+Inside a circle the fascia gives its width to the circle's name, the pane
+header keeps the room name, topic and its settings gear, the invite action
+moves into the palette, and a running call
 rides in the fascia as a pill (mic state and duration) instead of the call
-bar, which cost the conversation a row. Touch devices get bigger
-targets, surfaced
-hover-affordances, 16px inputs (so iOS doesn't zoom the page on focus),
+bar, which cost the conversation a row. Any coarse pointer (a phone, a
+phone held sideways, a touch tablet) gets 44px targets — checked by
+`npm run e2e:touch` — surfaced hover-affordances, 16px inputs (so iOS
+doesn't zoom the page on focus),
 `dvh` heights and safe-area insets for notches and home bars. The client
 ships a web manifest plus generated icons (`scripts/gen-icons.mjs`,
 outputs committed under `public/icons/`), so it installs to the home
@@ -117,7 +120,7 @@ the real components against mock state (no relay, no WASM) — views:
 `&theme=paper`. Useful for design review and screenshots when the crypto
 core isn't built.
 
-`npm run shots:ui` walks the whole gallery and writes 42 PNGs to `SHOT_DIR`
+`npm run shots:ui` walks the whole gallery and writes 46 PNGs to `SHOT_DIR`
 (default `/tmp/ui`) — every view, both themes, desktop and phone, at 2×. The
 phone context sets `hasTouch`, which is load-bearing: without it
 `@media (hover: none)` never matches and the shot shows a layout no phone
@@ -222,11 +225,13 @@ cargo build -p relay            # e2e spawns target/debug/relay
 npm install
 npm run build
 npm run e2e                     # full journey, two browser profiles
+npm run e2e:resilience          # reloads, two tabs, several devices
+npm run e2e:touch               # every control 44x44 in four touch contexts
 ```
 
 The e2e covers: onboarding with the recovery gate, server + channel
-creation, add-by-handle, encrypted chat both directions, the no-scrollback
-assertion (pre-join message must NOT appear for the joiner), reload with
+creation, add-by-handle, encrypted chat both directions, a joiner reading
+the room's past, reload with
 IndexedDB state (history intact and ratchets live), and identity restore
 in a fresh profile. `CHROMIUM_PATH=/path/to/chrome` overrides the browser.
 `node e2e/screenshot.mjs` renders a demo session to a PNG.

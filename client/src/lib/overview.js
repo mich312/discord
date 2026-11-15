@@ -244,7 +244,8 @@ export function describeUntil(at, now = Date.now()) {
     number sits next to a live mic. */
 export function describeCallLength(since, now = Date.now()) {
   const d = Math.max(0, now - since);
-  if (d < MIN) return 'just now';
+  // A duration, not a moment: "just now" read as "In call just now".
+  if (d < MIN) return '<1 min';
   if (d < 2 * HOUR) return `${Math.floor(d / MIN)} min`;
   return `${Math.floor(d / HOUR)} h ${Math.floor((d % HOUR) / MIN)} min`;
 }

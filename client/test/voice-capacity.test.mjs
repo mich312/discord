@@ -34,13 +34,11 @@ test('the ceiling matches what a mesh can actually carry', () => {
   assert.ok(MESH_LIMIT >= 6 && MESH_LIMIT <= 8, `MESH_LIMIT is ${MESH_LIMIT}`);
 });
 
-test('the refusal explains itself instead of just failing', () => {
-  // A bare "could not join" reads as a bug in the app rather than a
-  // property of peer-to-peer calls.
+test('the refusal says the call is full and what the limit is', () => {
+  // A bare "could not join" reads as a bug in the app.
   const msg = meshFullMessage();
   assert.match(msg, /full/i);
   assert.ok(msg.includes(String(MESH_LIMIT)), 'says what the limit is');
-  assert.match(msg, /peer-to-peer/i, 'says why the limit exists');
 });
 
 /* -------------------------------------------------- hiding your address -- */
