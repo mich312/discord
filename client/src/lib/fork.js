@@ -174,13 +174,13 @@ export class ForkWatch {
  */
 export function forkMessage({ stranded, outOfSync }, name) {
   if (outOfSync) {
-    return `"${name}" is out of sync — this device is on a branch of its own and cannot read new messages. Ask a member for a fresh invite link and open it to rejoin.`;
+    return `${name} is out of sync on this device. Open a new invite link to rejoin.`;
   }
   if (stranded.length === 1) {
-    return `messages from ${stranded[0]} in "${name}" cannot be read — their device may need to rejoin via a fresh invite link.`;
+    return `Can't read messages from ${stranded[0]} in ${name}. They may need a new invite link.`;
   }
   if (stranded.length > 1) {
-    return `messages from ${stranded.join(', ')} in "${name}" cannot be read — their devices may need to rejoin via a fresh invite link.`;
+    return `Can't read messages from ${stranded.join(', ')} in ${name}. They may need new invite links.`;
   }
   return null;
 }

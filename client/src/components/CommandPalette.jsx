@@ -1,5 +1,5 @@
 import React, { useEffect, useMemo, useRef, useState } from 'react';
-import { Hash, CircleGlyph } from './icons.jsx';
+import { Hash, CircleGlyph, Wave } from './icons.jsx';
 import { useDialog } from '../lib/useDialog.js';
 import { MIN_QUERY } from '../lib/search.js';
 import { cx } from '../lib/cx.js';
@@ -17,7 +17,7 @@ const optId = (id) => `palette-opt-${String(id).replace(/\s+/g, '_')}`;
 // global actions — and, below them, the messages themselves: search has to
 // live somewhere, and a second surface for it would be a worse answer than
 // the one keystroke people already press.
-export default function CommandPalette({ servers, active, actions, onSearch, onNavigate, onClose }) {
+export default function CommandPalette({ servers, active, actions, onSearch, onNavigate, onJoinVoice, onClose }) {
   const [query, setQuery] = useState('');
   const [index, setIndex] = useState(0);
   const [found, setFound] = useState({ hits: [], truncated: false, for: '' });
@@ -52,15 +52,33 @@ export default function CommandPalette({ servers, active, actions, onSearch, onN
   }, [q, onSearch]);
 
   const items = useMemo(() => {
+    // The circle's name on a row only when it tells you something: with one
+    // circle, or for the circle you are in, it repeated on every row. It
+    // still matches when typed.
+    const where = (s) => (servers.length > 1 && s.id !== active ? s.name : undefined);
     const rooms = servers.flatMap((s) =>
       s.channels.map((ch) => ({
         id: `room:${s.id}:${ch}`,
         label: ch,
-        hint: s.name,
+        hint: where(s),
+        keywords: s.name,
         glyph: <Hash />,
         run: () => onNavigate(s.id, ch),
       }))
     );
+    // Voice rooms of the circle you are in, so one past the strip's edge can
+    // be reached by typing. Picking one joins its call, and says so.
+    const current = servers.find((s) => s.id === active);
+    const calls =
+      current && onJoinVoice
+        ? (current.voiceChannels ?? ['lounge']).map((ch) => ({
+            id: `voice:${current.id}:${ch}`,
+            label: ch,
+            hint: 'Join call',
+            glyph: <Wave />,
+            run: () => onJoinVoice(ch),
+          }))
+        : [];
     const circles = servers.map((s) => ({
       id: `circle:${s.id}`,
       label: s.name,
@@ -68,12 +86,11 @@ export default function CommandPalette({ servers, active, actions, onSearch, onN
       glyph: <CircleGlyph />,
       run: () => onNavigate(s.id, null), // land on the circle's home base
     }));
-    const all = [...rooms, ...circles, ...actions];
+    const all = [...rooms, ...calls, ...circles, ...actions];
     const needle = query.trim().toLowerCase();
     const jump = needle
-      ? all.filter(
-          (it) =>
-            it.label.toLowerCase().includes(needle) || (it.hint ?? '').toLowerCase().includes(needle)
+      ? all.filter((it) =>
+          [it.label, it.hint, it.keywords].some((t) => (t ?? '').toLowerCase().includes(needle))
         )
       : all;
 
@@ -97,7 +114,7 @@ export default function CommandPalette({ servers, active, actions, onSearch, onN
         : [];
 
     return [...jump, ...messages];
-  }, [servers, active, actions, query, found, onNavigate]);
+  }, [servers, active, actions, query, found, onNavigate, onJoinVoice]);
 
   useEffect(() => {
     // useDialog focuses the first control, which is this input; re-assert it
@@ -148,8 +165,8 @@ export default function CommandPalette({ servers, active, actions, onSearch, onN
         <input
           ref={inputRef}
           className="palette-input"
-          placeholder="Jump to a room, or search your messages…"
-          aria-label="Jump to a room, or search your messages"
+          placeholder="Search rooms and messages"
+          aria-label="Search rooms and messages"
           role="combobox"
           aria-expanded={items.length > 0}
           aria-controls="palette-results"
@@ -160,12 +177,12 @@ export default function CommandPalette({ servers, active, actions, onSearch, onN
         />
         <span className="sr-only" role="status" aria-live="polite">
           {items.length === 0
-            ? `Nothing matches ${query}`
+            ? 'No results'
             : `${items.length} result${items.length === 1 ? '' : 's'}`}
         </span>
         {items.length === 0 ? (
           <div className="palette-empty">
-            {searching ? `Searching your messages for “${query}”…` : `Nothing matches “${query}”`}
+            {searching ? 'Searching…' : 'No results'}
           </div>
         ) : (
           <ul className="palette-results" id="palette-results" role="listbox" ref={listRef}>
@@ -194,7 +211,7 @@ export default function CommandPalette({ servers, active, actions, onSearch, onN
                       {it.snippet.after}
                     </span>
                   )}
-                  <span className="hint">{it.hint}</span>
+                  {it.hint && <span className="hint">{it.hint}</span>}
                 </button>
               </li>
             ))}
@@ -202,20 +219,13 @@ export default function CommandPalette({ servers, active, actions, onSearch, onN
         )}
         {found.truncated && found.for === query.trim() && (
           <div className="palette-note">
-            Showing the most recent matches only. Narrow the search to see older ones.
+            Only recent matches shown. Try more words.
           </div>
         )}
         <div className="palette-foot">
-          <span><kbd>↑</kbd> <kbd>↓</kbd> Move</span>
-          <span><kbd>↵</kbd> Open</span>
-          <span><kbd>esc</kbd> Close</span>
-          {/* The honest limit, stated where it matters rather than in a
-              README nobody opens. The relay holds ciphertext and cannot
-              index it, so searching means searching what has been decrypted
-              here — which, now that rooms are read back a page at a time, is
-              what you have actually opened this session rather than
-              everything the device ever kept. */}
-          <span className="palette-scope">Search covers what you&rsquo;ve opened this session</span>
+          {/* The relay cannot index ciphertext, so search only covers what
+              this device has decrypted: rooms opened this session. */}
+          <span>Only searches rooms opened this session</span>
         </div>
       </div>
     </div>

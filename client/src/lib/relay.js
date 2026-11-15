@@ -165,7 +165,7 @@ export class Relay {
 
   request(msg) {
     return new Promise((resolve, reject) => {
-      if (!this.ready) return reject(new Error('offline'));
+      if (!this.ready) return reject(new Error('You’re offline.'));
       const rid = this.nextRid++;
       // A pending request resolved only on a matching rid or a socket close.
       // A relay that stays connected — answering pings — but never answers
@@ -174,7 +174,8 @@ export class Relay {
       // the failure is reportable and retryable.
       const timer = setTimeout(() => {
         if (this.pending.delete(rid)) {
-          reject(new Error(`the relay did not answer "${msg.t}" in time`));
+          console.warn(`relay did not answer "${msg.t}" in time`);
+          reject(new Error('The server didn’t answer. Try again.'));
         }
       }, REQUEST_TIMEOUT_MS);
       this.pending.set(rid, {

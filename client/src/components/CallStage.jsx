@@ -6,7 +6,7 @@ import { Wave, Screen, Mic, MicOff, Camera, CameraOff, ArrowLeft, ArrowUp, Minim
 import { cx } from '../lib/cx.js';
 
 function timeOf(ts) {
-  return new Date(ts).toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+  return new Date(ts).toLocaleTimeString([], { hour: 'numeric', minute: '2-digit' });
 }
 
 // One participant's screen in the share stage. The stream is a live
@@ -58,7 +58,7 @@ function CameraTile({ stream, name, mine }) {
       autoPlay
       playsInline
       muted
-      aria-label={mine ? 'your camera' : `${name}'s camera`}
+      aria-label={mine ? 'Your camera' : `${name}'s camera`}
       data-testid={`bubble-cam-video-${name}`}
     />
   );
@@ -128,12 +128,8 @@ export default function CallStage({
           </span>
           {title}
         </h2>
-        <span className="stage-count">
-          {participants.length} in call
-          {voice.listenOnly && (
-            <span className="listen-only"> · Listen only: no microphone found</span>
-          )}
-        </span>
+        <span className="stage-count">{participants.length} in call</span>
+        {voice.listenOnly && <span className="listen-only">Listen only (no mic)</span>}
       </header>
       <div className="stage-body">
         <section className="stage-main" data-testid="stage-main">
@@ -210,7 +206,13 @@ export default function CallStage({
                       <MicOff size={14} /> Muted
                     </span>
                   )}
-                  {conn && conn !== 'connected' && <span className="bubble-conn">{conn}</span>}
+                  {conn && conn !== 'connected' && (
+                    <span className="bubble-conn">
+                      {conn === 'failed' || conn === 'disconnected' || conn === 'closed'
+                        ? 'No connection'
+                        : 'Connecting…'}
+                    </span>
+                  )}
                 </li>
               );
             })}
@@ -254,7 +256,7 @@ export default function CallStage({
             <button className="button ghost" data-testid="stage-close" onClick={onClose}>
               <Minimize size={18} />
               Hide call
-              {!voice.muted && !voice.listenOnly && <span className="muted"> · mic stays on</span>}
+              {!voice.muted && !voice.listenOnly && <span className="muted"> (mic on)</span>}
             </button>
             <span className="stage-dock-gap" aria-hidden="true" />
             <button className="button danger" data-testid="stage-leave" onClick={onLeave}>
@@ -268,11 +270,6 @@ export default function CallStage({
             <h3 id="stage-chat-title">Chat</h3>
           </div>
           <div className="scroll" ref={scroller} data-testid="stage-chat-scroll">
-            {messages.length === 0 && (
-              <div className="stage-chat-empty muted">
-                No messages yet. They stay with this {direct ? 'call' : 'room'}.
-              </div>
-            )}
             {messages.map((m, i) =>
               m.system ? (
                 <div className="stage-chat-line system" key={i}>
@@ -280,10 +277,10 @@ export default function CallStage({
                 </div>
               ) : (
                 <div className="stage-chat-line" key={i}>
-                  <Seal name={m.sender} size={18} title={m.sender} />
+                  <Seal name={m.sender} size={20} title={m.sender} />
                   <span className={cx('sender', m.sender === me && 'self')}>{m.sender}</span>
                   <span className="text">
-                    {m.file ? `sent a file: ${m.file.name}` : m.game ? `started ${m.game.name}` : m.text}
+                    {m.deleted ? 'deleted a message' : m.file ? `sent ${m.file.name}` : m.game ? `started ${m.game.name}` : m.text}
                   </span>
                   <time>{timeOf(m.ts)}</time>
                 </div>
@@ -305,8 +302,10 @@ export default function CallStage({
                 type="text"
                 value={draft}
                 onChange={(e) => setDraft(e.target.value)}
-                placeholder={direct ? `Message ${direct}` : `Message ${channel}`}
-                aria-label={direct ? `Message ${direct}` : `Message ${channel}`}
+                // A direct call's chat rides the circle's group, so the whole
+                // circle can read it; the label says whose room it is.
+                placeholder={direct ? `Message ${circle?.name ?? 'the circle'}` : `Message ${channel}`}
+                aria-label={direct ? `Message ${circle?.name ?? 'the circle'}` : `Message ${channel}`}
                 data-testid="stage-composer"
               />
               <button type="submit" className="button primary send" disabled={!draft.trim()}>

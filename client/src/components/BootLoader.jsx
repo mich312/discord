@@ -1,10 +1,8 @@
 import React from 'react';
 import { QuorumGlyph } from './icons.jsx';
 
-// First paint before the identity is unlocked and circles decrypt: the brand
-// mark breathing over an indeterminate bar. Not a spinner — it names what's
-// happening (keys being derived, ciphertext opened) so the wait reads as
-// work, not lag. Falls back to a still mark under reduced motion.
+// First paint before the identity is unlocked: the brand mark over an
+// indeterminate bar. Falls back to a still mark under reduced motion.
 export default function BootLoader() {
   return (
     <div className="boot" data-testid="boot-loader">
@@ -14,7 +12,7 @@ export default function BootLoader() {
       <div className="boot-bar" aria-hidden="true">
         <span />
       </div>
-      <div className="boot-label" role="status">Decrypting your circles…</div>
+      <div className="boot-label" role="status">Loading…</div>
     </div>
   );
 }

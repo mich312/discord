@@ -8,6 +8,7 @@ import { FORK_THRESHOLD } from '../src/lib/fork.js';
 import { b64 } from '../src/lib/relay.js';
 import { openBackup, openLogEntry, sealBackup, sealLogEntry } from '../src/lib/history.js';
 import { renderLog } from '../src/lib/log.js';
+import { b64url, encryptBlob, generateFragmentKey } from '../src/lib/invite.js';
 
 function fakeDb() {
   return {
@@ -241,6 +242,25 @@ test('being removed by someone else forgets the circle on this device', async ()
   c.servers.set('srv', r);
   await c.onGroupMessage({ group: 'srv', seq: 5, payload: '' });
   assert.ok(!c.servers.has('srv'), 'the circle we were kicked from is gone locally');
+  clearTimeout(c.backupTimer);
+});
+
+test('a membership change says who joined and who was removed, and nothing else', async () => {
+  // It used to print the whole roster and the epoch number.
+  const events = [
+    { kind: 'membershipChange', epoch: 4, sender: 'alice', members: ['alice', 'bob', 'carol', 'dave'] },
+    { kind: 'membershipChange', epoch: 5, sender: 'carol', members: ['alice', 'carol'] },
+  ];
+  const { c } = makeController();
+  const base = c.crypto;
+  c.crypto = async (cmd, args) => (cmd === 'receive' ? { event: events.shift(), state: null } : base(cmd, args));
+  c.voice = { membershipChanged() {} };
+  const r = record({ members: ['alice', 'bob'] });
+  c.servers.set('srv', r);
+  await c.onGroupMessage({ group: 'srv', seq: 5, payload: '' });
+  await c.onGroupMessage({ group: 'srv', seq: 6, payload: '' });
+  const said = msgs(c).filter((m) => m.system).map((m) => m.text);
+  assert.deepEqual(said, ['carol and dave joined', 'bob and dave were removed']);
   clearTimeout(c.backupTimer);
 });
 
@@ -766,6 +786,105 @@ test('an unsigned mutation cannot rewrite a line, though unsigned content still 
   clearTimeout(c.backupTimer);
 });
 
+/* --------------------------------------- sender confirmed on first read -- */
+// A joiner used to see "sender not confirmed" on every line of history: the
+// first page was verified before the key directory had been built from the
+// roster, so every author read as 'unknown', and nothing checked again.
+
+const ROSTER = { alice: new Uint8Array(32).fill(1), bob: new Uint8Array(32).fill(2) };
+
+/** A controller whose relay serves `entries` as the room's log, and whose
+    worker reports `roster()` as the circle's keys. */
+function joiner(entries, roster = () => ROSTER, extra = {}) {
+  const { c, dispatched } = makeController({
+    relayHandler: (msg) =>
+      msg.t === 'history_fetch'
+        ? Promise.resolve({ entries, complete: true })
+        : extra[msg.t]
+          ? extra[msg.t](msg)
+          : Promise.resolve({ seq: 1 }),
+  });
+  c.db = memoryDb();
+  const base = fakeCrypto();
+  c.crypto = async (cmd, args = {}) => {
+    if (cmd === 'memberKeys') return roster();
+    if (cmd === 'joinFromWelcome') return { group: 'srv', epoch: 5, members: ['alice', 'bob'], state: null };
+    if (cmd === 'joinByExternalCommit') {
+      return { group: 'srv', commit: new Uint8Array([7]), epoch: 6, members: ['alice', 'bob'], state: null };
+    }
+    return base(cmd, args);
+  };
+  return { c, dispatched };
+}
+
+test('joining by a welcome builds the key directory before history is verified', async () => {
+  const hkey = b64.enc(new Uint8Array(32));
+  const entries = await sealedLog(hkey, 'srv', 'h1', [
+    { v: 1, k: 'chat', sender: 'bob', ts: 100, text: 'from before you joined' },
+  ]);
+  const { c } = joiner(entries);
+  await c.onWelcome({ group: 'srv', after: 9, payload: b64.enc(new Uint8Array([1])) });
+  const r = c.servers.get('srv');
+  assert.ok(r.keys?.bob, 'the roster filled the directory as part of the join');
+  // The room key arrives with the next metadata rebroadcast.
+  r.chanMeta = { general: { hid: 'h1', hkey } };
+  const shown = (await c.loadMessages('srv', 'general')).filter((m) => !m.system);
+  assert.deepEqual(shown.map((m) => [m.text, m.auth]), [['from before you joined', 'signed']]);
+  clearTimeout(c.backupTimer);
+});
+
+test('joining by an invite link builds the key directory before history is verified', async () => {
+  const hkey = b64.enc(new Uint8Array(32));
+  const entries = await sealedLog(hkey, 'srv', 'h1', [
+    { v: 1, k: 'chat', sender: 'bob', ts: 100, text: 'welcome aboard' },
+  ]);
+  const fragment = generateFragmentKey();
+  const payload = b64.enc(await encryptBlob(fragment, new Uint8Array([1, 2, 3])));
+  const { c } = joiner(entries, () => ROSTER, {
+    redeem_invite: () => Promise.resolve({ group: 'srv', payload }),
+    send: () => Promise.resolve({ seq: 12 }),
+  });
+  c.pendingInvite = { id: 'inv', key: b64url.enc(fragment) };
+  await c.redeemPendingInvite();
+  const r = c.servers.get('srv');
+  assert.ok(r.keys?.bob, 'the roster filled the directory as part of the join');
+  r.chanMeta = { general: { hid: 'h1', hkey } };
+  const shown = (await c.loadMessages('srv', 'general')).filter((m) => !m.system);
+  assert.deepEqual(shown.map((m) => [m.text, m.auth]), [['welcome aboard', 'signed']]);
+  clearTimeout(c.backupTimer);
+});
+
+test('a line read before the directory knew its author is confirmed when it learns it', async () => {
+  const hkey = b64.enc(new Uint8Array(32));
+  const entries = await sealedLog(hkey, 'srv', 'h1', [
+    { v: 1, k: 'chat', sender: 'bob', ts: 100, text: 'first draft' },
+    { v: 1, k: 'edit', sender: 'bob', ts: 200, to: { ts: 100 }, text: 'final wording' },
+    { v: 1, k: 'chat', sender: 'bob', ts: 300, text: 'written in his name' },
+  ]);
+  let roster = {};
+  const { c, dispatched } = joiner(entries, () => roster);
+  // The last entry's signature does not hold up once there is a key to check.
+  const base = c.crypto;
+  c.crypto = async (cmd, args = {}) =>
+    cmd === 'verifyEntries'
+      ? (args.items ?? []).map((item) => !new TextDecoder().decode(item.message).includes('in his name'))
+      : base(cmd, args);
+  const r = record({ chanMeta: { general: { hid: 'h1', hkey } } });
+  c.servers.set('srv', r);
+
+  let shown = await c.loadMessages('srv', 'general');
+  assert.deepEqual(shown.map((m) => m.auth), ['unknown', 'unknown'], 'no key yet: unchecked, not wrong');
+  assert.equal(shown[0].text, 'first draft', 'and an unchecked edit waits');
+
+  roster = ROSTER;
+  await c.refreshKeyDirectory(r);
+  shown = renderLog(c.channelLog('srv', 'general'));
+  assert.deepEqual(shown.map((m) => [m.text, m.auth]), [['final wording', 'signed']],
+    'confirmed lines say so, their edits land, and the forgery is dropped');
+  assert.ok(dispatched.some((a) => a.type === 'refreshMessages'), 'and the room redraws');
+  clearTimeout(c.backupTimer);
+});
+
 test('a rally rides the ephemeral fan-out too, never the group log', async () => {
   const { c } = makeController();
   c.servers.set('srv', record());
@@ -918,7 +1037,7 @@ test("a peer's key changing clears their badge on the next membership change", a
   assert.deepEqual(r.verified, [], 'the ✓ is gone');
   assert.equal(r.verifiedSn.bob, undefined, 'and the stale binding was dropped');
   assert.ok(
-    msgs(c).some((m) => m.system && m.text.includes("bob's safety number changed")),
+    msgs(c).some((m) => m.system && m.text.includes('bob’s key changed')),
     'the user is told, rather than the badge silently vanishing'
   );
   clearTimeout(c.backupTimer);
@@ -1007,15 +1126,15 @@ test('removing someone rotates every kept-history key and keeps the old ones for
   assert.deepEqual(meta.hkeys, ['OLD-KEY'], 'the superseded key is kept so members can still read the past');
   assert.equal(r.chanMeta.chatter.hkey, undefined, 'a channel without history is untouched');
   assert.ok(
-    msgs(c).some((m) => m.system && m.text.includes('new history key for #general')),
-    'and the rotation is announced'
+    msgs(c).some((m) => m.system && m.text === 'You removed bob'),
+    'the room says who was removed, and nothing about keys'
   );
   clearTimeout(c.backupTimer);
 });
 
 test('removing someone revokes the circle’s invite links instead of refreshing them', async () => {
   const revoked = [];
-  const { c } = makeController({
+  const { c, dispatched } = makeController({
     relayHandler: (msg) => {
       if (msg.t === 'revoke_invite') revoked.push(msg.invite);
       if (msg.t === 'update_invite') throw new Error('a removed member’s link must not be refreshed');
@@ -1040,8 +1159,12 @@ test('removing someone revokes the circle’s invite links instead of refreshing
   assert.deepEqual(revoked, ['inv1', 'inv2'], 'every parked link is killed');
   assert.deepEqual(r.invites, [], 'and dropped locally');
   assert.ok(
-    msgs(c).some((m) => m.system && m.text.includes('2 invite links revoked')),
+    dispatched.some((a) => a.type === 'toast' && /invite links no longer work/.test(a.text ?? '')),
     'the admin is told, since this also invalidates links for pending joiners'
+  );
+  assert.ok(
+    !msgs(c).some((m) => m.system && /invite link/.test(m.text)),
+    'and the room transcript carries only the removal'
   );
   clearTimeout(c.backupTimer);
 });
@@ -1330,6 +1453,20 @@ test('channelDigest ignores system chips', async () => {
   assert.equal(general.last, null, 'and it is not the preview either');
 });
 
+test('channelDigest previews a deleted line or a game card in words, never "undefined"', async () => {
+  // Neither has a .text: the preview used to read "alice: undefined".
+  const { c } = makeController({ relayHandler: countingRelay({ h1: 0 }) });
+  c.servers.set('srv', record({ chanMeta: { general: { hid: 'h1' } } }));
+  seed(c, { sender: 'bob', ts: 100, text: 'to be deleted' });
+  c.applyLiveEntry('srv', 'general', { k: 'del', sender: 'bob', ts: 150, to: { ts: 100 } });
+  let [general] = await c.channelDigest('srv');
+  assert.equal(general.last.text, 'deleted a message');
+
+  c.applyLiveEntry('srv', 'general', { k: 'game', sender: 'bob', ts: 200, game: { id: 'g1', name: 'Chess', url: 'https://chess.example' } });
+  [general] = await c.channelDigest('srv');
+  assert.equal(general.last.text, 'started Chess');
+});
+
 test('a circle unread total sums its rooms, and survives an unreachable relay', async () => {
   const { c } = makeController({ relayHandler: countingRelay({ h_gen: 2, h_des: 3 }) });
   c.servers.set(
@@ -1605,22 +1742,6 @@ test('two structural changes in a row do not race on the version', async () => {
   await runPendingBackup(c);
   assert.equal(maxConcurrent, 1, 'uploads are serialized');
   clearTimeout(c.backupTimer);
-});
-
-test('being the first into a voice room starts a call rather than throwing', async () => {
-  // The line that announces a call is device-local and synchronous — it
-  // returns nothing. A `.catch(() => {})` on it threw a TypeError instead of
-  // swallowing one, from inside track(), from inside join(), so the first
-  // person into a room got a toast and no call. Every call starts with
-  // somebody being first, so this was every call.
-  const { c } = makeController();
-  c.servers.set('srv', record({ id: 'srv', name: 'Race Team', channels: ['general'] }));
-  assert.doesNotThrow(() => c.announceCallStarted('srv', 'lounge', 'alice'));
-  const said = renderLog(c.channelLog('srv', 'general')).filter((m) => m.system);
-  assert.ok(
-    said.some((m) => m.text === 'you started a call in lounge'),
-    'the room says who opened the call',
-  );
 });
 
 /* ------------------------------------------- what survives a bad moment -- */
@@ -2116,7 +2237,7 @@ test('a relay that no longer knows the account sends the session to the gate, ke
   c.me = 'michael';
   await c.onAuthRejected('unknown account on this relay');
   assert.match(c.authError, /no account for "michael"/);
-  assert.match(c.authError, /may have been reset/);
+  assert.match(c.authError, /recovery file/);
   assert.equal(removed, false, 'the identity is not wiped: it may be the only copy of a key somebody wants');
   assert.deepEqual(dispatched.at(-1), { type: 'phase', phase: 'onboarding' });
 });

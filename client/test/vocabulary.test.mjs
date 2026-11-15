@@ -82,7 +82,6 @@ const ORPHANS = new Set([
   'incoming',
   'load-older',
   'member-remove',
-  'msg',
   'muted-badge',
   'now',
   'outgoing',
@@ -139,7 +138,7 @@ test('no class string is built by a ternary that repeats its base', () => {
 // Inline style is how a value that belongs in the stylesheet gets in without
 // passing any of these checks. A handful are legitimate — a computed hue, a
 // measured height — and the budget exists so the handful stays one.
-const INLINE_BUDGET = 7;
+const INLINE_BUDGET = 6;
 
 test('inline styles stay within budget', () => {
   const found = jsxFiles().flatMap((f) => {

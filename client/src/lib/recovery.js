@@ -50,7 +50,7 @@ export async function wrapIdentity(identity, code) {
 /** file bytes + code -> identity bytes (throws on wrong code/corrupt file) */
 export async function unwrapIdentity(fileBytes, code) {
   const file = JSON.parse(new TextDecoder().decode(fileBytes));
-  if (file.v !== 1) throw new Error('unsupported recovery file version');
+  if (file.v !== 1) throw new Error('This recovery file isn’t supported.');
   const key = await deriveKey(code, fromB64(file.salt));
   const pt = await crypto.subtle.decrypt(
     { name: 'AES-GCM', iv: fromB64(file.iv) },

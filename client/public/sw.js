@@ -141,7 +141,7 @@ self.addEventListener('push', (event) => {
       } catch {
         /* opaque payload — fall through to the generic text */
       }
-      let body = 'new encrypted activity';
+      let body = 'New activity';
       // Per-kind, per-circle tags: a second message in the same circle
       // coalesces (renotify still alerts), but a call never replaces a
       // message notification and one circle never swallows another's.
@@ -150,17 +150,17 @@ self.addEventListener('push', (event) => {
       const group = data.call ?? data.rally ?? data.group ?? data.welcome ?? null;
       const name = group ? await circleName(group) : null;
       if (data.welcome) {
-        body = name ? `you were added to “${name}”` : 'you were added to a circle';
+        body = name ? `You were added to ${name}` : 'You were added to a circle';
         tag = `quorum-welcome-${data.welcome}`;
       } else if (data.call) {
-        body = name ? `incoming call in “${name}”` : 'incoming call';
+        body = name ? `Call in ${name}` : 'Incoming call';
         tag = `quorum-call-${data.call}`;
         requireInteraction = true; // a ring should stay up until acted on
       } else if (data.rally) {
-        body = name ? `a rally was started in “${name}”` : 'a rally was started';
+        body = name ? `Someone wants to play in ${name}` : 'Someone wants to play';
         tag = `quorum-rally-${data.rally}`;
       } else if (data.group) {
-        body = name ? `new message in “${name}”` : 'new encrypted message';
+        body = name ? `New message in ${name}` : 'New message';
         tag = `quorum-msg-${data.group}`;
       }
       await self.registration.showNotification('quorum', {

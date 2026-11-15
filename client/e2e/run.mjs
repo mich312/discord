@@ -148,6 +148,15 @@ async function openRoom(page, channel) {
   );
 }
 
+/** Open the room strip's "+" menu and pick "Text room" or "Voice room". */
+async function newRoom(page, kind, name) {
+  await page.click('[data-testid=new-room-menu]');
+  await page.click(`[data-testid=${kind === 'voice' ? 'new-voice' : 'new-channel'}]`);
+  const field = `[data-testid=${kind === 'voice' ? 'new-voice-name' : 'new-channel-name'}]`;
+  await page.fill(field, name);
+  await page.press(field, 'Enter');
+}
+
 async function joinViaInvite(page, handle, url) {
   await page.goto(url);
   await page.fill('[data-testid=handle-input]', handle);
@@ -237,6 +246,7 @@ try {
     throw new Error(`unexpected countdown label: "${countdown}"`);
   }
   // And the noticeboard takes a pin.
+  await alice.click('[data-testid=overview-notice-add]');
   await alice.fill(
     '[data-testid=overview-notice-input]',
     'Trailer leaves 6am Saturday — pack the spare diffuser'
@@ -284,6 +294,7 @@ try {
   }
 
   console.log('4b. the noticeboard belongs to the roster: non-admin bob pins');
+  await bob.click('[data-testid=overview-notice-add]');
   await bob.fill('[data-testid=overview-notice-input]', 'brakes bedded in, car is ready');
   await bob.click('[data-testid=overview-notice-post]');
   await alice.click('[data-testid=channel-overview]');
@@ -369,9 +380,7 @@ try {
   await bob.waitForSelector('text=bob should read this back later', { timeout: 10000 });
 
   console.log('6. second channel propagates encrypted');
-  await alice.click('[data-testid=new-channel]');
-  await alice.fill('[data-testid=new-channel-name]', 'logistics');
-  await alice.press('[data-testid=new-channel-name]', 'Enter');
+  await newRoom(alice, 'text', 'logistics');
   await bob.waitForSelector('[data-testid=channel-logistics]', { timeout: 10000 });
   await openRoom(alice, 'logistics');
   await alice.fill('[data-testid=composer]', 'trailer leaves at 6am');
@@ -416,18 +425,17 @@ try {
   }
 
   console.log('6b. admin renames + deletes a channel (via settings); non-admins cannot');
-  // bob is not an admin: no create button, no per-channel settings gear.
-  if (await bob.locator('[data-testid=new-channel]').count()) {
-    throw new Error('non-admin bob should not see the channel create button');
+  // bob is not an admin: no "+" room menu, no per-channel settings gear.
+  // The "+" is the only way to the create items, so its absence is the check.
+  if (await bob.locator('[data-testid=new-room-menu]').count()) {
+    throw new Error('non-admin bob should not see the new-room menu');
   }
   if (await bob.locator('[data-testid=channel-settings-general]').count()) {
     throw new Error('non-admin bob should not see channel settings gear');
   }
   // alice creates a scratch channel, posts to it, then renames it via the
   // settings modal — history must follow the rename.
-  await alice.click('[data-testid=new-channel]');
-  await alice.fill('[data-testid=new-channel-name]', 'scratch');
-  await alice.press('[data-testid=new-channel-name]', 'Enter');
+  await newRoom(alice, 'text', 'scratch');
   await bob.waitForSelector('[data-testid=channel-scratch]', { timeout: 10000 });
   await openRoom(alice, 'scratch');
   await alice.fill('[data-testid=composer]', 'note before rename');
@@ -523,7 +531,7 @@ try {
   await charlie.waitForSelector('text=Qualifying at Spa', { timeout: 15000 });
   await charlie.waitForSelector('text=Trailer leaves 6am Saturday', { timeout: 15000 });
   // Existing members see the join and the unverified badge.
-  await alice.waitForSelector('text=charlie joined via invite link', { timeout: 15000 });
+  await alice.waitForSelector('text=charlie joined with an invite link', { timeout: 15000 });
   await openBoard(alice);
   await alice.waitForSelector('[data-testid=badge-unverified-charlie]', { timeout: 5000 });
   await openRoom(alice, 'general');
@@ -654,9 +662,12 @@ try {
   console.log('15b. settings panel: opens, shows audio + theme controls, theme toggles');
   await alice.click('[data-testid=open-settings]');
   await alice.waitForSelector('[data-testid=settings-mic]', { timeout: 8000 });
-  await alice.waitForSelector('[data-testid=settings-theme]');
+  await alice.waitForSelector('[data-testid=settings-theme-system]');
   const themeBefore = await alice.evaluate(() => document.documentElement.dataset.theme);
-  await alice.click('[data-testid=settings-theme]');
+  // Pick the theme that is not showing (system is light in this browser).
+  await alice.click(
+    themeBefore === 'paper' ? '[data-testid=settings-theme-dark]' : '[data-testid=settings-theme-light]'
+  );
   await alice.waitForFunction((b) => document.documentElement.dataset.theme !== b, themeBefore, {
     timeout: 5000,
   });
@@ -729,9 +740,7 @@ try {
   );
 
   console.log('17b. a second voice room propagates to every member (MLS-carried)');
-  await alice.click('[data-testid=new-voice]');
-  await alice.fill('[data-testid=new-voice-name]', 'strategy');
-  await alice.press('[data-testid=new-voice-name]', 'Enter');
+  await newRoom(alice, 'voice', 'strategy');
   for (const [name, page] of [['charlie', charlie], ['dave', dave]]) {
     await page
       .waitForSelector('[data-testid=voice-join-strategy]', { timeout: 15000 })
@@ -1022,7 +1031,7 @@ try {
     await onboard(erin, 'erin', localhostBase);
     await erin.click('[data-testid=secure-open-empty]');
     await erin.click('[data-testid=secure-passkey]');
-    await erin.waitForSelector('text=account secured with a passkey', { timeout: 30000 });
+    await erin.waitForSelector('text=backed up with a passkey', { timeout: 30000 });
     // "New device", same (synced) passkey: wipe local state, sign in.
     await erin.evaluate(() => {
       localStorage.clear();
@@ -1053,9 +1062,16 @@ try {
         /* already through */
       });
     await erin.waitForSelector('[data-testid=circles-home]', { timeout: 30000 });
-    if (!(await erin.textContent('[data-testid=circles-home]')).includes('erin')) {
-      throw new Error('passkey sign-in did not restore erin');
-    }
+    // Signed in as erin: the fascia's name (visually hidden, still in the
+    // tree). Circles home only names her in its empty-state line, which
+    // waits for the circle list to load.
+    await erin
+      .waitForFunction(() => document.querySelector('[data-testid=self-name]')?.textContent === 'erin', null, {
+        timeout: 10000,
+      })
+      .catch(() => {
+        throw new Error('passkey sign-in did not restore erin');
+      });
 
     // Usernameless: wipe again and sign in with NO handle at all — the
     // resident passkey identifies the account by itself.
@@ -1074,9 +1090,13 @@ try {
         /* already through */
       });
     await erin.waitForSelector('[data-testid=circles-home]', { timeout: 30000 });
-    if (!(await erin.textContent('[data-testid=circles-home]')).includes('erin')) {
-      throw new Error('usernameless passkey sign-in did not restore erin');
-    }
+    await erin
+      .waitForFunction(() => document.querySelector('[data-testid=self-name]')?.textContent === 'erin', null, {
+        timeout: 10000,
+      })
+      .catch(() => {
+        throw new Error('usernameless passkey sign-in did not restore erin');
+      });
   }
 
   console.log('22. phone layout: the strip navigates, the board holds the people');
@@ -1087,9 +1107,8 @@ try {
   await alice.waitForSelector('[data-testid=channel-logistics]', { state: 'visible' });
   await openRoom(alice, 'logistics');
   await alice.waitForSelector('text=trailer leaves at 6am', { timeout: 10000 });
-  // The room says how many of the circle are here and how many keys are
-  // unchecked, and both go to the people on the board.
-  await alice.click('[data-testid=room-here]');
+  // The people are on the board, one thumb away in the bottom tabs.
+  await alice.click('[data-testid=phone-tab-board]');
   await alice.waitForSelector('[data-testid=overview-pane]', { timeout: 10000 });
   await alice.waitForSelector('[data-testid=member-list]', { state: 'visible' });
   await openRoom(alice, 'logistics');
@@ -1125,7 +1144,7 @@ try {
     try {
       const where = await page.evaluate(() => ({
         who: document.querySelector('[data-testid=self-name]')?.textContent ?? null,
-        at: document.querySelector('[data-testid=marker-here]')?.textContent ?? null,
+        at: document.querySelector('.room-chip.active')?.textContent ?? null,
         onStage: !!document.querySelector('[data-testid=call-stage]'),
         call: window.__voice?.active?.channel ?? null,
       }));

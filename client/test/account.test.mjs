@@ -125,7 +125,7 @@ test('a short password is refused before anything is sent', async () => {
 
 test('a missing password is refused rather than treated as empty', async () => {
   const { svc } = service();
-  await assert.rejects(() => svc.secureWithPassword(undefined), /minimum/);
+  await assert.rejects(() => svc.secureWithPassword(undefined), /at least 8 characters/);
   assert.equal(MIN_PASSWORD, 8);
 });
 
@@ -218,7 +218,7 @@ test('passkey paths refuse cleanly in a browser without WebAuthn', async () => {
   // `credentials` is undefined in this harness, standing in for a browser
   // that has no WebAuthn at all.
   const { svc } = service();
-  await assert.rejects(() => svc.registerCredential(), /WebAuthn unavailable/);
+  await assert.rejects(() => svc.registerCredential(), /no passkey support/);
   await assert.rejects(() => svc.unlockWithPasskey('bob'), /no passkey support/);
   await assert.rejects(() => svc.unlockWithDiscoverablePasskey(), /no passkey support/);
 });

@@ -96,7 +96,7 @@ export async function sealIdentity(pubRaw, identity) {
 /** New device: open a sealed payload with the offer's private key -> identity
     bytes. Throws on a corrupt/foreign payload (AES-GCM auth failure). */
 export async function openSealed(privateKey, payload) {
-  if (payload.length < PUB_LEN + IV_LEN) throw new Error('link payload too short');
+  if (payload.length < PUB_LEN + IV_LEN) throw new Error('This link code is invalid.');
   const ephPub = payload.slice(0, PUB_LEN);
   const iv = payload.slice(PUB_LEN, PUB_LEN + IV_LEN);
   const ct = payload.slice(PUB_LEN + IV_LEN);

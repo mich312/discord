@@ -28,7 +28,10 @@ export function withViewTransition(update) {
     update();
     return;
   }
-  document.startViewTransition(() => flushSync(update));
+  const t = document.startViewTransition(() => flushSync(update));
+  // A newer transition skips this one and rejects its `ready`; the update
+  // itself has still run, so there is nothing to report.
+  t?.ready?.catch(() => {});
 }
 
 /** A stable, valid view-transition-name for a member handle, so a row keeps

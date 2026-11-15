@@ -121,9 +121,10 @@ only thing that makes the claim falsifiable.
   connection presents a currently-usable invite id (the one from the
   `?j=<id>#k=<key>` link). The very first user bootstraps a fresh relay
   without one; set `OPEN_REGISTRATION=1` to turn the gate off for dev.
-- **Mobile** — on phone-sized screens the workspace collapses to a single
-  pane: circles/rooms and the roster slide in as drawers, touch targets
-  grow, and safe areas (notch, home bar) are respected. A web manifest +
+- **Mobile** — on phone-sized screens the workspace is one column: rooms
+  are a strip, circles a screen, and bottom tabs cross between them. Every
+  touch device gets 44px targets, and safe areas (notch, home bar) are
+  respected. A web manifest +
   icons make it installable from the browser as a PWA — combined with Web
   Push, that's the mobile app, with no store build to trust separately.
 - **Accounts (passkeys / password)** — sign in from a new device without
@@ -289,9 +290,10 @@ TEST_DATABASE_URL=postgres://… cargo test             # + postgres contract te
 cd client && npm test                                 # client unit tests
 cd client && npm run build && npm run e2e             # the full browser journey
 cd client && npm run e2e:resilience                   # reloads at bad moments, two tabs, two devices
+cd client && npm run e2e:touch                        # every control at least 44x44 on touch devices
 ```
 
-Both browser suites run in CI and gate deploys. They need the wasm built
+All three browser suites run in CI and gate deploys. They need the wasm built
 (`crypto-core/build-wasm.sh`) and the relay binary (`cargo build -p relay`).
 
 The client e2e drives five real browser profiles through onboarding,

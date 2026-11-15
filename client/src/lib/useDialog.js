@@ -55,9 +55,14 @@ export function useDialog(onClose, { label } = {}) {
       ].filter((el) => el.offsetParent !== null || el === document.activeElement);
 
     // Prefer the first real control; fall back to the dialog itself so focus
-    // is never left outside.
+    // is never left outside. On a touch screen a text field is skipped: its
+    // keyboard would cover half the dialog before you chose to type.
+    const coarse =
+      typeof matchMedia === 'function' && matchMedia('(pointer: coarse)').matches;
+    const typing = (el) =>
+      el?.matches?.('textarea, select, input:not([type=checkbox]):not([type=radio]):not([type=button]):not([type=submit])');
     const first = focusable()[0];
-    (first ?? node).focus?.();
+    (first && !(coarse && typing(first)) ? first : node).focus?.();
 
     const onKeyDown = (e) => {
       if (e.key === 'Escape') {

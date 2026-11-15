@@ -393,6 +393,13 @@ jobs:
         run: npm run e2e:resilience
         working-directory: client
 
+      # Every control a finger can hit is at least 44x44 CSS px (§8.5), on a
+      # phone, a phone held sideways and a touch tablet: the last two never
+      # reach the 820px phone tier, so only a sweep like this sees them.
+      - name: touch targets
+        run: npm run e2e:touch
+        working-directory: client
+
   build:
     name: wasm + client build
     runs-on: ubuntu-latest

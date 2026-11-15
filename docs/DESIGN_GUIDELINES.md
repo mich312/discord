@@ -13,10 +13,11 @@ the exact ratios that were still failing one token over. Prose does not hold.
 
 The current register is **afterdark**: true-black neutral surfaces, one coral
 signal, green reserved for live presence and cryptographic fact, soft
-geometry (10px radii, round avatars, pills for counts), sans in sentence case
-for everything a person reads or presses, and monospace only where characters
-must line up. Two themes off one token contract — `carbon` (dark, default)
-and `paper` (light).
+geometry (10px radii, round initial avatars, pills for counts), the
+platform's own sans in sentence case for everything a person reads or
+presses, and monospace only for codes a person compares character by
+character. Two themes off one token contract — `carbon` (dark, default) and
+`paper` (light).
 
 *A cleanup pass (November 2026) found the screens had drifted from most of
 these rules in ways that made the product read as generated: tracked
@@ -26,6 +27,12 @@ second sentence — and an onboarding screen promising that "new members see
 nothing from before they joined", which had stopped being true. The rules
 below were tightened where the drift showed a rule was too loose (§4.1,
 §4.4, §5.3, §11.13), and each tightened rule now has a test.*
+
+*A second pass the same month answered the owner's brief ("I don't like the
+font, buttons are too small on mobile, too much useless text"): the system
+font instead of downloaded faces, 44px targets on every touch device, flat
+board sections, initials for avatars, and most of the explanatory copy
+deleted (§4, §6.3, §8.5, §11.15).*
 
 ---
 
@@ -52,7 +59,9 @@ while connecting.* → `scale.test.mjs` (the connection dot)
 
 **1.3 — Amber (`--warn`) means a guarantee is reduced or unchecked.**
 Unverified members, kept-history rooms, degraded encryption claims. Distinct
-from `--danger`, which means broken or irreversible.
+from `--danger`, which means broken or irreversible. **One amber control per
+view:** the board's "N not verified", or the composer note's link in a room.
+*The room header used to repeat the composer note as an amber chip.*
 
 **1.4 — Red (`--danger`) means broken, or irreversible.** One visual form per
 product. *Leaving a call was coral text in the sidebar, a coral outline button
@@ -155,10 +164,15 @@ background. *Nine `outline: none` rules on inputs out-specified the global
 
 ## 4. Typography
 
-**4.1 — Monospace is for characters that must line up, and only that.**
-Timestamps, durations, file sizes, safety numbers, recovery codes, keys, ids,
-host addresses, key caps. **It is never used for a person's name, body copy,
-a button or tab label, a field label, a section heading, or a warning.**
+**4.1 — The face is the platform's own; monospace is for codes, and only
+that.** `--sans` is the system stack (`-apple-system`, Segoe UI, Roboto…), so
+nothing is downloaded and the product reads as native. `--mono` is for
+characters a person compares one by one: safety numbers, keys, recovery and
+invite or device codes (`.mono`, `.keybox`, `.recovery-code`,
+`.safety-number`, `.link-code strong`). Timestamps, durations, file sizes and
+key caps are sans with `font-variant-numeric: tabular-nums`. **It is never
+used for a person's name, body copy, a button or tab label, a field label, a
+section heading, or a warning.** → `scale.test.mjs` (mono allowlist)
 *This rule used to make mono "the system's voice" for labels, counts and
 states too, and the product took it literally: 67 mono declarations, almost
 all of them small tracked capitals, which is the single strongest reason the
@@ -166,13 +180,19 @@ interface read as decoration. A handle is the most human thing in the
 product; it appeared in four different type specs in one session, two of
 them mono.*
 
-**4.2 — One concept, one type spec.** A handle is `600 13px var(--sans)`
-everywhere it appears — roster, transcript, call stage, dock, self-card.
+**4.2 — One concept, one type spec.** A handle is `600 var(--text-base)
+var(--sans)` in the roster and transcript; denser surfaces (call chat, dock)
+may step the size down, never the weight or the face. **Weights are 400
+(body), 600 (names, labels, titles) and 700 (page headings) only**, and
+nothing is tracked tighter than normal. → `scale.test.mjs`
 
-**4.3 — Minimum type size is 10px (`--text-xs`), and only for uppercase mono
-metadata.** Anything a user must read to make a decision — labels, errors,
-badges that gate an action — is at least 12px. *9px badges with 0.1em tracking
-were carrying trust state.*
+**4.3 — Six steps, one job each, and nothing below 13px.** `--text-sm` 13
+(meta: times, badges, hints), `--text-ui` 14 (controls), `--text-base` 15
+(body, inputs), `--text-lg` 18 (titles), `--text-xl` 24 (page headings),
+`--text-display` 32 (the landing tagline). On touch and at phone width a
+media query bumps ui/base/xl/display to 15/16/22/28; the bump never lives in
+`:root`. *9px badges with 0.1em tracking were carrying trust state, and a
+10px `--text-xs` step kept inviting them back.* → `scale.test.mjs`
 
 **4.4 — Nothing is set in transformed capitals.** Sentence case is typed, not
 produced by `text-transform`; a code that genuinely is capitals is written
@@ -187,16 +207,20 @@ exactly so.* → `scale.test.mjs` (asserted at zero)
 ## 5. Layout and containers
 
 **5.1 — Every horizontal edge in the main pane derives from
-`--pane-gutter`.** Pane header, scroll body, composer, composer note and
-overview scroll share one value; no component sets its own horizontal padding
-on that column. *Four components used four gutters, so nothing in the pane
+`--pane-gutter`** (18px; 16px at phone width, set in that media query). Pane
+header, scroll body, composer, composer note, banner and overview scroll
+share one value; no component sets its own horizontal padding on that
+column. The transcript has exactly two edges: the gutter (avatars, day
+dividers) and the text column at gutter + 44px (names, lines, system lines,
+the typing line). *Four components used four gutters, so nothing in the pane
 shared a left edge and the step was visible with the naked eye.*
 
 **5.2 — Two container specs: row (`padding: 12px 14px`, `--r`) and card
 (`padding: 16px 18px`, `--r-lg`).** Radius encodes size, not novelty. **Two
 containers stacked in the same list have the same radius.** No three-sided
 borders. *Six analogous row-cards in one scroll column had six paddings and
-two radii.*
+two radii.* Board sections are not cards: a heading and rows divided by
+hairlines, with at most one emphasised block (Up next).
 
 **5.3 — Exactly one filled button per view.** Everything else climbs the same
 ladder: **secondary** (outline), **quiet** (text), **warn** and **danger**
@@ -248,10 +272,11 @@ not icons, and are exempt)
 glyph, not an `X`. **Two controls in one view may not have near-synonymous
 labels.**
 
-**6.3 — An identity orb is distinguishable from every other orb at 20px.**
-Orbs vary in lightness as well as hue and stay within one hue family.
-*Locking every orb to one lightness band made three of four members read as
-the same lavender at roster size — the one job the orbs exist for.*
+**6.3 — An avatar is the member's initial, white, on a solid circle in
+`circleFill(handle)`.** Colours repeat; the initial tells two people apart,
+and white clears 5.00:1 on every fill. Below 20px it is the circle alone.
+*The gradient orbs it replaced could not be told apart at roster size: three
+of four members read as the same lavender.* → `crest.test.mjs`
 
 ---
 
@@ -318,11 +343,17 @@ messages — the core function of the product — were never announced, while th
 typing indicator was.*
 
 **8.5 — Every pointer target is at least 24×24 CSS px at every width, and
-44×44 below 821px.** Destructive actions get 48×48 on touch. Visual size may
-stay small — grow the hit area with an `::after` overlay. **Enforce with an
-automated sweep, not a hand-written list of selectors** — the allowlist
-approach named nine selectors and left two dozen controls failing, including
-`leave call` at 82×23.
+44×44 on any coarse pointer or below 821px.** The touch sizes key off
+`@media (pointer: coarse), (max-width: 820px)`, one block at the end of
+`styles.css`, so a phone held sideways and a touch tablet get them too; a
+fine-pointer desktop is untouched. Destructive actions get the same 44×44,
+kept apart from reversible ones by space, not by size.
+Visual size may stay small — grow the hit area with an `::after` overlay.
+**Enforce with an automated sweep, not a hand-written list of selectors** —
+the allowlist approach named nine selectors and left two dozen controls
+failing, including `leave call` at 82×23. → `npm run e2e:touch` (every
+visible control on the main screens in four touch contexts; the only
+exemptions are named inline text links)
 
 **8.6 — The reduced-motion guard sets `animation-iteration-count: 1`, not just
 a near-zero duration.** Every infinite animation declares a static end-frame.
@@ -366,8 +397,13 @@ in a 390px pane, with the RSVP button off-screen.*
 items default to min-content, the single most common cause of 9.3 failures.
 
 **9.5 — No security disclosure, brand mark, or status text is removed for
-layout.** Responsive rules may abbreviate, collapse, or move — **`display:
-none` on any of these is a defect.** *Mobile dropped the entire invite-screen
+layout: moved, not removed.** Responsive rules may abbreviate, collapse, or
+move — **`display: none` on the only copy of any of these is a defect.** The
+history fact moved from the room header to room settings; the brand glyph
+gives way to the circle's name inside a circle on a phone, where the Circles
+tab is the way home; "Connected", the normal state, is visually hidden but
+stays a live region and comes back with its word when the socket is not
+fine. *Mobile dropped the entire invite-screen
 brand panel, both security disclosures, and the connection label, while
 keeping the unconditional "end-to-end encrypted" footer.*
 
@@ -409,14 +445,17 @@ cannot keep.
 unconditionally true.** "End-to-end encrypted" is not a static string; it is a
 function of verified members, kept-history, connection and sync state. If it
 holds only under a precondition, state the precondition or degrade the claim.
-*The footer rendered identically with unverified members present, in
-kept-history rooms, and while offline.*
+A key mismatch is never shown as verified: the composer note names it, in
+the danger colour, before anything else. *The footer rendered identically
+with unverified members present, in kept-history rooms, and while offline.*
 
 **10.2 — Content with weaker authentication never renders with stronger
 content's signals.** *Kept-history messages are room-key sealed, not
 sender-signed — any former key holder can forge one. They rendered
 pixel-identical to live messages and inherited the verified checkmark whose
-tooltip reads "safety number checked on this device."*
+tooltip reads "safety number checked on this device."* A line whose sender
+cannot be confirmed says so once, in muted text after the time in its
+header, and never carries the check.
 
 **10.3 — State a claim's beneficiary, not just its existence.** "Encrypted" is
 not a claim until you say from whom and to whom. Anything pairing "encrypted"
@@ -434,7 +473,9 @@ required.
 **10.6 — Warnings are budgeted: one persistent banner at a time, ranked by
 severity.** Every warning is resolvable by an action the user can take.
 Warnings have a lifecycle — appear, escalate, resolve or collapse. **No banner
-renders identically on day 1 and day 90.**
+renders identically on day 1 and day 90.** The back-up and home-screen
+banners are one line with their action and a "Not now" that hides them for
+seven days.
 
 **10.7 — Server-enforced limits are described as requests, not properties.**
 Expiry, max-uses and retention are honoured by the relay, not by the
@@ -505,8 +546,10 @@ as plain language with the technical detail behind a disclosure.
 No Enter-only submits. **No form discards typed input on blur.** *Typing a
 group name and clicking anywhere else discarded it silently.*
 
-**11.10 — Empty states name the next action and who can take it.** "Only
-admins can do X" must also say which admins.
+**11.10 — Empty states are nothing, or five words at most.** Where there is a
+next action, the control is the empty state ("Add a description" for an
+admin; nothing for anyone else). "Only admins can do X" must also say which
+admins.
 
 **11.11 — Tooltips carry no unique meaning.** Anything in a `title` also
 exists as visible text or a tappable affordance.
@@ -532,6 +575,13 @@ the identity-key dialog ("it restores your account, not your old
 messages"). A design change that alters what is true lists the copy it
 falsifies.
 
+**11.15 — Say it once.** Delete before rewording. A fact the screen already
+shows is not repeated in a hint, a chip or a header. Hints are eight words
+at most, buttons one or two. **System lines in a transcript are for
+membership (joined, added, left, removed) and auto-delete changes**, plus
+the short security notices of §10.9; never room, rename, role or call
+notices, and never protocol state.
+
 ---
 
 ## 12. Enforcement
@@ -542,18 +592,20 @@ Rules that are only prose drift. These are the checks that hold them.
 |---|---|---|
 | `contrast.test.mjs` | WCAG matrix over every text token × every surface, both themes | 3.1, 3.2 |
 | `tokens.test.mjs` | no raw colour outside token blocks; no undefined tokens; no dead tokens; no fallback on a defined token; colour-token theme parity | 2.1–2.3, 3.3 |
-| `scale.test.mjs` | spacing, type and motion literals held to today's count; the 10px floor and the z-index scale asserted at zero | 2.6–2.9, 4.3 |
+| `scale.test.mjs` | spacing, type and motion literals held to today's count; the 13px floor (tokens included), no `--text-xs`/`--text-md`, and the z-index scale asserted at zero | 2.6–2.9, 4.3 |
 | `vocabulary.test.mjs` | JSX ↔ CSS class integrity; no base-duplicating ternary; inline-style budget | 5.7 |
 | `theme.test.mjs` | paper block ⇔ media-query mirror parity | 3.4 |
 | `copy.test.mjs` | banned protocol and fear vocabulary in user-facing strings under `client/src/**`; em-dashes in copy at zero | 11.5, 11.6, 11.13 |
-| `scale.test.mjs` (additions) | no `text-transform: uppercase`; the connection dot never uses `--ok` or `--accent`; icons render at 14, 18 or 24 | 1.2, 4.4, 6.1 |
+| `scale.test.mjs` (additions) | no `text-transform: uppercase`; the connection dot never uses `--ok` or `--accent`; icons render at 14, 18 or 24; weights 400/600/700 only; `var(--mono)` only in the code allowlist; no negative tracking | 1.2, 4.1, 4.2, 4.4, 6.1 |
+| `crest.test.mjs` | white on every circle fill at 5.00:1, and the avatar draws from the same wheel | 6.3 |
+| `e2e/touch.mjs` (`npm run e2e:touch`, in CI) | every visible control ≥44×44 on the main screens in Pixel 7, 390×844, 844×390 and 1024×768 touch contexts | 8.5 |
 
 **Allowlists shrink, never grow.** Each linter is seeded with today's
 violation count and the count is a ceiling, so existing debt is visible and
 new debt is impossible.
 
 **Visual-regression testing is deliberately not proposed.** There are no
-baselines, `npm run e2e` does not run in CI, and golden-image tests are the
-most likely of any check here to be disabled after the third false positive.
-`npm run shots:ui` exists for human review instead — 42 shots across both
-themes and both viewports, which is what this review was conducted on.
+baselines, and golden-image tests are the most likely of any check here to
+be disabled after the third false positive. `npm run shots:ui` exists for
+human review instead — 46 shots across both themes and both viewports, which
+is what these reviews were conducted on.

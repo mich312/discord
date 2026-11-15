@@ -90,12 +90,11 @@ export function gameHost(game) {
   }
 }
 
-/** The one honesty line for a game surface (§10.11): who can see what. */
+/** Who can see what while a game runs, for its stage header. The chat and
+    the call stay encrypted; the game's own traffic does not. */
 export function gameHostNote(game) {
   const host = gameHost(game);
-  return host
-    ? `Hosted by ${host}, which can see your connection but not your chat.`
-    : 'Runs inside quorum. Chat and voice stay encrypted; the game’s own traffic doesn’t.';
+  return host ? `Hosted by ${host} · sees your connection, not your chat` : 'Game moves aren’t encrypted';
 }
 
 /** A game *reference* as carried inside a chat message ("bob opened X").

@@ -108,7 +108,7 @@ test('changing the threshold says so in the room', () => {
   const effects = apply(record, { k: 'threshold', n: 4 }, { sender: 'alice', isAdmin: true });
   assert.equal(record.threshold, 4);
   const said = effects.find((e) => e.t === 'systemMessage');
-  assert.match(said.text, /alice set the signatures a new member needs to 4/);
+  assert.match(said.text, /alice set the signatures needed to join to 4/);
 });
 
 test('a threshold above the roster is clamped rather than locking the circle shut', () => {

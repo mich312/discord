@@ -109,3 +109,14 @@ test('the mark is keyed to the id, so a rename does not change a circle face', (
   assert.equal(circleFill('srv-race'), circleFill('srv-race'));
   assert.notEqual(circleFill('srv-race'), circleFill('srv-race-2'));
 });
+
+test('a member avatar is a circleFill() circle with white text, so it inherits the 5.00:1', () => {
+  // Seal.jsx replaced the gradient orbs with a solid circle and an initial.
+  // The guarantee above holds for it only if it draws from the same wheel
+  // and keeps the glyph white; this is what says it does.
+  const seal = readFileSync(fileURLToPath(new URL('../src/components/Seal.jsx', import.meta.url)), 'utf8');
+  assert.match(seal, /import \{ circleFill \} from '\.\.\/lib\/crest\.js'/);
+  assert.match(seal, /<circle[^>]*fill=\{circleFill\(/);
+  assert.match(seal, /<text[\s\S]*?fill="#fff"/);
+  assert.doesNotMatch(seal, /linearGradient|radialGradient|<filter/, 'no gradients or filters');
+});

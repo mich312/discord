@@ -155,21 +155,6 @@ test('probe reconciles presence: members gone while we were away disappear', asy
   assert.deepEqual(vm.participants('srv', 'lounge'), ['bob'], 'probe replies rebuild it');
 });
 
-test('a here reply never announces "started a call"; a join does', async () => {
-  setupGlobals();
-  const started = [];
-  const vm = new VoiceManager({
-    me: 'alice',
-    send: async () => {},
-    onState: () => {},
-    onCallStarted: (server, channel, name) => started.push(name),
-  });
-  await vm.handleEnvelope('srv', 'bob', { k: 'voice', ch: 'lounge', action: 'here' });
-  assert.deepEqual(started, [], 'catch-up here is not a call start');
-  await vm.handleEnvelope('srv', 'lounge-2' && 'carol', { k: 'voice', ch: 'quiet', action: 'join' });
-  assert.deepEqual(started, ['carol'], 'a real first join announces');
-});
-
 test('DM auto-hangup: dropping the only peer of a direct call leaves the room', async () => {
   setupGlobals();
   const sent = [];

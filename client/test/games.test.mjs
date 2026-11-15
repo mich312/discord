@@ -194,11 +194,10 @@ test('a port or scheme difference still counts as cross-origin', () => {
   assert.equal(isSameOriginSrc('https://quorum.example:8443/x', 'https://quorum.example'), false);
 });
 
-test('gameHostNote is a sentence for both kinds of host', () => {
+test('gameHostNote says who hosts a game and what it can see', () => {
   assert.equal(
     gameHostNote({ kind: 'activity', url: 'https://tanks.example/r/1' }),
-    'Hosted by tanks.example, which can see your connection but not your chat.'
+    'Hosted by tanks.example · sees your connection, not your chat'
   );
-  assert.match(gameHostNote({ kind: 'activity', url: '/games/hexgambit.html' }), /^Runs inside quorum\./);
-  assert.doesNotMatch(gameHostNote({ kind: 'activity', url: '/games/hexgambit.html' }), /bundled/);
+  assert.equal(gameHostNote({ kind: 'activity', url: '/games/hexgambit.html' }), 'Game moves aren’t encrypted');
 });

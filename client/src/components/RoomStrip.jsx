@@ -1,4 +1,5 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
+import PopMenu from './PopMenu.jsx';
 import { Hash, Wave, Plus, Gear, Clock } from './icons.jsx';
 import { cx } from '../lib/cx.js';
 
@@ -30,7 +31,6 @@ export default function RoomStrip({
   voice,
   canManage,
   onSelect,
-  onSettings,
   onCreate,
   onVoiceCreate,
   onVoiceSettings,
@@ -39,9 +39,59 @@ export default function RoomStrip({
 }) {
   const [adding, setAdding] = useState(null); // null | 'room' | 'voice'
   const [name, setName] = useState('');
+  const chips = useRef(null);
+  // Which edges have more rooms past them: those edges fade, so a cut-off
+  // chip reads as "more this way" rather than as a broken label.
+  const [more, setMore] = useState({ left: false, right: false });
+
+  useEffect(() => {
+    const ul = chips.current;
+    if (!ul) return undefined;
+    const measure = () => {
+      const left = ul.scrollLeft > 1;
+      const right = ul.scrollLeft + ul.clientWidth < ul.scrollWidth - 1;
+      setMore((m) => (m.left === left && m.right === right ? m : { left, right }));
+    };
+    // A mouse wheel has no sideways axis: let it scroll the strip.
+    const wheel = (e) => {
+      if (Math.abs(e.deltaY) > Math.abs(e.deltaX) && ul.scrollWidth > ul.clientWidth) {
+        ul.scrollLeft += e.deltaY;
+      }
+    };
+    measure();
+    ul.addEventListener('scroll', measure, { passive: true });
+    ul.addEventListener('wheel', wheel, { passive: true });
+    const ro = typeof ResizeObserver !== 'undefined' ? new ResizeObserver(measure) : null;
+    ro?.observe(ul);
+    return () => {
+      ul.removeEventListener('scroll', measure);
+      ul.removeEventListener('wheel', wheel);
+      ro?.disconnect();
+    };
+  }, []);
+  useEffect(() => {
+    const ul = chips.current;
+    if (!ul) return;
+    const left = ul.scrollLeft > 1;
+    const right = ul.scrollLeft + ul.clientWidth < ul.scrollWidth - 1;
+    setMore((m) => (m.left === left && m.right === right ? m : { left, right }));
+  });
 
   const onBoard = activeChannel == null && !onStage && !onGame;
   const voiceRooms = server.voiceChannels ?? ['lounge'];
+
+  // Keep the current room's chip in view when the strip scrolls sideways.
+  // Only the strip moves; the page never does.
+  const joinedRoom = voice.active?.server === server.id ? voice.active.channel : null;
+  useEffect(() => {
+    const ul = chips.current;
+    const li = ul?.querySelector('[aria-current="page"]')?.closest('li');
+    if (!li) return;
+    const box = ul.getBoundingClientRect();
+    const r = li.getBoundingClientRect();
+    if (r.left < box.left) ul.scrollLeft -= box.left - r.left;
+    else if (r.right > box.right) ul.scrollLeft += r.right - box.right;
+  }, [activeChannel, onStage, onGame, joinedRoom, server.id]);
 
   const submit = (e) => {
     e.preventDefault();
@@ -52,9 +102,9 @@ export default function RoomStrip({
   };
 
   return (
-    <nav className="room-strip" aria-label="rooms">
-      <ul className="room-chips">
-        <li>
+    <nav className="room-strip" aria-label="Rooms">
+      <ul className={cx('room-chips', more.left && 'more-left', more.right && 'more-right')} ref={chips}>
+        <li className="room-chips-board">
           <button
             className={cx('room-chip', 'room-chip-board', onBoard && 'active')}
             // §7.9 — the class is decoration; this is the state.
@@ -151,92 +201,78 @@ export default function RoomStrip({
           );
         })}
 
-        {adding && (
-          <li>
-            <form onSubmit={submit}>
-              {/* §8.7 — a placeholder is a hint, never the name. */}
-              <label className="sr-only" htmlFor="room-strip-new">
-                {adding === 'voice' ? 'New voice room name' : 'New room name'}
-              </label>
-              <input
-                id="room-strip-new"
-                autoFocus
-                className="room-chip-input"
-                value={name}
-                onChange={(e) => setName(e.target.value)}
-                placeholder={adding === 'voice' ? 'voice-room' : 'room-name'}
-                data-testid={adding === 'voice' ? 'new-voice-name' : 'new-channel-name'}
-              />
-              {/* §11.9 — no Enter-only submits, and nothing typed here is
-                  discarded on blur the way the sidebar's input was. */}
-              <button className="room-chip-add-go" data-testid="new-room-create">
-                Add
-              </button>
-              <button
-                type="button"
-                className="room-chip-add-go"
-                onClick={() => {
-                  setName('');
-                  setAdding(null);
-                }}
-              >
-                Cancel
-              </button>
-            </form>
-          </li>
-        )}
       </ul>
 
       <div className="room-strip-end">
-        {/* Settings for the room you are in, rather than a gear on all
-            fourteen chips. A gear per chip needed hover to stay tolerable,
-            and §9.6 says a hover-gated affordance owes touch a real
-            counterpart — not "always visible", which on a phone strip means
-            "always in the way". Every other room's settings are one click
-            (visit it) or ⌘K (§7.7). */}
-        {canManage && activeChannel && !onStage && !onGame && (
+        {/* Room settings live in the room's own header; a call's live here
+            because the call stage has no header of its own to put them in. */}
+        {canManage && onStage && voiceRooms.includes(voice.active?.channel) && (
           <button
             className="ghost"
-            aria-label={`#${activeChannel} settings`}
-            title={`#${activeChannel} settings`}
-            data-testid={`channel-settings-${activeChannel}`}
-            onClick={() => onSettings(activeChannel)}
-          >
-            <Gear size={14} />
-          </button>
-        )}
-        {canManage && onStage && voice.active && (
-          <button
-            className="ghost"
-            aria-label={`${voice.active.channel} settings`}
-            title={`${voice.active.channel} settings`}
+            aria-label="Voice room settings"
+            title="Voice room settings"
             data-testid={`voice-settings-${voice.active.channel}`}
             onClick={() => onVoiceSettings(voice.active.channel)}
           >
-            <Gear size={14} />
+            <Gear size={18} />
           </button>
         )}
+        {/* The new room's name is typed where "+" was, not after the last
+            chip at the other end of the strip. */}
+        {adding && (
+          <form onSubmit={submit}>
+            {/* §8.7 — a placeholder is a hint, never the name. */}
+            <label className="sr-only" htmlFor="room-strip-new">
+              {adding === 'voice' ? 'New voice room name' : 'New room name'}
+            </label>
+            <input
+              id="room-strip-new"
+              autoFocus
+              className="room-chip-input"
+              value={name}
+              onChange={(e) => setName(e.target.value)}
+              placeholder={adding === 'voice' ? 'voice-room' : 'room-name'}
+              data-testid={adding === 'voice' ? 'new-voice-name' : 'new-channel-name'}
+            />
+            {/* §11.9 — no Enter-only submits, and nothing typed here is
+                discarded on blur the way the sidebar's input was. */}
+            <button className="button room-chip-add-go" data-testid="new-room-create">
+              Add
+            </button>
+            <button
+              type="button"
+              className="button ghost room-chip-add-go"
+              onClick={() => {
+                setName('');
+                setAdding(null);
+              }}
+            >
+              Cancel
+            </button>
+          </form>
+        )}
         {canManage && !adding && (
-          <>
-            <button
-              className="ghost"
-              title="New room"
-              data-testid="new-channel"
-              onClick={() => setAdding('room')}
-            >
-              <Plus size={14} />
-              <span className="sr-only">New room</span>
-            </button>
-            <button
-              className="ghost"
-              title="New voice room"
-              data-testid="new-voice"
-              onClick={() => setAdding('voice')}
-            >
-              <Wave size={14} />
-              <span className="sr-only">New voice room</span>
-            </button>
-          </>
+          <PopMenu
+            label="New room"
+            glyph={<Plus size={18} />}
+            testid="new-room-menu"
+            items={[
+              {
+                key: 'room',
+                label: 'Text room',
+                icon: <Hash size={14} />,
+                testid: 'new-channel',
+                onSelect: () => setAdding('room'),
+              },
+              {
+                key: 'voice',
+                label: 'Voice room',
+                icon: <Wave size={14} />,
+                testid: 'new-voice',
+                onSelect: () => setAdding('voice'),
+              },
+            ]}
+          />
         )}
       </div>
     </nav>
