@@ -518,12 +518,14 @@ export default function Messages({
     scroller.current?.scrollTo({ top: scroller.current.scrollHeight, behavior: 'smooth' });
   };
 
+  // On a phone the strip already names the room; a header with nothing else in it is dropped.
+  const bareHead = !meta.topic && !meta.retention && !onRoomSettings;
   return (
     <main className="messages-pane" id="messages-pane" tabIndex={-1}>
       <span className="sr-only" role="log" aria-live="polite" aria-atomic="true">
         {announce}
       </span>
-      <header className="pane-head">
+      <header className={cx('pane-head', bareHead && 'bare')}>
         <h2 className="room-name">
           <span className="glyph">
             <Hash size={14} />

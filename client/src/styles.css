@@ -4082,6 +4082,19 @@ a.overview-link:hover .label { text-decoration: underline; text-underline-offset
   .secure-banner > span { white-space: nowrap; overflow: hidden; text-overflow: ellipsis; }
 }
 
+/* On a phone the strip already names the room, so a header holding only the
+   name is kept for screen readers and hidden from view. */
+@media (max-width: 820px) {
+  .messages-pane > .pane-head.bare {
+    position: absolute;
+    width: 1px;
+    height: 1px;
+    overflow: hidden;
+    clip-path: inset(50%);
+    white-space: nowrap;
+  }
+}
+
 @media (max-width: 820px), (pointer: coarse) and (max-height: 500px) {
   /* One row of controls, no box: the glyph over a short label, Leave last
      in red with extra room before it (§7.3). Three rows of wrapped buttons
