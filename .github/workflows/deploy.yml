@@ -9,8 +9,8 @@ name: deploy
 # fail the way a compile can — and a recovery path you only run when something
 # is already wrong is the last place you want a multi-minute build.
 #
-# Requires repo secrets DEPLOY_SSH_KEY + DEPLOY_HOST (and ideally
-# DEPLOY_KNOWN_HOSTS). GHCR uses the built-in GITHUB_TOKEN; the server needs
+# The deploy runs on the repository's VPS runner. GHCR uses the built-in
+# GITHUB_TOKEN for image publishing; the server needs
 # read access to the package — make it public, or `docker login ghcr.io` there
 # once with a read:packages token. If the image job is skipped or the server
 # cannot pull, deploy.sh falls back to building on the server as before.
@@ -74,33 +74,16 @@ jobs:
 
   deploy:
     needs: [tests, image]
-    runs-on: ubuntu-latest
+    if: github.ref == 'refs/heads/main' && (github.event_name == 'push' || github.event_name == 'workflow_dispatch')
+    runs-on: [self-hosted, linux, x64, vps]
+    # Includes time waiting for the shared VPS build/deployment lock.
+    timeout-minutes: 60
     steps:
-      - uses: actions/checkout@v4      # only to get ci/deploy.sh onto the runner
+      - uses: actions/checkout@v5
 
-      - name: Deploy over SSH
+      - name: Deploy on the VPS
         env:
-          DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}
-          DEPLOY_HOST: ${{ secrets.DEPLOY_HOST }}
-          DEPLOY_KNOWN_HOSTS: ${{ secrets.DEPLOY_KNOWN_HOSTS }}
           QUORUM_IMAGE: ${{ needs.image.outputs.ref }}
         run: |
           set -euo pipefail
-          mkdir -p ~/.ssh && chmod 700 ~/.ssh
-          printf '%s\n' "$DEPLOY_SSH_KEY" > ~/.ssh/deploy_key
-          chmod 600 ~/.ssh/deploy_key
-          # Prefer a pinned host key. ssh-keyscan re-TOFUs the host on every
-          # run, which makes the StrictHostKeyChecking=yes below decorative:
-          # whatever answers first is trusted. Set the DEPLOY_KNOWN_HOSTS
-          # secret (output of `ssh-keyscan -H <host>`) to close that.
-          if [ -n "${DEPLOY_KNOWN_HOSTS:-}" ]; then
-            printf '%s\n' "$DEPLOY_KNOWN_HOSTS" > ~/.ssh/known_hosts
-          else
-            echo "::warning::DEPLOY_KNOWN_HOSTS is not set — falling back to ssh-keyscan, which trusts whatever answers first"
-            ssh-keyscan -H "$DEPLOY_HOST" >> ~/.ssh/known_hosts 2>/dev/null
-          fi
-          # The image ref is passed through the environment rather than baked
-          # into the script, so the same script still works when run by hand.
-          ssh -i ~/.ssh/deploy_key -o IdentitiesOnly=yes -o StrictHostKeyChecking=yes \
-            "root@${DEPLOY_HOST}" \
-            "QUORUM_IMAGE='${QUORUM_IMAGE}' bash -s" < ci/deploy.sh
+          sudo -n -H /usr/local/sbin/gha-deploy discord "$GITHUB_SHA"
